@@ -1,8 +1,10 @@
 import "dotenv/config";
 import dotenv from 'dotenv';
 
-// Load environment variables from .env.local
-dotenv.config({ path: '.env.local' });
+// Load .env.local only in local development (not in Replit/production)
+if (process.env.NODE_ENV !== 'production' && !process.env.REPL_ID) {
+  dotenv.config({ path: '.env.local' });
+}
 
 import express from "express";
 import { createServer } from "http";

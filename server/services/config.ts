@@ -7,10 +7,14 @@ import Stripe from 'stripe';
 import { Resend } from 'resend';
 
 // Stripe Configuration
-export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
+const stripeKey = process.env.STRIPE_SECRET_KEY;
+if (!stripeKey) {
+  console.warn('[Config] STRIPE_SECRET_KEY not found, Stripe functionality will be disabled');
+}
+export const stripe = stripeKey ? new Stripe(stripeKey, {
   apiVersion: '2025-12-15.clover',
   typescript: true,
-});
+}) : null;
 
 // Resend Configuration
 const resendApiKey = process.env.RESEND_API_KEY;
@@ -36,7 +40,7 @@ export function validateConfig() {
 
   if (missing.length > 0) {
     console.warn(`[Config] Missing environment variables: ${missing.join(', ')}`);
-    console.warn('[Config] Some features may not work correctly');
+    console.warn('[Config] Configure these in Replit Secrets or .env.local');
   }
 
   return missing.length === 0;

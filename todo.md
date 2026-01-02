@@ -84,3 +84,12 @@
 - [ ] Validate email sending functionality
 - [ ] Performance optimization
 - [ ] Final UI polish and animations
+
+
+## URGENT: Replit Configuration Issues
+- [ ] Fix environment variables not loading in Replit
+- [ ] Configure Replit Secrets properly
+- [ ] Test OTP email functionality
+- [ ] Verify Stripe integration
+- [ ] Verify Owl Fenc DB connection
+- [ ] Remove analytics warnings
