@@ -4,6 +4,14 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { sendOTP, verifyOTP, validateSession, invalidateSession } from "./services/auth";
+import {
+  getOwlFencUsers,
+  getOwlFencUserCount,
+  getOwlFencUserById,
+  getOwlFencUserSubscription,
+  getOwlFencUserLimits,
+  getOwlFencDashboardStats,
+} from "./services/owlfenc-db";
 
 export const appRouter = router({
   system: systemRouter,
@@ -63,16 +71,104 @@ export const appRouter = router({
     }),
   }),
 
-  // Protected routes require authentication
+  // Dashboard routes
   dashboard: router({
-    // Get overview metrics
+    // Get overview metrics for Owl Fenc
     overview: protectedProcedure.query(async ({ ctx }) => {
-      // TODO: Implement dashboard overview
-      return {
-        totalApplications: 2,
-        totalUsers: 0,
-        activeAlerts: 0,
-      };
+      try {
+        const stats = await getOwlFencDashboardStats();
+        return {
+          success: true,
+          data: stats,
+        };
+      } catch (error: any) {
+        return {
+          success: false,
+          error: error.message,
+        };
+      }
+    }),
+  }),
+
+  // Owl Fenc specific routes
+  owlfenc: router({
+    // Get users list
+    getUsers: protectedProcedure
+      .input(
+        z.object({
+          limit: z.number().min(1).max(100).default(50),
+          offset: z.number().min(0).default(0),
+          search: z.string().optional(),
+        })
+      )
+      .query(async ({ input }) => {
+        try {
+          const users = await getOwlFencUsers(input);
+          const total = await getOwlFencUserCount(input.search);
+          
+          return {
+            success: true,
+            data: {
+              users,
+              total,
+              limit: input.limit,
+              offset: input.offset,
+            },
+          };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message,
+          };
+        }
+      }),
+
+    // Get user details
+    getUserDetails: protectedProcedure
+      .input(z.object({ userId: z.number() }))
+      .query(async ({ input }) => {
+        try {
+          const user = await getOwlFencUserById(input.userId);
+          if (!user) {
+            return {
+              success: false,
+              error: 'User not found',
+            };
+          }
+
+          const subscription = await getOwlFencUserSubscription(input.userId);
+          const limits = await getOwlFencUserLimits(input.userId);
+
+          return {
+            success: true,
+            data: {
+              user,
+              subscription,
+              limits,
+            },
+          };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message,
+          };
+        }
+      }),
+
+    // Get dashboard stats
+    getStats: protectedProcedure.query(async () => {
+      try {
+        const stats = await getOwlFencDashboardStats();
+        return {
+          success: true,
+          data: stats,
+        };
+      } catch (error: any) {
+        return {
+          success: false,
+          error: error.message,
+        };
+      }
     }),
   }),
 });
