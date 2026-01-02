@@ -47,12 +47,15 @@ export async function sendOTP(email: string): Promise<{ success: boolean; error?
 
     // Send email via Resend
     if (!resend) {
+      console.error('[Auth] Resend not initialized - check RESEND_API_KEY');
       return { success: false, error: 'Email service not configured' };
     }
 
-    try {
+    console.log(`[Auth] Sending OTP to ${email}, code: ${code}`);
+
+    try{
       await resend.emails.send({
-        from: 'Chyrris KAI <noreply@chyrris.com>',
+        from: 'Chyrris KAI <onboarding@resend.dev>',
         to: email,
         subject: 'Your Chyrris KAI Login Code',
         html: `
@@ -68,10 +71,13 @@ export async function sendOTP(email: string): Promise<{ success: boolean; error?
         `,
       });
 
+      console.log(`[Auth] OTP email sent successfully to ${email}`);
       return { success: true };
     } catch (emailError: any) {
-      console.error('[Auth] Failed to send OTP email:', emailError);
-      return { success: false, error: 'Failed to send email' };
+      console.error('[Auth] Failed to send OTP email to', email);
+      console.error('[Auth] Error details:', emailError.message);
+      console.error('[Auth] Full error:', emailError);
+      return { success: false, error: `Failed to send email: ${emailError.message}` };
     }
   } catch (error: any) {
     console.error('[Auth] Error in sendOTP:', error);

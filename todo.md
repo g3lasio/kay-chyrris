@@ -93,3 +93,11 @@
 - [ ] Verify Stripe integration
 - [ ] Verify Owl Fenc DB connection
 - [ ] Remove analytics warnings
+
+
+## CRITICAL: OTP Email Not Working
+- [ ] Diagnose why OTP emails are not being sent
+- [ ] Check Resend API configuration
+- [ ] Verify domain verification in Resend
+- [ ] Add detailed error logging
+- [ ] Test email delivery end-to-end
