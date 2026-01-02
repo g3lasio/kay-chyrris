@@ -52,14 +52,14 @@ export async function getOwlFencUsers(options: {
     let query = sql`
       SELECT 
         id,
-        "openId",
+        open_id as "openId",
         name,
         email,
-        "loginMethod",
+        login_method as "loginMethod",
         role,
-        "createdAt",
-        "updatedAt",
-        "lastSignedIn"
+        created_at as "createdAt",
+        updated_at as "updatedAt",
+        last_signed_in as "lastSignedIn"
       FROM users
     `;
 
@@ -70,7 +70,7 @@ export async function getOwlFencUsers(options: {
       `;
     }
 
-    query = sql`${query} ORDER BY "createdAt" DESC LIMIT ${limit} OFFSET ${offset}`;
+    query = sql`${query} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
 
     const result = await db.execute(query);
     return result.rows;
@@ -120,14 +120,14 @@ export async function getOwlFencUserById(userId: number) {
     const result = await db.execute(sql`
       SELECT 
         id,
-        "openId",
+        open_id as "openId",
         name,
         email,
-        "loginMethod",
+        login_method as "loginMethod",
         role,
-        "createdAt",
-        "updatedAt",
-        "lastSignedIn"
+        created_at as "createdAt",
+        updated_at as "updatedAt",
+        last_signed_in as "lastSignedIn"
       FROM users
       WHERE id = ${userId}
     `);
@@ -151,20 +151,23 @@ export async function getOwlFencUserSubscription(userId: number) {
   try {
     const result = await db.execute(sql`
       SELECT 
-        id,
-        "userId",
-        plan,
-        status,
-        "currentPeriodStart",
-        "currentPeriodEnd",
-        "cancelAtPeriodEnd",
-        "stripeCustomerId",
-        "stripeSubscriptionId",
-        "createdAt",
-        "updatedAt"
-      FROM subscriptions
-      WHERE "userId" = ${userId}
-      ORDER BY "createdAt" DESC
+        us.id,
+        us.user_id as "userId",
+        sp.name as plan,
+        sp.code as "planCode",
+        us.status,
+        us.current_period_start as "currentPeriodStart",
+        us.current_period_end as "currentPeriodEnd",
+        us.cancel_at_period_end as "cancelAtPeriodEnd",
+        us.stripe_customer_id as "stripeCustomerId",
+        us.stripe_subscription_id as "stripeSubscriptionId",
+        us.billing_cycle as "billingCycle",
+        us.created_at as "createdAt",
+        us.updated_at as "updatedAt"
+      FROM user_subscriptions us
+      INNER JOIN subscription_plans sp ON us.plan_id = sp.id
+      WHERE us.user_id = ${userId}
+      ORDER BY us.created_at DESC
       LIMIT 1
     `);
 
@@ -188,24 +191,24 @@ export async function getOwlFencUserLimits(userId: number) {
     const result = await db.execute(sql`
       SELECT 
         id,
-        "userId",
-        "contractsUsed",
-        "contractsLimit",
-        "estimatesUsed",
-        "estimatesLimit",
-        "invoicesUsed",
-        "invoicesLimit",
-        "propertyVerificationsUsed",
-        "propertyVerificationsLimit",
-        "permitAdvisorUsed",
-        "permitAdvisorLimit",
-        "totalQueriesUsed",
-        "totalQueriesLimit",
-        "resetAt",
-        "createdAt",
-        "updatedAt"
-      FROM user_limits
-      WHERE "userId" = ${userId}
+        user_id as "userId",
+        contracts_used as "contractsUsed",
+        contracts_limit as "contractsLimit",
+        estimates_used as "estimatesUsed",
+        estimates_limit as "estimatesLimit",
+        invoices_used as "invoicesUsed",
+        invoices_limit as "invoicesLimit",
+        property_verifications_used as "propertyVerificationsUsed",
+        property_verifications_limit as "propertyVerificationsLimit",
+        permit_advisor_used as "permitAdvisorUsed",
+        permit_advisor_limit as "permitAdvisorLimit",
+        total_queries_used as "totalQueriesUsed",
+        total_queries_limit as "totalQueriesLimit",
+        reset_at as "resetAt",
+        created_at as "createdAt",
+        updated_at as "updatedAt"
+      FROM user_usage_limits
+      WHERE user_id = ${userId}
     `);
 
     return result.rows[0] || null;
@@ -232,12 +235,13 @@ export async function getOwlFencDashboardStats() {
     // Users by plan
     const planStatsResult = await db.execute(sql`
       SELECT 
-        s.plan,
+        sp.name as plan,
         COUNT(*) as count
-      FROM subscriptions s
-      INNER JOIN users u ON s."userId" = u.id
-      WHERE s.status = 'active'
-      GROUP BY s.plan
+      FROM user_subscriptions us
+      INNER JOIN subscription_plans sp ON us.plan_id = sp.id
+      INNER JOIN users u ON us.user_id = u.id
+      WHERE us.status = 'active'
+      GROUP BY sp.name
     `);
 
     const usersByPlan: Record<string, number> = {};
@@ -249,7 +253,7 @@ export async function getOwlFencDashboardStats() {
     const newUsersResult = await db.execute(sql`
       SELECT COUNT(*) as count 
       FROM users 
-      WHERE "createdAt" >= DATE_TRUNC('month', CURRENT_DATE)
+      WHERE created_at >= DATE_TRUNC('month', CURRENT_DATE)
     `);
     const newUsersThisMonth = Number(newUsersResult.rows[0]?.count || 0);
 
@@ -257,7 +261,7 @@ export async function getOwlFencDashboardStats() {
     const activeUsersResult = await db.execute(sql`
       SELECT COUNT(*) as count 
       FROM users 
-      WHERE "lastSignedIn" >= CURRENT_DATE - INTERVAL '30 days'
+      WHERE last_signed_in >= CURRENT_DATE - INTERVAL '30 days'
     `);
     const activeUsers = Number(activeUsersResult.rows[0]?.count || 0);
 
