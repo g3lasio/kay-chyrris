@@ -55,7 +55,7 @@ export async function sendOTP(email: string): Promise<{ success: boolean; error?
 
     try{
       await resend.emails.send({
-        from: 'Chyrris KAI <onboarding@resend.dev>',
+        from: 'Chyrris KAI <mervin@owlfenc.com>',
         to: email,
         subject: 'Your Chyrris KAI Login Code',
         html: `

@@ -20,7 +20,7 @@ console.log('\nAttempting to send test email...');
 
 try {
   const result = await resend.emails.send({
-    from: 'Chyrris KAI <onboarding@resend.dev>',
+    from: 'Chyrris KAI <mervin@owlfenc.com>',
     to: 'gelasio@chyrris.com',
     subject: 'Test OTP from Chyrris KAI',
     html: `
