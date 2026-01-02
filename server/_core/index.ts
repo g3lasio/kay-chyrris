@@ -1,4 +1,9 @@
 import "dotenv/config";
+import dotenv from 'dotenv';
+
+// Load environment variables from .env.local
+dotenv.config({ path: '.env.local' });
+
 import express from "express";
 import { createServer } from "http";
 import net from "net";
