@@ -273,19 +273,27 @@ export async function getOwlFencDashboardStats() {
       GROUP BY sp.name, sp.id
     `);
 
-    const usersByPlan: Record<string, number> = {};
+    const usersByPlan: Record<string, number> = {
+      free: 0,
+      patron: 0,
+      master: 0,
+    };
     let freeUsers = 0;
     let paidUsers = 0;
 
     for (const row of planStatsResult.rows) {
       const planName = row.plan as string;
       const count = Number(row.count);
-      usersByPlan[planName] = count;
       
-      // Plan ID 1 is typically the free plan (Primo Chambeador)
-      if (row.planId === 1) {
-        freeUsers = count;
-      } else {
+      // Map plan names to frontend keys
+      if (planName === 'Primo Chambeador' || planName === 'Free' || planName === 'Free Trial') {
+        usersByPlan.free += count;
+        freeUsers += count;
+      } else if (planName === 'Mero Patrón') {
+        usersByPlan.patron += count;
+        paidUsers += count;
+      } else if (planName === 'Master Contractor') {
+        usersByPlan.master += count;
         paidUsers += count;
       }
     }

@@ -158,7 +158,7 @@ export const appRouter = router({
       }),
 
     // Get dashboard stats
-    getStats: protectedProcedure.query(async () => {
+    getStats: publicProcedure.query(async () => {
       try {
         const stats = await getOwlFencDashboardStats();
         return {
