@@ -251,6 +251,11 @@ export async function getSystemUsageMetrics() {
       estimatesSnapshot,
       projectsSnapshot,
       paymentsSnapshot,
+      permitSearchesSnapshot,
+      propertyVerificationsSnapshot,
+      dualSignatureContractsSnapshot,
+      sharedEstimatesSnapshot,
+      contractHistorySnapshot,
       emailsTodaySnapshot,
       emailsMonthSnapshot,
       pdfsTodaySnapshot,
@@ -262,6 +267,14 @@ export async function getSystemUsageMetrics() {
       db.collection('estimates').count().get(),
       db.collection('projects').count().get(),
       db.collection('paymentHistory').count().get(),
+      
+      // NEW: High-priority metrics
+      db.collection('permit_search_history').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+      // Property verifications are in PostgreSQL, will be 0 for now
+      Promise.resolve({ data: () => ({ count: 0 }) }),
+      db.collection('dualSignatureContracts').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+      db.collection('shared_estimates').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+      db.collection('contractHistory').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
       
       // Emails sent TODAY (may not exist yet, will return 0)
       db.collection('email_logs')
@@ -299,6 +312,13 @@ export async function getSystemUsageMetrics() {
       totalEstimates: estimatesSnapshot.data().count,
       totalProjects: projectsSnapshot.data().count,
       totalPayments: paymentsSnapshot.data().count,
+      
+      // NEW: High-priority metrics
+      totalPermitSearches: permitSearchesSnapshot.data().count,
+      totalPropertyVerifications: propertyVerificationsSnapshot.data().count,
+      totalDualSignatureContracts: dualSignatureContractsSnapshot.data().count,
+      totalSharedEstimates: sharedEstimatesSnapshot.data().count,
+      totalContractModifications: contractHistorySnapshot.data().count,
       
       // Email tracking (Resend limit: 500/day)
       emailsSentToday,
@@ -339,6 +359,10 @@ export async function getUserUsageBreakdown() {
         estimatesSnapshot,
         projectsSnapshot,
         paymentsSnapshot,
+        permitSearchesSnapshot,
+        dualSignatureContractsSnapshot,
+        sharedEstimatesSnapshot,
+        contractHistorySnapshot,
         emailsSnapshot,
         pdfsSnapshot
       ] = await Promise.all([
@@ -349,6 +373,13 @@ export async function getUserUsageBreakdown() {
         db.collection('estimates').where('firebaseUserId', '==', userId).count().get(),
         db.collection('projects').where('userId', '==', userId).count().get(),
         db.collection('paymentHistory').where('userId', '==', userId).count().get(),
+        
+        // NEW: High-priority metrics
+        db.collection('permit_search_history').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+        db.collection('dualSignatureContracts').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+        db.collection('shared_estimates').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+        db.collection('contractHistory').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+        
         // Email and PDF logs (may not exist yet, will return 0)
         db.collection('email_logs').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
         db.collection('pdf_logs').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
@@ -364,6 +395,13 @@ export async function getUserUsageBreakdown() {
         estimatesCount: estimatesSnapshot.data().count,
         projectsCount: projectsSnapshot.data().count,
         paymentsCount: paymentsSnapshot.data().count,
+        
+        // NEW: High-priority metrics
+        permitSearchesCount: permitSearchesSnapshot.data().count,
+        dualSignatureContractsCount: dualSignatureContractsSnapshot.data().count,
+        sharedEstimatesCount: sharedEstimatesSnapshot.data().count,
+        contractModificationsCount: contractHistorySnapshot.data().count,
+        
         emailsSentCount: emailsSnapshot.data().count,
         pdfsGeneratedCount: pdfsSnapshot.data().count,
       };
@@ -379,6 +417,10 @@ export async function getUserUsageBreakdown() {
       user.estimatesCount > 0 ||
       user.projectsCount > 0 ||
       user.paymentsCount > 0 ||
+      user.permitSearchesCount > 0 ||
+      user.dualSignatureContractsCount > 0 ||
+      user.sharedEstimatesCount > 0 ||
+      user.contractModificationsCount > 0 ||
       user.emailsSentCount > 0 ||
       user.pdfsGeneratedCount > 0
     );

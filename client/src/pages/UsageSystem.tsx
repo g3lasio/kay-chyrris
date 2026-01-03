@@ -2,8 +2,8 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { trpc } from "@/lib/trpc";
-import { Activity, AlertTriangle, Calendar, FileText, Mail, Users } from "lucide-react";
-import { useState } from "react";
+import { Activity, AlertTriangle, Calendar, FileText, Mail, Users, RefreshCw } from "lucide-react";
+import { useState, useEffect } from "react";
 
 type DateRange = "day" | "month" | "year" | "custom";
 
@@ -13,9 +13,38 @@ export default function UsageSystem() {
   const [customStartDate, setCustomStartDate] = useState("");
   const [customEndDate, setCustomEndDate] = useState("");
 
-  // Fetch usage data
-  const { data: systemUsage, isLoading: loadingSystem } = trpc.owlfenc.getSystemUsage.useQuery();
-  const { data: userUsageList, isLoading: loadingUsers } = trpc.owlfenc.getUserUsageBreakdown.useQuery();
+  const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+
+  // Fetch usage data with refetch function
+  const { data: systemUsage, isLoading: loadingSystem, refetch: refetchSystem } = trpc.owlfenc.getSystemUsage.useQuery();
+  const { data: userUsageList, isLoading: loadingUsers, refetch: refetchUsers } = trpc.owlfenc.getUserUsageBreakdown.useQuery();
+
+  // Auto-refresh every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refetchSystem();
+      refetchUsers();
+      setLastUpdated(new Date());
+    }, 30000); // 30 seconds
+
+    return () => clearInterval(interval);
+  }, [refetchSystem, refetchUsers]);
+
+  // Manual refresh function
+  const handleManualRefresh = () => {
+    refetchSystem();
+    refetchUsers();
+    setLastUpdated(new Date());
+  };
+
+  // Format last updated time
+  const getLastUpdatedText = () => {
+    const now = new Date();
+    const diffInSeconds = Math.floor((now.getTime() - lastUpdated.getTime()) / 1000);
+    if (diffInSeconds < 10) return "Just now";
+    if (diffInSeconds < 60) return `${diffInSeconds}s ago`;
+    return `${Math.floor(diffInSeconds / 60)}m ago`;
+  };
 
   // Filter users by search
   const filteredUsers = userUsageList?.filter((user: any) => 
@@ -64,20 +93,37 @@ export default function UsageSystem() {
             <p className="text-slate-400 text-sm">Monitor system-wide and per-user resource usage</p>
           </div>
           
-          {/* Date Range Filter */}
-          <div className="flex items-center gap-3">
-            <Calendar className="w-5 h-5 text-cyan-500" />
-            <Select value={dateRange} onValueChange={(value) => setDateRange(value as DateRange)}>
-              <SelectTrigger className="w-[180px] bg-slate-900 border-slate-700 text-white">
-                <SelectValue placeholder="Select range" />
-              </SelectTrigger>
-              <SelectContent className="bg-slate-900 border-slate-700">
-                <SelectItem value="day" className="text-white hover:bg-slate-800">Today</SelectItem>
-                <SelectItem value="month" className="text-white hover:bg-slate-800">This Month</SelectItem>
-                <SelectItem value="year" className="text-white hover:bg-slate-800">This Year</SelectItem>
-                <SelectItem value="custom" className="text-white hover:bg-slate-800">Custom Range</SelectItem>
-              </SelectContent>
-            </Select>
+          {/* Date Range Filter & Refresh */}
+          <div className="flex items-center gap-4">
+            {/* Last Updated */}
+            <div className="text-xs text-slate-500">
+              Updated {getLastUpdatedText()}
+            </div>
+            
+            {/* Manual Refresh Button */}
+            <button
+              onClick={handleManualRefresh}
+              className="p-2 rounded-lg bg-slate-900 border border-slate-700 hover:bg-slate-800 transition-colors"
+              title="Refresh data"
+            >
+              <RefreshCw className="w-4 h-4 text-cyan-500" />
+            </button>
+            
+            {/* Date Range Filter */}
+            <div className="flex items-center gap-3">
+              <Calendar className="w-5 h-5 text-cyan-500" />
+              <Select value={dateRange} onValueChange={(value) => setDateRange(value as DateRange)}>
+                <SelectTrigger className="w-[180px] bg-slate-900 border-slate-700 text-white">
+                  <SelectValue placeholder="Select range" />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-900 border-slate-700">
+                  <SelectItem value="day" className="text-white hover:bg-slate-800">Today</SelectItem>
+                  <SelectItem value="month" className="text-white hover:bg-slate-800">This Month</SelectItem>
+                  <SelectItem value="year" className="text-white hover:bg-slate-800">This Year</SelectItem>
+                  <SelectItem value="custom" className="text-white hover:bg-slate-800">Custom Range</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </div>
 
@@ -221,6 +267,27 @@ export default function UsageSystem() {
               <p className="text-xs text-slate-400 mb-1">Total Payments</p>
               <p className="text-xl font-bold text-pink-400">{(systemUsage as any)?.totalPayments || 0}</p>
             </div>
+            {/* NEW: High-priority metrics */}
+            <div className="bg-slate-800/50 rounded-lg p-3">
+              <p className="text-xs text-slate-400 mb-1">Permit Searches</p>
+              <p className="text-xl font-bold text-orange-400">{(systemUsage as any)?.totalPermitSearches || 0}</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-lg p-3">
+              <p className="text-xs text-slate-400 mb-1">Property Verifications</p>
+              <p className="text-xl font-bold text-teal-400">{(systemUsage as any)?.totalPropertyVerifications || 0}</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-lg p-3">
+              <p className="text-xs text-slate-400 mb-1">Dual Signatures</p>
+              <p className="text-xl font-bold text-indigo-400">{(systemUsage as any)?.totalDualSignatureContracts || 0}</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-lg p-3">
+              <p className="text-xs text-slate-400 mb-1">Shared Estimates</p>
+              <p className="text-xl font-bold text-rose-400">{(systemUsage as any)?.totalSharedEstimates || 0}</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-lg p-3">
+              <p className="text-xs text-slate-400 mb-1">Contract Mods</p>
+              <p className="text-xl font-bold text-violet-400">{(systemUsage as any)?.totalContractModifications || 0}</p>
+            </div>
           </div>
         </Card>
 
@@ -249,6 +316,11 @@ export default function UsageSystem() {
                   <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Estimates</th>
                   <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Projects</th>
                   <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Payments</th>
+                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Permits</th>
+                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Properties</th>
+                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Dual Sigs</th>
+                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Shared Est</th>
+                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Contract Mods</th>
                   <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Emails</th>
                   <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">PDFs</th>
                   <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Total</th>
@@ -257,7 +329,7 @@ export default function UsageSystem() {
               <tbody>
                 {filteredUsers.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="text-center py-6 text-slate-500 text-sm">
+                    <td colSpan={16} className="text-center py-6 text-slate-500 text-sm">
                       No users found
                     </td>
                   </tr>
@@ -266,6 +338,8 @@ export default function UsageSystem() {
                     const total = (user.clientsCount || 0) + (user.contractsCount || 0) + 
                                   (user.invoicesCount || 0) + (user.estimatesCount || 0) +
                                   (user.projectsCount || 0) + (user.paymentsCount || 0) +
+                                  (user.permitSearchesCount || 0) + (user.dualSignatureContractsCount || 0) +
+                                  (user.sharedEstimatesCount || 0) + (user.contractModificationsCount || 0) +
                                   (user.emailsSentCount || 0) + (user.pdfsGeneratedCount || 0);
                     
                     return (
@@ -289,6 +363,22 @@ export default function UsageSystem() {
                         </td>
                         <td className="py-2 px-3 text-center text-pink-400 font-semibold text-sm">
                           {user.paymentsCount || 0}
+                        </td>
+                        {/* NEW: High-priority metrics */}
+                        <td className="py-2 px-3 text-center text-orange-400 font-semibold text-sm">
+                          {user.permitSearchesCount || 0}
+                        </td>
+                        <td className="py-2 px-3 text-center text-teal-400 font-semibold text-sm">
+                          0 {/* Property verifications - PostgreSQL, not implemented yet */}
+                        </td>
+                        <td className="py-2 px-3 text-center text-indigo-400 font-semibold text-sm">
+                          {user.dualSignatureContractsCount || 0}
+                        </td>
+                        <td className="py-2 px-3 text-center text-rose-400 font-semibold text-sm">
+                          {user.sharedEstimatesCount || 0}
+                        </td>
+                        <td className="py-2 px-3 text-center text-violet-400 font-semibold text-sm">
+                          {user.contractModificationsCount || 0}
                         </td>
                         <td className="py-2 px-3 text-center text-cyan-300 font-semibold text-sm">
                           {user.emailsSentCount || 0}

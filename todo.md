@@ -375,3 +375,48 @@
 - [x] Maintain futuristic black theme
 - [x] Keep icons and colors consistent
 - [x] Test responsive layout with compressed cards
+
+
+---
+
+## 🔍 CRITICAL: Complete Data Audit & Real-Time Tracking
+
+### Comprehensive Data Source Audit
+- [ ] Audit ALL Firestore collections (clients, contracts, invoices, estimates, projects, payments)
+- [ ] Audit ALL Firestore history collections (contractHistory, paymentHistory, permitHistory, signatureHistory)
+- [ ] Audit ALL PostgreSQL tables (user_usage_limits, subscriptions, entitlements)
+- [ ] Verify Firebase Authentication user data
+- [ ] Map which database stores what data (Firestore vs PostgreSQL)
+- [ ] Identify any missing data sources
+
+### Missing Tracking Features
+- [ ] Add contract signatures tracking (dual signature contracts)
+- [ ] Add property verifier ownership tracking
+- [ ] Add permit search history tracking
+- [ ] Add property verification history tracking
+- [ ] Add estimate sharing tracking (shared_estimates collection)
+- [ ] Add company profiles tracking
+- [ ] Add notification history tracking
+
+### Real-Time Updates
+- [ ] Implement auto-refresh for Usage System (every 30 seconds)
+- [ ] Add real-time listener for new users (Firebase onSnapshot)
+- [ ] Add real-time listener for new operations
+- [ ] Add loading indicator during refresh
+- [ ] Add "Last updated" timestamp display
+- [ ] Implement WebSocket or polling for live updates
+
+### User Display Guarantee
+- [ ] Ensure ALL Firebase Auth users appear (not just those with activity)
+- [ ] Display users with 0 operations
+- [ ] Show users from all plans (Free, Patron, Master, Trial)
+- [ ] Add filter to show/hide inactive users
+- [ ] Verify no hardcoded user filters exist
+- [ ] Test with newly registered users
+
+### Data Integrity
+- [ ] Verify all userId fields are consistent across collections
+- [ ] Handle cases where userId is missing
+- [ ] Handle cases where firebaseUserId vs userId mismatch
+- [ ] Add error handling for missing data
+- [ ] Add data validation before display
