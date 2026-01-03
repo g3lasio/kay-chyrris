@@ -201,24 +201,28 @@
 ## 🔥 NEW: User Management Actions & Subscription Tracking
 
 ### User Management Actions (Firebase Admin)
-- [ ] Implement "Disable User" action with Firebase Admin SDK
-- [ ] Implement "Enable User" action to reactivate disabled accounts
-- [ ] Implement "Delete User" action with confirmation dialog
-- [ ] Implement "Reset Password" action (send email)
-- [ ] Implement "Update Email" action
-- [ ] Implement "Update Phone" action
-- [ ] Create user detail modal with all actions
-- [ ] Add confirmation dialogs for destructive actions
-- [ ] Add success/error toast notifications
+- [x] Implement "Disable User" action with Firebase Admin SDK
+- [x] Implement "Enable User" action to reactivate disabled accounts
+- [x] Implement "Delete User" action with confirmation dialog
+- [x] Implement "Reset Password" action (send email)
+- [x] Implement "Update Email" action
+- [x] Implement "Update Phone" action
+- [x] Create user detail modal with all actions
+- [x] Add confirmation dialogs for destructive actions
+- [x] Add success/error toast notifications
+- [x] Update Users page to show ALL users dynamically (no hardcoded filters)
+- [x] Display subscription details in user detail modal
+- [x] Display usage limits in user detail modal with progress bars
+- [x] Add admin action buttons (Disable, Enable, Reset Password, Delete)
 
 ### Subscription & Usage Tracking
-- [ ] Clone and analyze Owl Fenc repository structure
-- [ ] Identify where subscription data is stored (Stripe, Firestore, or PostgreSQL)
-- [ ] Identify where usage limits are tracked (estimates, contracts, invoices)
-- [ ] Understand how Free users are tracked vs Paid users
-- [ ] Map subscription plans (Free, Primo Chambeador, Mero Patrón, Master Contractor)
-- [ ] Implement subscription data fetching from correct source
-- [ ] Implement usage tracking display (current usage vs limits)
+- [x] Clone and analyze Owl Fenc repository structure
+- [x] Identify where subscription data is stored (PostgreSQL)
+- [x] Identify where usage limits are tracked (user_usage_limits table)
+- [x] Understand how Free users are tracked vs Paid users
+- [x] Map subscription plans (Primo Chambeador $0, Mero Patrón $49.99, Master Contractor $99.99, Free Trial $0)
+- [x] Implement subscription data fetching from PostgreSQL
+- [x] Implement usage tracking display (current usage vs limits)
 - [ ] Create subscription status indicators in Users page
 - [ ] Build usage analytics dashboard
 - [ ] Add alerts for users approaching limits
