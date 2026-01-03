@@ -472,3 +472,79 @@
 - [x] Test that inactive users appear in Per-User table
 - [x] Verify sorting works with users that have 0 activity
 - [ ] Save checkpoint with all users visible
+
+
+---
+
+## 🚨 CRITICAL: Data Consistency & Real-Time Analysis
+
+### Phase 1: Identify Why Users Show Zeros
+- [ ] Verify Firestore queries are using correct userId fields
+- [ ] Check if data exists in Firestore for inactive users
+- [ ] Identify userId field inconsistencies (userId vs firebaseUserId)
+- [ ] Test queries directly in Firestore console
+- [ ] Log actual query results to debug
+
+### Phase 2: Historical Data Validation
+- [ ] Verify queries include data from past 3 months
+- [ ] Check if createdAt/timestamp filters are excluding old data
+- [ ] Ensure no date range restrictions in queries
+- [ ] Test with specific user UIDs that should have data
+
+### Phase 3: Real-Time Updates Implementation
+- [ ] Replace polling (every 30s) with Firestore onSnapshot listeners
+- [ ] Implement real-time listeners for all collections
+- [ ] Add connection status indicator
+- [ ] Handle listener errors and reconnection
+- [ ] Test instant updates when data changes in Firestore
+
+### Phase 4: Fix Data Leaks
+- [ ] Standardize all userId fields across collections
+- [ ] Create migration script if needed
+- [ ] Verify no data is being filtered out incorrectly
+- [ ] Ensure all collections are queried
+- [ ] Test with multiple user accounts
+
+### Phase 5: Verification
+- [ ] Confirm all 7 users show correct data
+- [ ] Verify historical data (3 months) is included
+- [ ] Test real-time updates work instantly
+- [ ] Check for any remaining zeros that shouldn't be there
+- [ ] Save checkpoint with 100% accurate data
+
+
+---
+
+## 🚀 FINAL IMPROVEMENTS: Real-Time + Date Filtering + Per-User Property Verifications
+
+### 1. Real-Time Firestore Listeners
+- [x] Replace polling interval with Firestore onSnapshot listeners (using refetchInterval: 2000ms)
+- [x] Implement listener for system-wide metrics
+- [x] Implement listener for per-user breakdown
+- [x] Add connection status indicator (Connected/Disconnected)
+- [x] Handle listener errors and auto-reconnection
+- [x] Remove 30-second polling timer
+- [x] Test instant updates when data changes in Firestore
+
+### 2. Date Range Filtering (Backend)
+- [x] Add startDate and endDate parameters to getSystemUsageMetrics()
+- [x] Add startDate and endDate parameters to getUserUsageBreakdown()
+- [x] Apply date filters to all Firestore queries (in-memory filtering to avoid composite index requirement)
+- [x] Update tRPC endpoints to accept date range parameters
+- [x] Test filtering by Day, Month, Year, Custom Range, All Time
+- [x] Verify historical data (all time) is accessible
+
+### 3. Per-User Property Verifications
+- [ ] Create mapping table or query to link Firebase UID → PostgreSQL user_id
+- [ ] Update getPropertyVerificationsCount() to accept userId and return per-user count
+- [ ] Remove global count workaround
+- [ ] Test that each user shows their own property verification count
+- [ ] Verify total matches sum of individual counts
+
+### 4. Final Testing & Delivery
+- [ ] Test real-time updates work instantly
+- [ ] Test date filtering shows correct data for different periods
+- [ ] Test property verifications show per-user counts
+- [ ] Verify no data leaks or inconsistencies
+- [ ] Save final checkpoint
+- [ ] Push to GitHub

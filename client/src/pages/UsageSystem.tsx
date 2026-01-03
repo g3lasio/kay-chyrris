@@ -5,14 +5,14 @@ import { trpc } from "@/lib/trpc";
 import { Activity, AlertTriangle, Calendar, FileText, Mail, Users, RefreshCw } from "lucide-react";
 import { useState, useEffect } from "react";
 
-type DateRange = "day" | "month" | "year" | "custom";
+type DateRange = "all" | "day" | "month" | "year" | "custom";
 
 type SortColumn = 'name' | 'email' | 'clients' | 'contracts' | 'invoices' | 'estimates' | 'projects' | 'payments' | 'permits' | 'properties' | 'dualSignatures' | 'sharedEstimates' | 'modifications' | 'emails' | 'pdfs' | 'total';
 type SortDirection = 'asc' | 'desc';
 
 export default function UsageSystem() {
   const [searchQuery, setSearchQuery] = useState("");
-  const [dateRange, setDateRange] = useState<DateRange>("month");
+  const [dateRange, setDateRange] = useState<DateRange>("all");
   const [customStartDate, setCustomStartDate] = useState("");
   const [customEndDate, setCustomEndDate] = useState("");
 
@@ -22,20 +22,63 @@ export default function UsageSystem() {
   const [sortColumn, setSortColumn] = useState<SortColumn>('total');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
 
-  // Fetch usage data with refetch function
-  const { data: systemUsage, isLoading: loadingSystem, refetch: refetchSystem } = trpc.owlfenc.getSystemUsage.useQuery();
-  const { data: userUsageList, isLoading: loadingUsers, refetch: refetchUsers } = trpc.owlfenc.getUserUsageBreakdown.useQuery();
+  // Calculate date range for queries
+  const getDateRangeParams = () => {
+    // If "All Time" is selected, return empty object (no date filter)
+    if (dateRange === "all") {
+      return {};
+    }
+    
+    const now = new Date();
+    let startDate: string | undefined;
+    let endDate: string | undefined;
 
-  // Auto-refresh every 30 seconds
+    switch (dateRange) {
+      case "day":
+        startDate = new Date(now.setHours(0, 0, 0, 0)).toISOString();
+        endDate = new Date(now.setHours(23, 59, 59, 999)).toISOString();
+        break;
+      case "month":
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999).toISOString();
+        break;
+      case "year":
+        startDate = new Date(now.getFullYear(), 0, 1).toISOString();
+        endDate = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999).toISOString();
+        break;
+      case "custom":
+        if (customStartDate && customEndDate) {
+          startDate = new Date(customStartDate).toISOString();
+          endDate = new Date(customEndDate + "T23:59:59.999Z").toISOString();
+        }
+        break;
+    }
+
+    return startDate && endDate ? { startDate, endDate } : {};
+  };
+
+  const dateParams = getDateRangeParams();
+
+  // Fetch usage data with near-real-time refetch (2 seconds)
+  const { data: systemUsage, isLoading: loadingSystem, refetch: refetchSystem } = trpc.owlfenc.getSystemUsage.useQuery(
+    dateParams as any,
+    {
+      refetchInterval: 2000, // Refetch every 2 seconds for near-real-time updates
+      refetchIntervalInBackground: false, // Only refetch when tab is active
+    }
+  );
+  const { data: userUsageList, isLoading: loadingUsers, refetch: refetchUsers } = trpc.owlfenc.getUserUsageBreakdown.useQuery(
+    dateParams as any,
+    {
+      refetchInterval: 2000, // Refetch every 2 seconds for near-real-time updates
+      refetchIntervalInBackground: false, // Only refetch when tab is active
+    }
+  );
+
+  // Update last updated timestamp when data changes
   useEffect(() => {
-    const interval = setInterval(() => {
-      refetchSystem();
-      refetchUsers();
-      setLastUpdated(new Date());
-    }, 30000); // 30 seconds
-
-    return () => clearInterval(interval);
-  }, [refetchSystem, refetchUsers]);
+    setLastUpdated(new Date());
+  }, [systemUsage, userUsageList]);
 
   // Manual refresh function
   const handleManualRefresh = () => {
@@ -176,13 +219,14 @@ export default function UsageSystem() {
 
   const getDateRangeLabel = () => {
     switch (dateRange) {
+      case "all": return "All Time";
       case "day": return "Today";
       case "month": return "This Month";
       case "year": return "This Year";
       case "custom": return customStartDate && customEndDate 
         ? `${customStartDate} to ${customEndDate}` 
         : "Custom Range";
-      default: return "This Month";
+      default: return "All Time";
     }
   };
 
@@ -228,6 +272,7 @@ export default function UsageSystem() {
                   <SelectValue placeholder="Select range" />
                 </SelectTrigger>
                 <SelectContent className="bg-slate-900 border-slate-700">
+                  <SelectItem value="all" className="text-white hover:bg-slate-800">All Time</SelectItem>
                   <SelectItem value="day" className="text-white hover:bg-slate-800">Today</SelectItem>
                   <SelectItem value="month" className="text-white hover:bg-slate-800">This Month</SelectItem>
                   <SelectItem value="year" className="text-white hover:bg-slate-800">This Year</SelectItem>

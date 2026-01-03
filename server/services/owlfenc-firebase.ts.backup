@@ -408,12 +408,26 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
         emailsSnapshot,
         pdfsSnapshot
       ] = await Promise.all([
-        db.collection('clients').where('userId', '==', userId).get(),
-        db.collection('contracts').where('userId', '==', userId).get(),
-        db.collection('invoices').where('userId', '==', userId).get(),
-        db.collection('estimates').where('firebaseUserId', '==', userId).get(),
-        db.collection('projects').where('userId', '==', userId).get(),
-        db.collection('paymentHistory').where('userId', '==', userId).get(),
+        // Apply date filters if provided
+        filterStartDate && filterEndDate
+          ? db.collection('clients').where('userId', '==', userId).where('createdAt', '>=', filterStartDate).where('createdAt', '<=', filterEndDate).count().get()
+          : db.collection('clients').where('userId', '==', userId).count().get(),
+        filterStartDate && filterEndDate
+          ? db.collection('contracts').where('userId', '==', userId).where('createdAt', '>=', filterStartDate).where('createdAt', '<=', filterEndDate).count().get()
+          : db.collection('contracts').where('userId', '==', userId).count().get(),
+        filterStartDate && filterEndDate
+          ? db.collection('invoices').where('userId', '==', userId).where('createdAt', '>=', filterStartDate).where('createdAt', '<=', filterEndDate).count().get()
+          : db.collection('invoices').where('userId', '==', userId).count().get(),
+        // NOTE: estimates uses 'firebaseUserId' instead of 'userId' (legacy)
+        filterStartDate && filterEndDate
+          ? db.collection('estimates').where('firebaseUserId', '==', userId).where('createdAt', '>=', filterStartDate).where('createdAt', '<=', filterEndDate).count().get()
+          : db.collection('estimates').where('firebaseUserId', '==', userId).count().get(),
+        filterStartDate && filterEndDate
+          ? db.collection('projects').where('userId', '==', userId).where('createdAt', '>=', filterStartDate).where('createdAt', '<=', filterEndDate).count().get()
+          : db.collection('projects').where('userId', '==', userId).count().get(),
+        filterStartDate && filterEndDate
+          ? db.collection('paymentHistory').where('userId', '==', userId).where('createdAt', '>=', filterStartDate).where('createdAt', '<=', filterEndDate).count().get()
+          : db.collection('paymentHistory').where('userId', '==', userId).count().get(),
         
         // NEW: High-priority metrics
         db.collection('permit_search_history').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
@@ -431,34 +445,10 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
         db.collection('pdf_logs').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
       ]);
       
-      // Filter documents in memory if date range is provided
-      const filterUserDocs = (snapshot: any) => {
-        if (!filterStartDate || !filterEndDate) return snapshot.size;
-        
-        return snapshot.docs.filter((doc: any) => {
-          const data = doc.data();
-          const createdAt = data.createdAt;
-          
-          if (!createdAt) return false;
-          
-          // Handle different date formats (Timestamp, Date, string)
-          let docDate: Date;
-          if (createdAt.toDate) {
-            docDate = createdAt.toDate(); // Firestore Timestamp
-          } else if (createdAt instanceof Date) {
-            docDate = createdAt;
-          } else {
-            docDate = new Date(createdAt); // ISO string
-          }
-          
-          return docDate >= filterStartDate && docDate <= filterEndDate;
-        }).length;
-      };
-      
-      const clientsCount = filterUserDocs(clientsSnapshot);
-      const contractsCount = filterUserDocs(contractsSnapshot);
-      const invoicesCount = filterUserDocs(invoicesSnapshot);
-      const estimatesCount = filterUserDocs(estimatesSnapshot);
+      const clientsCount = clientsSnapshot.data().count;
+      const contractsCount = contractsSnapshot.data().count;
+      const invoicesCount = invoicesSnapshot.data().count;
+      const estimatesCount = estimatesSnapshot.data().count;
       
       console.log(`[Firebase Debug] ${userRecord.email}: clients=${clientsCount}, contracts=${contractsCount}, invoices=${invoicesCount}, estimates=${estimatesCount}`);
       
@@ -470,8 +460,8 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
         contractsCount,
         invoicesCount,
         estimatesCount,
-        projectsCount: filterUserDocs(projectsSnapshot),
-        paymentsCount: filterUserDocs(paymentsSnapshot),
+        projectsCount: projectsSnapshot.data().count,
+        paymentsCount: paymentsSnapshot.data().count,
         
         // NEW: High-priority metrics
         permitSearchesCount: permitSearchesSnapshot.data().count,
@@ -494,4 +484,3 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
     throw error;
   }
 }
-
