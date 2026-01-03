@@ -461,3 +461,14 @@
 - [ ] Handle string sorting (name, email)
 - [ ] Test sorting on all columns
 - [ ] Add hover effects to sortable headers
+
+
+---
+
+## 🔥 URGENT: Show ALL Users Regardless of Activity
+
+- [x] Remove zero-activity filter from getUserUsageBreakdown()
+- [x] Display all 7 Firebase Auth users even if they have 0 operations
+- [x] Test that inactive users appear in Per-User table
+- [x] Verify sorting works with users that have 0 activity
+- [ ] Save checkpoint with all users visible

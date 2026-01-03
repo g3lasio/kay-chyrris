@@ -420,21 +420,8 @@ export async function getUserUsageBreakdown() {
     
     const userUsage = await Promise.all(userUsagePromises);
     
-    // Filter out users with zero activity
-    return userUsage.filter(user => 
-      user.clientsCount > 0 || 
-      user.contractsCount > 0 || 
-      user.invoicesCount > 0 || 
-      user.estimatesCount > 0 ||
-      user.projectsCount > 0 ||
-      user.paymentsCount > 0 ||
-      user.permitSearchesCount > 0 ||
-      user.dualSignatureContractsCount > 0 ||
-      user.sharedEstimatesCount > 0 ||
-      user.contractModificationsCount > 0 ||
-      user.emailsSentCount > 0 ||
-      user.pdfsGeneratedCount > 0
-    );
+    // Return ALL users including those with zero activity
+    return userUsage;
   } catch (error) {
     console.error('[Firebase] Error fetching user usage breakdown:', error);
     throw error;
