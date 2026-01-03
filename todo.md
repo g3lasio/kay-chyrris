@@ -195,3 +195,30 @@
 - [x] Keep Neon PostgreSQL for Chyrris KAI local data (separate from Owl Fenc)
 - [x] Test all features with real Firebase data
 - [x] Verify data consistency with Firebase console
+
+---
+
+## 🔥 NEW: User Management Actions & Subscription Tracking
+
+### User Management Actions (Firebase Admin)
+- [ ] Implement "Disable User" action with Firebase Admin SDK
+- [ ] Implement "Enable User" action to reactivate disabled accounts
+- [ ] Implement "Delete User" action with confirmation dialog
+- [ ] Implement "Reset Password" action (send email)
+- [ ] Implement "Update Email" action
+- [ ] Implement "Update Phone" action
+- [ ] Create user detail modal with all actions
+- [ ] Add confirmation dialogs for destructive actions
+- [ ] Add success/error toast notifications
+
+### Subscription & Usage Tracking
+- [ ] Clone and analyze Owl Fenc repository structure
+- [ ] Identify where subscription data is stored (Stripe, Firestore, or PostgreSQL)
+- [ ] Identify where usage limits are tracked (estimates, contracts, invoices)
+- [ ] Understand how Free users are tracked vs Paid users
+- [ ] Map subscription plans (Free, Primo Chambeador, Mero Patrón, Master Contractor)
+- [ ] Implement subscription data fetching from correct source
+- [ ] Implement usage tracking display (current usage vs limits)
+- [ ] Create subscription status indicators in Users page
+- [ ] Build usage analytics dashboard
+- [ ] Add alerts for users approaching limits

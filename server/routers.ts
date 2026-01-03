@@ -162,6 +162,69 @@ export const appRouter = router({
         }
       }),
 
+    // Get user subscription and usage
+    getUserSubscription: publicProcedure
+      .input(z.object({ firebaseUid: z.string() }))
+      .query(async ({ input }) => {
+        try {
+          const { getUserSubscription, getUserUsage } = await import('./services/owlfenc-subscriptions');
+          const subscription = await getUserSubscription(input.firebaseUid);
+          const usage = await getUserUsage(input.firebaseUid);
+          return {
+            success: true,
+            data: { subscription, usage },
+          };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message,
+          };
+        }
+      }),
+
+    // Firebase Admin Actions
+    disableUser: publicProcedure
+      .input(z.object({ uid: z.string() }))
+      .mutation(async ({ input }) => {
+        const { disableUser } = await import('./services/firebase-admin-actions');
+        return await disableUser(input.uid);
+      }),
+
+    enableUser: publicProcedure
+      .input(z.object({ uid: z.string() }))
+      .mutation(async ({ input }) => {
+        const { enableUser } = await import('./services/firebase-admin-actions');
+        return await enableUser(input.uid);
+      }),
+
+    deleteUser: publicProcedure
+      .input(z.object({ uid: z.string() }))
+      .mutation(async ({ input }) => {
+        const { deleteUser } = await import('./services/firebase-admin-actions');
+        return await deleteUser(input.uid);
+      }),
+
+    sendPasswordReset: publicProcedure
+      .input(z.object({ email: z.string().email() }))
+      .mutation(async ({ input }) => {
+        const { sendPasswordResetEmail } = await import('./services/firebase-admin-actions');
+        return await sendPasswordResetEmail(input.email);
+      }),
+
+    updateEmail: publicProcedure
+      .input(z.object({ uid: z.string(), newEmail: z.string().email() }))
+      .mutation(async ({ input }) => {
+        const { updateUserEmail } = await import('./services/firebase-admin-actions');
+        return await updateUserEmail(input.uid, input.newEmail);
+      }),
+
+    updatePhone: publicProcedure
+      .input(z.object({ uid: z.string(), newPhone: z.string() }))
+      .mutation(async ({ input }) => {
+        const { updateUserPhone } = await import('./services/firebase-admin-actions');
+        return await updateUserPhone(input.uid, input.newPhone);
+      }),
+
     // Get dashboard stats from Firebase (REAL DATA)
     getStats: publicProcedure.query(async () => {
       try {
