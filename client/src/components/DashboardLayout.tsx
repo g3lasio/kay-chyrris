@@ -89,13 +89,12 @@ function DashboardLayoutContent({
   children,
   setSidebarWidth,
 }: DashboardLayoutContentProps) {
-  // AUTHENTICATION DISABLED TEMPORARILY
+  // AUTHENTICATION COMPLETELY DISABLED - No Manus dependencies
   const user = { name: 'Admin', email: 'admin@chyrris.com', role: 'super_admin' };
-  const logoutMutation = trpc.auth.logout.useMutation();
   
   const logout = async () => {
-    await logoutMutation.mutateAsync();
-    window.location.href = '/login';
+    // Authentication disabled - no logout functionality
+    console.log('[Auth] Logout disabled - no authentication system');
   };
   const [location, setLocation] = useLocation();
   const { state, toggleSidebar } = useSidebar();

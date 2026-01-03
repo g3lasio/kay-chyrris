@@ -21,14 +21,21 @@ export default function Users() {
   const [page, setPage] = useState(0);
   const limit = 20;
 
-  const { data, isLoading } = trpc.owlfenc.getUsers.useQuery({
-    limit,
-    offset: page * limit,
-    search: search || undefined,
-  });
+  const { data, isLoading } = trpc.owlfenc.getUsers.useQuery();
 
-  const users = data?.success && data.data ? data.data.users : [];
-  const total = data?.success && data.data ? data.data.total : 0;
+  // Firebase returns array directly
+  const allUsers = data?.success && data.data ? data.data : [];
+  
+  // Client-side filtering and pagination
+  const filteredUsers = search
+    ? allUsers.filter((user: any) => 
+        user.email?.toLowerCase().includes(search.toLowerCase()) ||
+        user.displayName?.toLowerCase().includes(search.toLowerCase())
+      )
+    : allUsers;
+  
+  const total = filteredUsers.length;
+  const users = filteredUsers.slice(page * limit, (page + 1) * limit);
   const totalPages = Math.ceil(total / limit);
 
   const handleSearch = (value: string) => {
@@ -138,21 +145,21 @@ export default function Users() {
                   </TableRow>
                 ) : (
                   users.map((user: any) => (
-                    <TableRow key={user.id}>
+                    <TableRow key={user.uid}>
                       <TableCell className="font-medium">
-                        {user.name || 'N/A'}
+                        {user.displayName || 'N/A'}
                       </TableCell>
                       <TableCell>{user.email || 'N/A'}</TableCell>
                       <TableCell>
-                        <Badge className={getRoleBadgeColor(user.role)}>
-                          {user.role}
+                        <Badge className={user.disabled ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}>
+                          {user.disabled ? 'Disabled' : 'Active'}
                         </Badge>
                       </TableCell>
                       <TableCell className="capitalize">
-                        {user.loginMethod || 'N/A'}
+                        {user.phoneNumber ? 'Phone' : 'Email'}
                       </TableCell>
                       <TableCell>{formatDate(user.createdAt)}</TableCell>
-                      <TableCell>{formatDate(user.lastSignedIn)}</TableCell>
+                      <TableCell>{formatDate(user.lastSignInTime)}</TableCell>
                       <TableCell className="text-right">
                         <Button variant="ghost" size="sm">
                           <Eye className="h-4 w-4 mr-1" />

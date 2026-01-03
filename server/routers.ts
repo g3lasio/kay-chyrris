@@ -94,36 +94,41 @@ export const appRouter = router({
 
   // Owl Fenc specific routes
   owlfenc: router({
-    // Get users list
-    getUsers: protectedProcedure
-      .input(
-        z.object({
-          limit: z.number().min(1).max(100).default(50),
-          offset: z.number().min(0).default(0),
-          search: z.string().optional(),
-        })
-      )
-      .query(async ({ input }) => {
-        try {
-          const users = await getOwlFencUsers(input);
-          const total = await getOwlFencUserCount(input.search);
-          
-          return {
-            success: true,
-            data: {
-              users,
-              total,
-              limit: input.limit,
-              offset: input.offset,
-            },
-          };
-        } catch (error: any) {
-          return {
-            success: false,
-            error: error.message,
-          };
-        }
-      }),
+    // Get users list from Firebase
+    getUsers: publicProcedure.query(async () => {
+      try {
+        const { getOwlFencUsers: getFirebaseUsers } = await import('./services/owlfenc-firebase');
+        const users = await getFirebaseUsers();
+        return {
+          success: true,
+          data: users,
+        };
+      } catch (error: any) {
+        console.error('[Router] Error fetching Firebase users:', error);
+        return {
+          success: false,
+          error: error.message,
+        };
+      }
+    }),
+
+    // Get clients list from Firebase
+    getClients: publicProcedure.query(async () => {
+      try {
+        const { getOwlFencClients } = await import('./services/owlfenc-firebase');
+        const clients = await getOwlFencClients();
+        return {
+          success: true,
+          data: clients,
+        };
+      } catch (error: any) {
+        console.error('[Router] Error fetching Firebase clients:', error);
+        return {
+          success: false,
+          error: error.message,
+        };
+      }
+    }),
 
     // Get user details
     getUserDetails: protectedProcedure
@@ -157,15 +162,17 @@ export const appRouter = router({
         }
       }),
 
-    // Get dashboard stats
+    // Get dashboard stats from Firebase (REAL DATA)
     getStats: publicProcedure.query(async () => {
       try {
-        const stats = await getOwlFencDashboardStats();
+        const { getOwlFencDashboardStats: getFirebaseStats } = await import('./services/owlfenc-firebase');
+        const stats = await getFirebaseStats();
         return {
           success: true,
           data: stats,
         };
       } catch (error: any) {
+        console.error('[Router] Error fetching Firebase stats:', error);
         return {
           success: false,
           error: error.message,

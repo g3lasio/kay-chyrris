@@ -21,10 +21,10 @@ export default function Dashboard() {
       gradient: 'from-cyan-500 to-blue-500',
     },
     {
-      title: 'Active Subscriptions',
-      value: stats?.activeSubscriptions || 0,
+      title: 'Total Clients',
+      value: stats?.totalClients || 0,
       icon: UserCheck,
-      description: 'Active paid subscriptions',
+      description: 'Clients in database',
       gradient: 'from-green-500 to-emerald-500',
     },
     {
@@ -45,25 +45,25 @@ export default function Dashboard() {
     },
   ];
 
-  const planStats = stats?.usersByPlan || {};
-  const planData = [
+  // Real data from Firebase
+  const dataStats = [
     { 
-      name: 'Free (Primo Chambeador)', 
-      count: planStats['free'] || 0, 
-      gradient: 'from-slate-500 to-slate-600',
-      percentage: stats?.totalUsers ? ((planStats['free'] || 0) / stats.totalUsers * 100).toFixed(0) : 0
+      name: 'Total Clients', 
+      count: stats?.totalClients || 0, 
+      gradient: 'from-cyan-500 to-blue-500',
+      percentage: 100
     },
     { 
-      name: 'Mero Patrón', 
-      count: planStats['patron'] || 0, 
-      gradient: 'from-indigo-500 to-purple-500',
-      percentage: stats?.totalUsers ? ((planStats['patron'] || 0) / stats.totalUsers * 100).toFixed(0) : 0
+      name: 'Contracts', 
+      count: stats?.totalContracts || 0, 
+      gradient: 'from-green-500 to-emerald-500',
+      percentage: stats?.totalClients ? ((stats?.totalContracts || 0) / stats.totalClients * 100).toFixed(0) : 0
     },
     { 
-      name: 'Master Contractor', 
-      count: planStats['master'] || 0, 
+      name: 'Invoices', 
+      count: stats?.totalInvoices || 0, 
       gradient: 'from-purple-500 to-pink-500',
-      percentage: stats?.totalUsers ? ((planStats['master'] || 0) / stats.totalUsers * 100).toFixed(0) : 0
+      percentage: stats?.totalClients ? ((stats?.totalInvoices || 0) / stats.totalClients * 100).toFixed(0) : 0
     },
   ];
 
@@ -115,12 +115,12 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Users by Plan */}
+      {/* Data Overview */}
       <Card>
         <CardHeader>
-          <CardTitle>Users by Subscription Plan</CardTitle>
+          <CardTitle>Data Overview</CardTitle>
           <CardDescription>
-            Distribution of users across different subscription tiers
+            Distribution of clients, contracts, and invoices in Owl Fenc
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -132,7 +132,7 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="space-y-3">
-              {planData.map((plan) => (
+              {dataStats.map((plan: any) => (
                 <div key={plan.name} className="space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="font-medium">{plan.name}</span>

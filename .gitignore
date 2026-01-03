@@ -105,3 +105,5 @@ temp/
 *.db
 *.sqlite
 *.sqlite3
+firebase-service-account.json
+owl-fenc-firebase-adminsdk-*.json
