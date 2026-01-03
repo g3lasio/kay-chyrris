@@ -79,38 +79,39 @@
 }
 
 .dark {
-  --primary: var(--color-blue-700);
-  --primary-foreground: var(--color-blue-50);
-  --sidebar-primary: var(--color-blue-500);
-  --sidebar-primary-foreground: var(--color-blue-50);
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.85 0.005 65);
-  --card: oklch(0.21 0.006 285.885);
-  --card-foreground: oklch(0.85 0.005 65);
-  --popover: oklch(0.21 0.006 285.885);
-  --popover-foreground: oklch(0.85 0.005 65);
-  --secondary: oklch(0.24 0.006 286.033);
-  --secondary-foreground: oklch(0.7 0.005 65);
-  --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --accent-foreground:  oklch(0.92 0.005 65);
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.488 0.243 264.376);
-  --chart-1: var(--color-blue-300);
-  --chart-2: var(--color-blue-500);
-  --chart-3: var(--color-blue-600);
-  --chart-4: var(--color-blue-700);
-  --chart-5: var(--color-blue-800);
-  --sidebar: oklch(0.21 0.006 285.885);
-  --sidebar-foreground: oklch(0.85 0.005 65);
-  --sidebar-accent: oklch(0.274 0.006 286.033);
-  --sidebar-accent-foreground:  oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.488 0.243 264.376);
+  /* CHYRRIS KAI - BLACK FUTURISTIC THEME */
+  --primary: oklch(0.7 0.2 195);  /* Electric cyan */
+  --primary-foreground: oklch(0.1 0.01 240);
+  --sidebar-primary: oklch(0.7 0.2 195);
+  --sidebar-primary-foreground: oklch(0.98 0.01 240);
+  --background: oklch(0.08 0.01 240);  /* Deep space black */
+  --foreground: oklch(0.98 0.01 240);  /* Bright white */
+  --card: oklch(0.12 0.01 240);  /* Slightly lighter black */
+  --card-foreground: oklch(0.98 0.01 240);
+  --popover: oklch(0.14 0.01 240);
+  --popover-foreground: oklch(0.98 0.01 240);
+  --secondary: oklch(0.65 0.25 270);  /* Neon purple */
+  --secondary-foreground: oklch(0.1 0.01 240);
+  --muted: oklch(0.18 0.01 240);
+  --muted-foreground: oklch(0.65 0.02 240);
+  --accent: oklch(0.7 0.25 320);  /* Bright magenta */
+  --accent-foreground: oklch(0.1 0.01 240);
+  --destructive: oklch(0.6 0.24 27);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(0.2 0.01 240);  /* Subtle borders */
+  --input: oklch(0.18 0.01 240);
+  --ring: oklch(0.7 0.2 195);  /* Cyan focus ring */
+  --chart-1: oklch(0.7 0.2 195);  /* Cyan */
+  --chart-2: oklch(0.65 0.25 270);  /* Purple */
+  --chart-3: oklch(0.6 0.2 220);  /* Blue */
+  --chart-4: oklch(0.7 0.25 320);  /* Magenta */
+  --chart-5: oklch(0.65 0.2 150);  /* Green */
+  --sidebar: oklch(0.1 0.01 240);
+  --sidebar-foreground: oklch(0.98 0.01 240);
+  --sidebar-accent: oklch(0.18 0.01 240);
+  --sidebar-accent-foreground: oklch(0.98 0 0);
+  --sidebar-border: oklch(0.2 0.01 240);
+  --sidebar-ring: oklch(0.7 0.2 195);
 }
 
 @layer base {
@@ -173,5 +174,155 @@
       padding-right: 2rem;
       max-width: 1280px; /* Standard content width */
     }
+  }
+}
+
+/* ============================================
+   CHYRRIS KAI FUTURISTIC ENHANCEMENTS
+   ============================================ */
+
+@layer base {
+  body {
+    background-image: 
+      radial-gradient(at 0% 0%, oklch(0.15 0.05 220) 0px, transparent 50%),
+      radial-gradient(at 100% 100%, oklch(0.15 0.05 270) 0px, transparent 50%);
+    background-attachment: fixed;
+  }
+  
+  /* Futuristic scrollbar */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    background: oklch(0.08 0.01 240);
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, oklch(0.7 0.2 195), oklch(0.65 0.25 270));
+    border-radius: 5px;
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, oklch(0.65 0.25 270), oklch(0.7 0.2 195));
+  }
+}
+
+@layer components {
+  /* Glowing card effect */
+  .card-glow {
+    position: relative;
+    transition: all 0.3s ease;
+  }
+  
+  .card-glow:hover {
+    box-shadow: 0 0 30px oklch(0.7 0.2 195 / 0.3);
+    transform: translateY(-4px);
+  }
+  
+  /* Neon text effects */
+  .text-neon-cyan {
+    color: oklch(0.7 0.2 195);
+    text-shadow: 0 0 10px oklch(0.7 0.2 195 / 0.5),
+                 0 0 20px oklch(0.7 0.2 195 / 0.3);
+  }
+  
+  .text-neon-purple {
+    color: oklch(0.65 0.25 270);
+    text-shadow: 0 0 10px oklch(0.65 0.25 270 / 0.5),
+                 0 0 20px oklch(0.65 0.25 270 / 0.3);
+  }
+  
+  /* Gradient text */
+  .gradient-text {
+    background: linear-gradient(135deg, oklch(0.7 0.2 195), oklch(0.65 0.25 270));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  
+  /* Futuristic button */
+  .btn-futuristic {
+    position: relative;
+    background: linear-gradient(135deg, oklch(0.7 0.2 195), oklch(0.65 0.25 270));
+    border: none;
+    overflow: hidden;
+    transition: all 0.3s;
+  }
+  
+  .btn-futuristic::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+    transition: left 0.5s;
+  }
+  
+  .btn-futuristic:hover::before {
+    left: 100%;
+  }
+  
+  .btn-futuristic:hover {
+    box-shadow: 0 0 20px oklch(0.7 0.2 195 / 0.5),
+                0 0 40px oklch(0.65 0.25 270 / 0.3);
+    transform: translateY(-2px);
+  }
+  
+  /* Metric card */
+  .metric-card {
+    background: linear-gradient(135deg, oklch(0.12 0.01 240) 0%, oklch(0.14 0.01 240) 100%);
+    border: 1px solid oklch(0.2 0.01 240);
+    border-radius: 0.75rem;
+    padding: 1.5rem;
+    transition: all 0.3s ease;
+  }
+  
+  .metric-card:hover {
+    border-color: oklch(0.7 0.2 195 / 0.5);
+    box-shadow: 0 0 30px oklch(0.7 0.2 195 / 0.2);
+    transform: translateY(-4px);
+  }
+  
+  /* Glass effect */
+  .glass-effect {
+    background: oklch(0.12 0.01 240 / 0.5);
+    backdrop-filter: blur(10px);
+    border: 1px solid oklch(0.2 0.01 240);
+  }
+}
+
+/* ============================================
+   ANIMATIONS
+   ============================================ */
+
+@keyframes glow-pulse {
+  0%, 100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@layer utilities {
+  .animate-float {
+    animation: float 3s ease-in-out infinite;
+  }
+  
+  .animate-glow {
+    animation: glow-pulse 2s ease-in-out infinite;
   }
 }

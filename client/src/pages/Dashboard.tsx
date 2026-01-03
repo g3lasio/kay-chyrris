@@ -1,7 +1,7 @@
 import { trpc } from '@/lib/trpc';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Users, UserCheck, UserPlus, TrendingUp } from 'lucide-react';
+import { Users, UserCheck, UserPlus, TrendingUp, Zap, Activity } from 'lucide-react';
 
 export default function Dashboard() {
   const { data: statsData, isLoading } = trpc.owlfenc.getStats.useQuery();
@@ -14,24 +14,21 @@ export default function Dashboard() {
       value: stats?.totalUsers || 0,
       icon: Users,
       description: 'All registered users',
-      color: 'text-blue-600 dark:text-blue-400',
-      bgColor: 'bg-blue-50 dark:bg-blue-950',
+      gradient: 'from-cyan-500 to-blue-500',
     },
     {
       title: 'Active Users',
       value: stats?.activeUsers || 0,
       icon: UserCheck,
       description: 'Active in last 30 days',
-      color: 'text-green-600 dark:text-green-400',
-      bgColor: 'bg-green-50 dark:bg-green-950',
+      gradient: 'from-green-500 to-emerald-500',
     },
     {
       title: 'New This Month',
       value: stats?.newUsersThisMonth || 0,
       icon: UserPlus,
       description: 'New signups this month',
-      color: 'text-purple-600 dark:text-purple-400',
-      bgColor: 'bg-purple-50 dark:bg-purple-950',
+      gradient: 'from-purple-500 to-pink-500',
     },
     {
       title: 'Growth Rate',
@@ -40,47 +37,71 @@ export default function Dashboard() {
         : '0%',
       icon: TrendingUp,
       description: 'Monthly growth',
-      color: 'text-orange-600 dark:text-orange-400',
-      bgColor: 'bg-orange-50 dark:bg-orange-950',
+      gradient: 'from-orange-500 to-red-500',
     },
   ];
 
   const planStats = stats?.usersByPlan || {};
   const planData = [
-    { name: 'Free (Primo Chambeador)', count: planStats['free'] || 0, color: 'bg-slate-500' },
-    { name: 'Mero Patrón', count: planStats['patron'] || 0, color: 'bg-indigo-500' },
-    { name: 'Master Contractor', count: planStats['master'] || 0, color: 'bg-purple-500' },
+    { 
+      name: 'Free (Primo Chambeador)', 
+      count: planStats['free'] || 0, 
+      gradient: 'from-slate-500 to-slate-600',
+      percentage: stats?.totalUsers ? ((planStats['free'] || 0) / stats.totalUsers * 100).toFixed(0) : 0
+    },
+    { 
+      name: 'Mero Patrón', 
+      count: planStats['patron'] || 0, 
+      gradient: 'from-indigo-500 to-purple-500',
+      percentage: stats?.totalUsers ? ((planStats['patron'] || 0) / stats.totalUsers * 100).toFixed(0) : 0
+    },
+    { 
+      name: 'Master Contractor', 
+      count: planStats['master'] || 0, 
+      gradient: 'from-purple-500 to-pink-500',
+      percentage: stats?.totalUsers ? ((planStats['master'] || 0) / stats.totalUsers * 100).toFixed(0) : 0
+    },
   ];
 
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Owl Fenc Dashboard</h1>
-        <p className="text-muted-foreground mt-2">
-          Monitor and manage your Owl Fenc application users and metrics
+    <div className="space-y-8 p-6">
+      {/* Header with futuristic styling */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-lg bg-gradient-to-br from-primary to-secondary">
+            <Zap className="w-6 h-6 text-primary-foreground" />
+          </div>
+          <h1 className="text-4xl font-bold gradient-text">
+            Owl Fenc Dashboard
+          </h1>
+        </div>
+        <p className="text-muted-foreground text-lg flex items-center gap-2">
+          <Activity className="w-4 h-4 text-primary animate-pulse" />
+          Real-time monitoring and management system
         </p>
       </div>
 
-      {/* Metrics Grid */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      {/* Metrics Grid with futuristic cards */}
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
         {metrics.map((metric) => (
-          <Card key={metric.title}>
+          <Card key={metric.title} className="metric-card group">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">
+              <CardTitle className="text-sm font-medium text-foreground/80">
                 {metric.title}
               </CardTitle>
-              <div className={`p-2 rounded-lg ${metric.bgColor}`}>
-                <metric.icon className={`h-4 w-4 ${metric.color}`} />
+              <div className={`p-3 rounded-xl bg-gradient-to-br ${metric.gradient} shadow-lg group-hover:scale-110 transition-transform`}>
+                <metric.icon className="h-5 w-5 text-white" />
               </div>
             </CardHeader>
             <CardContent>
               {isLoading ? (
-                <Skeleton className="h-8 w-20" />
+                <Skeleton className="h-10 w-24 bg-muted/50" />
               ) : (
                 <>
-                  <div className="text-2xl font-bold">{metric.value}</div>
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <div className="text-3xl font-bold text-neon-cyan">
+                    {metric.value}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">
                     {metric.description}
                   </p>
                 </>
@@ -90,39 +111,45 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Users by Plan */}
-      <Card>
+      {/* Users by Plan - Futuristic visualization */}
+      <Card className="card-glow border-primary/20">
         <CardHeader>
-          <CardTitle>Users by Subscription Plan</CardTitle>
-          <CardDescription>
+          <CardTitle className="text-2xl gradient-text">
+            Users by Subscription Plan
+          </CardTitle>
+          <CardDescription className="text-base">
             Distribution of users across different subscription tiers
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-6">
           {isLoading ? (
             <div className="space-y-4">
               {[1, 2, 3].map((i) => (
-                <Skeleton key={i} className="h-16 w-full" />
+                <Skeleton key={i} className="h-20 w-full bg-muted/50" />
               ))}
             </div>
           ) : (
             <div className="space-y-4">
               {planData.map((plan) => (
                 <div key={plan.name} className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="font-medium">{plan.name}</span>
-                    <span className="text-muted-foreground">
-                      {plan.count} users
-                    </span>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-3 h-3 rounded-full bg-gradient-to-r ${plan.gradient} animate-pulse`} />
+                      <span className="font-medium text-foreground">{plan.name}</span>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <span className="text-2xl font-bold text-neon-cyan">
+                        {plan.count}
+                      </span>
+                      <span className="text-sm text-muted-foreground min-w-[3rem] text-right">
+                        {plan.percentage}%
+                      </span>
+                    </div>
                   </div>
-                  <div className="h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full ${plan.color} transition-all duration-500`}
-                      style={{
-                        width: stats?.totalUsers
-                          ? `${(plan.count / stats.totalUsers) * 100}%`
-                          : '0%',
-                      }}
+                  <div className="h-3 bg-muted/30 rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full bg-gradient-to-r ${plan.gradient} transition-all duration-1000 ease-out`}
+                      style={{ width: `${plan.percentage}%` }}
                     />
                   </div>
                 </div>
@@ -132,28 +159,34 @@ export default function Dashboard() {
         </CardContent>
       </Card>
 
-      {/* Quick Actions */}
-      <Card>
+      {/* Quick Actions - Coming soon */}
+      <Card className="glass-effect border-secondary/20">
         <CardHeader>
-          <CardTitle>Quick Actions</CardTitle>
+          <CardTitle className="text-xl text-neon-purple">Quick Actions</CardTitle>
           <CardDescription>
-            Common administrative tasks
+            Frequently used management tools
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-4 md:grid-cols-3">
-            <button className="flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-lg hover:border-primary hover:bg-accent transition-colors">
-              <Users className="h-8 w-8 mb-2 text-muted-foreground" />
-              <span className="text-sm font-medium">View All Users</span>
-            </button>
-            <button className="flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-lg hover:border-primary hover:bg-accent transition-colors">
-              <TrendingUp className="h-8 w-8 mb-2 text-muted-foreground" />
-              <span className="text-sm font-medium">View Analytics</span>
-            </button>
-            <button className="flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-lg hover:border-primary hover:bg-accent transition-colors">
-              <UserPlus className="h-8 w-8 mb-2 text-muted-foreground" />
-              <span className="text-sm font-medium">Send Notification</span>
-            </button>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {[
+              { label: 'Send Announcement', icon: '📢' },
+              { label: 'View Payments', icon: '💳' },
+              { label: 'System Health', icon: '🏥' },
+              { label: 'Analytics', icon: '📊' },
+            ].map((action) => (
+              <button
+                key={action.label}
+                className="p-4 rounded-xl bg-card/50 border border-border hover:border-primary/50 transition-all hover:scale-105 group"
+              >
+                <div className="text-3xl mb-2 group-hover:scale-110 transition-transform">
+                  {action.icon}
+                </div>
+                <div className="text-sm font-medium text-foreground/80">
+                  {action.label}
+                </div>
+              </button>
+            ))}
           </div>
         </CardContent>
       </Card>
