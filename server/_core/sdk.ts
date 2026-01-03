@@ -292,10 +292,11 @@ class SDKServer {
       throw ForbiddenError("User not found");
     }
 
-    await db.upsertUser({
-      openId: user.openId,
-      lastSignedIn: signedInAt,
-    });
+    // Skip upsert for now - authentication disabled
+    // await db.upsertUser({
+    //   openId: user.openId,
+    //   lastSignedIn: signedInAt,
+    // });
 
     return user;
   }

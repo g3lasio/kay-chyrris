@@ -1,7 +1,7 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
-import { Route, Switch } from "wouter";
+import { Route, Switch, Redirect } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Login from "./pages/Login";
@@ -14,7 +14,10 @@ import DashboardLayout from "./components/DashboardLayout";
 function Router() {
   return (
     <Switch>
-      <Route path="/login" component={Login} />
+      {/* Redirect login to dashboard (auth disabled) */}
+      <Route path="/login">
+        <Redirect to="/" />
+      </Route>
       
       {/* Protected routes with dashboard layout */}
       <Route path="/">

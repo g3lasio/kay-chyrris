@@ -48,20 +48,22 @@ export default function DashboardLayout({
     const saved = localStorage.getItem(SIDEBAR_WIDTH_KEY);
     return saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
   });
-  const { data: user, isLoading: loading } = trpc.auth.me.useQuery();
+  // AUTHENTICATION DISABLED TEMPORARILY
+  const user = { name: 'Admin', email: 'admin@chyrris.com', role: 'super_admin' };
+  const loading = false;
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebarWidth.toString());
   }, [sidebarWidth]);
 
-  if (loading) {
-    return <DashboardLayoutSkeleton />
-  }
+  // if (loading) {
+  //   return <DashboardLayoutSkeleton />
+  // }
 
-  if (!user) {
-    window.location.href = '/login';
-    return null;
-  }
+  // if (!user) {
+  //   window.location.href = '/login';
+  //   return null;
+  // }
 
   return (
     <SidebarProvider
@@ -87,7 +89,8 @@ function DashboardLayoutContent({
   children,
   setSidebarWidth,
 }: DashboardLayoutContentProps) {
-  const { data: user } = trpc.auth.me.useQuery();
+  // AUTHENTICATION DISABLED TEMPORARILY
+  const user = { name: 'Admin', email: 'admin@chyrris.com', role: 'super_admin' };
   const logoutMutation = trpc.auth.logout.useMutation();
   
   const logout = async () => {

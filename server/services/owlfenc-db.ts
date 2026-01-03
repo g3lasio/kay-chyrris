@@ -1,6 +1,8 @@
 /**
  * Owl Fenc Database Service
- * Connects to Owl Fenc PostgreSQL database and provides query methods
+ * Connects to Owl Fenc PostgreSQL database (Neon) and provides query methods
+ * 
+ * Schema: Uses unified PostgreSQL schema with Firebase Auth integration
  */
 
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -18,13 +20,14 @@ export function getOwlFencDb() {
     try {
       owlfencPool = new Pool({
         connectionString: process.env.OWLFENC_DATABASE_URL,
+        ssl: { rejectUnauthorized: true },
         max: 10,
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 10000,
       });
 
       owlfencDb = drizzle(owlfencPool);
-      console.log('[OwlFenc DB] Connected successfully');
+      console.log('[OwlFenc DB] Connected successfully to Neon PostgreSQL');
     } catch (error) {
       console.error('[OwlFenc DB] Failed to connect:', error);
       owlfencDb = null;
@@ -34,7 +37,7 @@ export function getOwlFencDb() {
 }
 
 /**
- * Get all users from Owl Fenc
+ * Get all users from Owl Fenc with their subscription info
  */
 export async function getOwlFencUsers(options: {
   limit?: number;
@@ -51,26 +54,33 @@ export async function getOwlFencUsers(options: {
   try {
     let query = sql`
       SELECT 
-        id,
-        open_id as "openId",
-        name,
-        email,
-        login_method as "loginMethod",
-        role,
-        created_at as "createdAt",
-        updated_at as "updatedAt",
-        last_signed_in as "lastSignedIn"
-      FROM users
+        u.id,
+        u.firebase_uid as "firebaseUid",
+        u.username,
+        u.email,
+        u.company,
+        u.owner_name as "ownerName",
+        u.role,
+        u.phone,
+        u.created_at as "createdAt",
+        sp.name as "planName",
+        us.status as "subscriptionStatus",
+        sp.price as "planPrice"
+      FROM users u
+      LEFT JOIN user_subscriptions us ON u.id = us.user_id
+      LEFT JOIN subscription_plans sp ON us.plan_id = sp.id
     `;
 
     if (search) {
       query = sql`${query} WHERE 
-        name ILIKE ${`%${search}%`} OR 
-        email ILIKE ${`%${search}%`}
+        u.username ILIKE ${`%${search}%`} OR 
+        u.email ILIKE ${`%${search}%`} OR
+        u.company ILIKE ${`%${search}%`} OR
+        u.owner_name ILIKE ${`%${search}%`}
       `;
     }
 
-    query = sql`${query} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
+    query = sql`${query} ORDER BY u.created_at DESC LIMIT ${limit} OFFSET ${offset}`;
 
     const result = await db.execute(query);
     return result.rows;
@@ -94,8 +104,10 @@ export async function getOwlFencUserCount(search?: string) {
 
     if (search) {
       query = sql`${query} WHERE 
-        name ILIKE ${`%${search}%`} OR 
-        email ILIKE ${`%${search}%`}
+        username ILIKE ${`%${search}%`} OR 
+        email ILIKE ${`%${search}%`} OR
+        company ILIKE ${`%${search}%`} OR
+        owner_name ILIKE ${`%${search}%`}
       `;
     }
 
@@ -119,17 +131,22 @@ export async function getOwlFencUserById(userId: number) {
   try {
     const result = await db.execute(sql`
       SELECT 
-        id,
-        open_id as "openId",
-        name,
-        email,
-        login_method as "loginMethod",
-        role,
-        created_at as "createdAt",
-        updated_at as "updatedAt",
-        last_signed_in as "lastSignedIn"
-      FROM users
-      WHERE id = ${userId}
+        u.id,
+        u.firebase_uid as "firebaseUid",
+        u.username,
+        u.email,
+        u.company,
+        u.owner_name as "ownerName",
+        u.role,
+        u.phone,
+        u.created_at as "createdAt",
+        sp.name as "planName",
+        us.status as "subscriptionStatus",
+        sp.price as "planPrice"
+      FROM users u
+      LEFT JOIN user_subscriptions us ON u.id = us.user_id
+      LEFT JOIN subscription_plans sp ON us.plan_id = sp.id
+      WHERE u.id = ${userId}
     `);
 
     return result.rows[0] || null;
@@ -155,6 +172,7 @@ export async function getOwlFencUserSubscription(userId: number) {
         us.user_id as "userId",
         sp.name as plan,
         sp.code as "planCode",
+        sp.price,
         us.status,
         us.current_period_start as "currentPeriodStart",
         us.current_period_end as "currentPeriodEnd",
@@ -192,23 +210,26 @@ export async function getOwlFencUserLimits(userId: number) {
       SELECT 
         id,
         user_id as "userId",
-        contracts_used as "contractsUsed",
+        month,
+        plan_id as "planId",
+        basic_estimates_limit as "basicEstimatesLimit",
+        ai_estimates_limit as "aiEstimatesLimit",
         contracts_limit as "contractsLimit",
-        estimates_used as "estimatesUsed",
-        estimates_limit as "estimatesLimit",
-        invoices_used as "invoicesUsed",
-        invoices_limit as "invoicesLimit",
-        property_verifications_used as "propertyVerificationsUsed",
         property_verifications_limit as "propertyVerificationsLimit",
-        permit_advisor_used as "permitAdvisorUsed",
         permit_advisor_limit as "permitAdvisorLimit",
-        total_queries_used as "totalQueriesUsed",
-        total_queries_limit as "totalQueriesLimit",
-        reset_at as "resetAt",
+        projects_limit as "projectsLimit",
+        basic_estimates_used as "basicEstimatesUsed",
+        ai_estimates_used as "aiEstimatesUsed",
+        contracts_used as "contractsUsed",
+        property_verifications_used as "propertyVerificationsUsed",
+        permit_advisor_used as "permitAdvisorUsed",
+        projects_used as "projectsUsed",
         created_at as "createdAt",
         updated_at as "updatedAt"
       FROM user_usage_limits
-      WHERE user_id = ${userId}
+      WHERE user_id = ${userId.toString()}
+      ORDER BY created_at DESC
+      LIMIT 1
     `);
 
     return result.rows[0] || null;
@@ -232,44 +253,75 @@ export async function getOwlFencDashboardStats() {
     const totalUsersResult = await db.execute(sql`SELECT COUNT(*) as count FROM users`);
     const totalUsers = Number(totalUsersResult.rows[0]?.count || 0);
 
+    // Active subscriptions
+    const activeSubsResult = await db.execute(sql`
+      SELECT COUNT(*) as count 
+      FROM user_subscriptions 
+      WHERE status = 'active'
+    `);
+    const activeSubscriptions = Number(activeSubsResult.rows[0]?.count || 0);
+
     // Users by plan
     const planStatsResult = await db.execute(sql`
       SELECT 
         sp.name as plan,
+        sp.id as "planId",
         COUNT(*) as count
       FROM user_subscriptions us
       INNER JOIN subscription_plans sp ON us.plan_id = sp.id
-      INNER JOIN users u ON us.user_id = u.id
       WHERE us.status = 'active'
-      GROUP BY sp.name
+      GROUP BY sp.name, sp.id
     `);
 
     const usersByPlan: Record<string, number> = {};
+    let freeUsers = 0;
+    let paidUsers = 0;
+
     for (const row of planStatsResult.rows) {
-      usersByPlan[row.plan as string] = Number(row.count);
+      const planName = row.plan as string;
+      const count = Number(row.count);
+      usersByPlan[planName] = count;
+      
+      // Plan ID 1 is typically the free plan (Primo Chambeador)
+      if (row.planId === 1) {
+        freeUsers = count;
+      } else {
+        paidUsers += count;
+      }
     }
+
+    // Calculate monthly revenue (sum of active paid subscriptions)
+    const revenueResult = await db.execute(sql`
+      SELECT COALESCE(SUM(sp.price), 0) as total
+      FROM user_subscriptions us
+      INNER JOIN subscription_plans sp ON us.plan_id = sp.id
+      WHERE us.status = 'active' AND sp.id != 1
+    `);
+    const monthlyRevenue = Math.round(Number(revenueResult.rows[0]?.total || 0) / 100); // Convert cents to dollars
 
     // New users this month
     const newUsersResult = await db.execute(sql`
       SELECT COUNT(*) as count 
       FROM users 
-      WHERE created_at >= DATE_TRUNC('month', CURRENT_DATE)
+      WHERE created_at >= DATE_TRUNC('month', CURRENT_TIMESTAMP)
     `);
     const newUsersThisMonth = Number(newUsersResult.rows[0]?.count || 0);
 
-    // Active users (logged in last 30 days)
-    const activeUsersResult = await db.execute(sql`
-      SELECT COUNT(*) as count 
-      FROM users 
-      WHERE last_signed_in >= CURRENT_DATE - INTERVAL '30 days'
+    // Total projects
+    const projectsResult = await db.execute(sql`
+      SELECT COUNT(*) as count FROM projects
     `);
-    const activeUsers = Number(activeUsersResult.rows[0]?.count || 0);
+    const totalProjects = Number(projectsResult.rows[0]?.count || 0);
 
     return {
       totalUsers,
+      activeSubscriptions,
+      freeUsers,
+      paidUsers,
+      monthlyRevenue,
       usersByPlan,
       newUsersThisMonth,
-      activeUsers,
+      totalProjects,
     };
   } catch (error) {
     console.error('[OwlFenc DB] Error fetching dashboard stats:', error);
