@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/sidebar";
 
 import { useIsMobile } from "@/hooks/useMobile";
-import { LayoutDashboard, LogOut, PanelLeft, Users, DollarSign, Megaphone } from "lucide-react";
+import { LayoutDashboard, LogOut, PanelLeft, Users, DollarSign, Megaphone, Activity } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
@@ -31,6 +31,7 @@ const menuItems = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/" },
   { icon: Users, label: "Users", path: "/users" },
   { icon: DollarSign, label: "Payments", path: "/payments" },
+  { icon: Activity, label: "Usage System", path: "/usage-system" },
   { icon: Megaphone, label: "Announcements", path: "/announcements" },
 ];
 

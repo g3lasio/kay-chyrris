@@ -242,6 +242,43 @@ export const appRouter = router({
         };
       }
     }),
+
+    // Get system-wide usage metrics
+    getSystemUsage: publicProcedure.query(async () => {
+      try {
+        const { getSystemUsageMetrics } = await import('./services/owlfenc-firebase');
+        const metrics = await getSystemUsageMetrics();
+        return metrics;
+      } catch (error: any) {
+        console.error('[Router] Error fetching system usage:', error);
+        return {
+          emailsSentToday: 0,
+          pdfsGeneratedToday: 0,
+          pdfsGeneratedMonth: 0,
+          totalClients: 0,
+          totalContracts: 0,
+          totalInvoices: 0,
+          totalEstimates: 0,
+          totalProjects: 0,
+          totalPayments: 0,
+          emailsSentMonth: 0,
+          emailDailyLimit: 500,
+          emailUsagePercentage: 0,
+        };
+      }
+    }),
+
+    // Get per-user usage breakdown
+    getUserUsageBreakdown: publicProcedure.query(async () => {
+      try {
+        const { getUserUsageBreakdown } = await import('./services/owlfenc-firebase');
+        const breakdown = await getUserUsageBreakdown();
+        return breakdown;
+      } catch (error: any) {
+        console.error('[Router] Error fetching user usage breakdown:', error);
+        return [];
+      }
+    }),
   }),
 
   // Stripe payment and subscription management

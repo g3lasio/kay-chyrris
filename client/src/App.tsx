@@ -9,6 +9,7 @@ import Dashboard from "./pages/Dashboard";
 import Users from "./pages/Users";
 import Payments from "./pages/Payments";
 import Announcements from "./pages/Announcements";
+import UsageSystem from "./pages/UsageSystem";
 import DashboardLayout from "./components/DashboardLayout";
 
 function Router() {
@@ -41,6 +42,12 @@ function Router() {
       <Route path="/announcements">
         <DashboardLayout>
           <Announcements />
+        </DashboardLayout>
+      </Route>
+      
+      <Route path="/usage-system">
+        <DashboardLayout>
+          <UsageSystem />
         </DashboardLayout>
       </Route>
       

@@ -223,3 +223,167 @@ export async function getOwlFencUserById(uid: string): Promise<OwlFencUser | nul
     return null;
   }
 }
+
+/**
+ * Get system-wide usage metrics
+ */
+export async function getSystemUsageMetrics() {
+  try {
+    const db = getFirestore();
+    
+    // Helper functions for date filtering
+    const getTodayStart = () => {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      return today;
+    };
+    
+    const getMonthStart = () => {
+      const now = new Date();
+      return new Date(now.getFullYear(), now.getMonth(), 1);
+    };
+    
+    // Get total counts for all collections
+    const [
+      clientsSnapshot,
+      contractsSnapshot,
+      invoicesSnapshot,
+      estimatesSnapshot,
+      projectsSnapshot,
+      paymentsSnapshot,
+      emailsTodaySnapshot,
+      emailsMonthSnapshot,
+      pdfsTodaySnapshot,
+      pdfsMonthSnapshot
+    ] = await Promise.all([
+      db.collection('clients').count().get(),
+      db.collection('contracts').count().get(),
+      db.collection('invoices').count().get(),
+      db.collection('estimates').count().get(),
+      db.collection('projects').count().get(),
+      db.collection('paymentHistory').count().get(),
+      
+      // Emails sent TODAY (may not exist yet, will return 0)
+      db.collection('email_logs')
+        .where('sentAt', '>=', getTodayStart())
+        .count().get()
+        .catch(() => ({ data: () => ({ count: 0 }) })),
+      
+      // Emails sent THIS MONTH
+      db.collection('email_logs')
+        .where('sentAt', '>=', getMonthStart())
+        .count().get()
+        .catch(() => ({ data: () => ({ count: 0 }) })),
+      
+      // PDFs generated TODAY
+      db.collection('pdf_logs')
+        .where('generatedAt', '>=', getTodayStart())
+        .count().get()
+        .catch(() => ({ data: () => ({ count: 0 }) })),
+      
+      // PDFs generated THIS MONTH
+      db.collection('pdf_logs')
+        .where('generatedAt', '>=', getMonthStart())
+        .count().get()
+        .catch(() => ({ data: () => ({ count: 0 }) })),
+    ]);
+    
+    const emailsSentToday = emailsTodaySnapshot.data().count;
+    const emailDailyLimit = 500; // Resend free tier limit
+    
+    return {
+      // Core metrics
+      totalClients: clientsSnapshot.data().count,
+      totalContracts: contractsSnapshot.data().count,
+      totalInvoices: invoicesSnapshot.data().count,
+      totalEstimates: estimatesSnapshot.data().count,
+      totalProjects: projectsSnapshot.data().count,
+      totalPayments: paymentsSnapshot.data().count,
+      
+      // Email tracking (Resend limit: 500/day)
+      emailsSentToday,
+      emailsSentMonth: emailsMonthSnapshot.data().count,
+      emailDailyLimit,
+      emailUsagePercentage: (emailsSentToday / emailDailyLimit) * 100,
+      
+      // PDF tracking
+      pdfsGeneratedToday: pdfsTodaySnapshot.data().count,
+      pdfsGeneratedMonth: pdfsMonthSnapshot.data().count,
+    };
+  } catch (error) {
+    console.error('[Firebase] Error fetching system usage metrics:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get per-user usage breakdown
+ */
+export async function getUserUsageBreakdown() {
+  try {
+    const db = getFirestore();
+    const auth = getAuth();
+    
+    // Get all users
+    const listUsersResult = await auth.listUsers(1000);
+    
+    // For each user, count their documents across ALL collections
+    const userUsagePromises = listUsersResult.users.map(async (userRecord) => {
+      const userId = userRecord.uid;
+      
+      // Count documents where userId field matches (or firebaseUserId for estimates)
+      const [
+        clientsSnapshot,
+        contractsSnapshot,
+        invoicesSnapshot,
+        estimatesSnapshot,
+        projectsSnapshot,
+        paymentsSnapshot,
+        emailsSnapshot,
+        pdfsSnapshot
+      ] = await Promise.all([
+        db.collection('clients').where('userId', '==', userId).count().get(),
+        db.collection('contracts').where('userId', '==', userId).count().get(),
+        db.collection('invoices').where('userId', '==', userId).count().get(),
+        // NOTE: estimates uses 'firebaseUserId' instead of 'userId' (legacy)
+        db.collection('estimates').where('firebaseUserId', '==', userId).count().get(),
+        db.collection('projects').where('userId', '==', userId).count().get(),
+        db.collection('paymentHistory').where('userId', '==', userId).count().get(),
+        // Email and PDF logs (may not exist yet, will return 0)
+        db.collection('email_logs').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+        db.collection('pdf_logs').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+      ]);
+      
+      return {
+        uid: userRecord.uid,
+        email: userRecord.email || 'N/A',
+        displayName: userRecord.displayName || 'N/A',
+        clientsCount: clientsSnapshot.data().count,
+        contractsCount: contractsSnapshot.data().count,
+        invoicesCount: invoicesSnapshot.data().count,
+        estimatesCount: estimatesSnapshot.data().count,
+        projectsCount: projectsSnapshot.data().count,
+        paymentsCount: paymentsSnapshot.data().count,
+        emailsSentCount: emailsSnapshot.data().count,
+        pdfsGeneratedCount: pdfsSnapshot.data().count,
+      };
+    });
+    
+    const userUsage = await Promise.all(userUsagePromises);
+    
+    // Filter out users with zero activity
+    return userUsage.filter(user => 
+      user.clientsCount > 0 || 
+      user.contractsCount > 0 || 
+      user.invoicesCount > 0 || 
+      user.estimatesCount > 0 ||
+      user.projectsCount > 0 ||
+      user.paymentsCount > 0 ||
+      user.emailsSentCount > 0 ||
+      user.pdfsGeneratedCount > 0
+    );
+  } catch (error) {
+    console.error('[Firebase] Error fetching user usage breakdown:', error);
+    throw error;
+  }
+}

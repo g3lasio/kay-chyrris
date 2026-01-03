@@ -226,3 +226,130 @@
 - [ ] Create subscription status indicators in Users page
 - [ ] Build usage analytics dashboard
 - [ ] Add alerts for users approaching limits
+
+---
+
+## 🔥 NEW: Usage System - Complete Monitoring Dashboard
+
+### Global System Metrics
+- [ ] Create Usage System page in sidebar navigation
+- [ ] Display total emails sent (daily/monthly) with Resend limit (500/day)
+- [ ] Display total PDFs generated with service limit tracking
+- [ ] Show total operations by feature (estimates, contracts, invoices, clients)
+- [ ] Add alert system when approaching limits (80%, 90%, 95%)
+
+### Per-User Usage Breakdown
+- [ ] Query Firestore to count clients per user (by userId field)
+- [ ] Query Firestore to count contracts per user
+- [ ] Query Firestore to count invoices per user
+- [ ] Query Firestore to count estimates per user (basic + AI)
+- [ ] Query Firestore to count projects per user
+- [ ] Display per-user usage in sortable table
+- [ ] Add search and filter functionality
+
+### Email & PDF Tracking
+- [ ] Create tracking table for email sends (date, user, type)
+- [ ] Create tracking table for PDF generations (date, user, type)
+- [ ] Implement daily/monthly aggregation queries
+- [ ] Add visual progress bars for limits
+- [ ] Send admin notifications when limits reached
+
+### UI Components
+- [ ] Global metrics cards with icons and colors
+- [ ] Per-user usage table with sorting
+- [ ] Date range filters for historical data
+- [ ] Export functionality (CSV/Excel)
+
+
+---
+
+## 🔍 Owl Fenc Complete Audit & Enhanced Usage Tracking
+
+### Repository Exploration
+- [ ] Clone and explore Owl Fenc repository structure
+- [ ] Identify all Firestore collections (clients, contracts, invoices, estimates, permits, properties, projects, payments)
+- [ ] Document schema for each collection
+- [ ] Identify userId field presence in all collections
+
+### History Tracking Analysis
+- [ ] Review invoice history implementation
+- [ ] Review contract history implementation
+- [ ] Review estimate history implementation
+- [ ] Review permit history implementation
+- [ ] Review property history implementation
+- [ ] Review project history implementation
+- [ ] Review payment history implementation
+- [ ] Document what events are tracked in each history
+
+### Missing Features to Track
+- [ ] Add email tracking (Resend API calls)
+- [ ] Add PDF generation tracking (all document types)
+- [ ] Add permit advisor usage tracking
+- [ ] Add AI estimate generation tracking
+- [ ] Add property analysis tracking
+- [ ] Track document downloads
+- [ ] Track contract signatures
+
+### Enhanced Usage System
+- [ ] Update getUserUsageBreakdown to include ALL collections
+- [ ] Add permits count per user
+- [ ] Add properties count per user
+- [ ] Add projects count per user
+- [ ] Add payments count per user
+- [ ] Add history entries count per user
+- [ ] Display email sends per user
+- [ ] Display PDF generations per user
+
+
+---
+
+## 🎯 Complete Usage Tracking System Implementation
+
+### Owl Fenc App Changes (Repository: g3lasio/owlfenc)
+- [ ] Create `server/services/emailTrackingService.ts` with logEmailSent function
+- [ ] Create `server/services/pdfTrackingService.ts` with logPdfGenerated function
+- [ ] Integrate email tracking in `server/services/invoiceEmailService.ts`
+- [ ] Integrate email tracking in `server/services/emailService.ts`
+- [ ] Integrate PDF tracking in `server/invoice-pdf-service.ts`
+- [ ] Integrate PDF tracking in `server/services/unifiedPdfService.ts`
+- [ ] Integrate PDF tracking in `server/services/pdf/permitReportGenerator.ts`
+- [ ] Create migration script to standardize userId fields (firebaseUserId → userId)
+- [ ] Run migration on Firestore production database
+- [ ] Test email tracking with real invoice send
+- [ ] Test PDF tracking with real document generation
+
+### Chyrris KAI Backend Updates
+- [x] Update `getUserUsageBreakdown()` to query invoices collection
+- [x] Update `getUserUsageBreakdown()` to query projects collection
+- [x] Update `getUserUsageBreakdown()` to query paymentHistory collection
+- [x] Update `getUserUsageBreakdown()` to query email_logs collection (new)
+- [x] Update `getUserUsageBreakdown()` to query pdf_logs collection (new)
+- [x] Update `getSystemUsageMetrics()` to count emails sent today/month
+- [x] Update `getSystemUsageMetrics()` to count PDFs generated today/month
+- [x] Add helper functions getTodayStart() and getMonthStart()
+- [x] Add tRPC endpoints for enhanced metrics
+- [x] Test backend with real Firestore data
+### Chyrris KAI Frontend Updates
+
+- [x] Update UsageSystem.tsx to add Invoices column
+- [x] Update UsageSystem.tsx to add Projects column
+- [x] Update UsageSystem.tsx to add Payments column
+- [x] Update UsageSystem.tsx to add Emails Sent column
+- [x] Update UsageSystem.tsx to add PDFs Generated column
+- [x] Add global metric card for Emails (Today: X/500 with percentage)
+- [x] Add global metric card for PDFs Generated (Month total)
+- [x] Add visual alert when email usage > 80% (yellow)
+- [x] Add visual alert when email usage > 90% (orange)
+- [x] Add visual alert when email usage > 95% (red)
+- [x] Add search functionality for user table
+- [ ] Add column sorting for user table
+- [x] Test UI with complete data
+
+### Testing & Deployment
+- [ ] Test complete tracking system end-to-end
+- [ ] Verify email logs are created when sending emails
+- [ ] Verify PDF logs are created when generating PDFs
+- [ ] Verify Chyrris KAI displays accurate counts
+- [ ] Save checkpoint with complete tracking system
+- [ ] Push changes to GitHub (both repos)
+- [ ] Deploy to production
