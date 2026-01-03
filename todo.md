@@ -15,26 +15,26 @@
 - [x] Redesign dashboard layout with dark theme
 
 ## Phase 2: Dashboard Principal 📊
-- [ ] Multi-app selector (Owl Fenc / LeadPrime cards)
-- [ ] Overview metrics dashboard
-  - [ ] Total users across all apps
-  - [ ] Total revenue (MRR)
-  - [ ] Active subscriptions
+- [x] Multi-app selector (Owl Fenc / LeadPrime cards)
+- [x] Overview metrics dashboard
+  - [x] Total users across all apps
+  - [x] Total revenue (MRR)
+  - [x] Active subscriptions
   - [ ] System health status
-- [ ] Quick actions panel
+- [x] Quick actions panel
 - [ ] Recent activity feed
 
 ## Phase 3: Control de Suscripciones y Pagos 💳
-- [ ] Stripe integration complete
-- [ ] Subscriptions dashboard
-  - [ ] Active subscriptions list
-  - [ ] Subscription details view
-  - [ ] Payment history per user
-  - [ ] Failed payments alerts
+- [x] Stripe integration complete
+- [x] Subscriptions dashboard
+  - [x] Active subscriptions list
+  - [x] Subscription details view
+  - [x] Payment history per user
+  - [x] Failed payments alerts
   - [ ] Upcoming renewals
-- [ ] Payment management
-  - [ ] Refund capability
-  - [ ] Cancel subscription
+- [x] Payment management
+  - [x] Refund capability
+  - [x] Cancel subscription
   - [ ] Update payment method
 - [ ] Stripe webhooks integration
 
@@ -80,24 +80,24 @@
   - [ ] Dashboard notifications
 
 ## Phase 7: Sistema de Anuncios Masivos 📢
-- [ ] Announcement creation interface
-  - [ ] Rich text editor
-  - [ ] Subject line
-  - [ ] Message body
+- [x] Announcement creation interface
+  - [x] Rich text editor
+  - [x] Subject line
+  - [x] Message body
   - [ ] Preview functionality
-- [ ] User segmentation
-  - [ ] Send to all users (one click)
-  - [ ] Send to Free users only
-  - [ ] Send to specific plan (Patron, Master)
+- [x] User segmentation
+  - [x] Send to all users (one click)
+  - [x] Send to Free users only
+  - [x] Send to specific plan (Patron, Master)
   - [ ] Custom filters
-- [ ] Announcement types
-  - [ ] General announcement
-  - [ ] Event notification
-  - [ ] Update/feature release
-  - [ ] Special offer
-  - [ ] Targeted offer (e.g., Free to Paid conversion)
-- [ ] Campaign tracking
-  - [ ] Sent count
+- [x] Announcement types
+  - [x] General announcement
+  - [x] Event notification
+  - [x] Update/feature release
+  - [x] Special offer
+  - [x] Targeted offer (e.g., Free to Paid conversion)
+- [x] Campaign tracking
+  - [x] Sent count
   - [ ] Open rate
   - [ ] Click rate
   - [ ] Conversion tracking

@@ -12,6 +12,8 @@ import {
   getOwlFencUserLimits,
   getOwlFencDashboardStats,
 } from "./services/owlfenc-db";
+import * as stripeService from './services/stripe-service';
+import { createAndSendCampaign, getCampaignHistory } from './services/notifications';
 
 export const appRouter = router({
   system: systemRouter,
@@ -170,6 +172,46 @@ export const appRouter = router({
         };
       }
     }),
+  }),
+
+  // Stripe payment and subscription management
+  stripe: router({
+    getSubscriptions: protectedProcedure.query(async () => {
+      const subscriptions = await stripeService.getSubscriptions();
+      return { success: true, data: subscriptions };
+    }),
+    getPayments: protectedProcedure.query(async () => {
+      const payments = await stripeService.getPayments();
+      return { success: true, data: payments };
+    }),
+    getFailedPayments: protectedProcedure.query(async () => {
+      const payments = await stripeService.getFailedPayments();
+      return { success: true, data: payments };
+    }),
+    getMRR: protectedProcedure.query(async () => {
+      const mrr = await stripeService.calculateMRR();
+      return { success: true, data: mrr };
+    }),
+  }),
+
+  // Mass notifications system
+  notifications: router({
+    sendCampaign: protectedProcedure
+      .input(z.object({
+        title: z.string(),
+        message: z.string(),
+        type: z.enum(['announcement', 'event', 'update', 'offer']),
+        targetAudience: z.enum(['all', 'free', 'patron', 'master']),
+        applicationId: z.number(),
+      }))
+      .mutation(async ({ input }) => {
+        return await createAndSendCampaign(input);
+      }),
+    
+    getCampaigns: protectedProcedure
+      .query(async () => {
+        return await getCampaignHistory(50);
+      }),
   }),
 });
 

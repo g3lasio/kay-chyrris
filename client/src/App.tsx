@@ -7,6 +7,8 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Users from "./pages/Users";
+import Payments from "./pages/Payments";
+import Announcements from "./pages/Announcements";
 import DashboardLayout from "./components/DashboardLayout";
 
 function Router() {
@@ -24,6 +26,18 @@ function Router() {
       <Route path="/users">
         <DashboardLayout>
           <Users />
+        </DashboardLayout>
+      </Route>
+      
+      <Route path="/payments">
+        <DashboardLayout>
+          <Payments />
+        </DashboardLayout>
+      </Route>
+      
+      <Route path="/announcements">
+        <DashboardLayout>
+          <Announcements />
         </DashboardLayout>
       </Route>
       

@@ -288,3 +288,48 @@ export async function closeOwlFencDb() {
     console.log('[OwlFenc DB] Connection closed');
   }
 }
+
+/**
+ * Get users by subscription plan
+ */
+export async function getOwlFencUsersByPlan(plan: string | null): Promise<Array<{ id: number; email: string }>> {
+  const db = getOwlFencDb();
+  if (!db) {
+    console.warn('[OwlFenc DB] Database not available');
+    return [];
+  }
+
+  try {
+    let result;
+
+    if (plan === null) {
+      // Get all users
+      result = await db.execute(sql`
+        SELECT id, email
+        FROM users
+        WHERE email IS NOT NULL
+      `);
+    } else {
+      // Get users by specific plan
+      result = await db.execute(sql`
+        SELECT DISTINCT u.id, u.email
+        FROM users u
+        LEFT JOIN user_subscriptions us ON u.id = us.user_id
+        LEFT JOIN subscription_plans sp ON us.plan_id = sp.id
+        WHERE u.email IS NOT NULL
+          AND (
+            (LOWER(sp.name) = LOWER(${plan}) AND us.status = 'active')
+            OR (sp.name IS NULL AND LOWER(${plan}) = 'free')
+          )
+      `);
+    }
+
+    return result.rows.map((row: any) => ({
+      id: Number(row.id),
+      email: row.email as string,
+    }));
+  } catch (error) {
+    console.error('[OwlFenc DB] Error fetching users by plan:', error);
+    return [];
+  }
+}
