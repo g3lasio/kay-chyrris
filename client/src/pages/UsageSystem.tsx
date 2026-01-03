@@ -7,6 +7,9 @@ import { useState, useEffect } from "react";
 
 type DateRange = "day" | "month" | "year" | "custom";
 
+type SortColumn = 'name' | 'email' | 'clients' | 'contracts' | 'invoices' | 'estimates' | 'projects' | 'payments' | 'permits' | 'properties' | 'dualSignatures' | 'sharedEstimates' | 'modifications' | 'emails' | 'pdfs' | 'total';
+type SortDirection = 'asc' | 'desc';
+
 export default function UsageSystem() {
   const [searchQuery, setSearchQuery] = useState("");
   const [dateRange, setDateRange] = useState<DateRange>("month");
@@ -14,6 +17,10 @@ export default function UsageSystem() {
   const [customEndDate, setCustomEndDate] = useState("");
 
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  
+  // Sorting state
+  const [sortColumn, setSortColumn] = useState<SortColumn>('total');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
 
   // Fetch usage data with refetch function
   const { data: systemUsage, isLoading: loadingSystem, refetch: refetchSystem } = trpc.owlfenc.getSystemUsage.useQuery();
@@ -46,11 +53,115 @@ export default function UsageSystem() {
     return `${Math.floor(diffInSeconds / 60)}m ago`;
   };
 
-  // Filter users by search
+  // Handle sorting
+  const handleSort = (column: SortColumn) => {
+    if (sortColumn === column) {
+      // Toggle direction if same column
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      // New column, default to descending
+      setSortColumn(column);
+      setSortDirection('desc');
+    }
+  };
+
+  // Filter and sort users
   const filteredUsers = userUsageList?.filter((user: any) => 
     user.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     user.displayName?.toLowerCase().includes(searchQuery.toLowerCase())
-  ) || [];
+  ).sort((a: any, b: any) => {
+    let aValue: any;
+    let bValue: any;
+
+    switch (sortColumn) {
+      case 'name':
+        aValue = a.displayName?.toLowerCase() || '';
+        bValue = b.displayName?.toLowerCase() || '';
+        break;
+      case 'email':
+        aValue = a.email?.toLowerCase() || '';
+        bValue = b.email?.toLowerCase() || '';
+        break;
+      case 'clients':
+        aValue = a.clientsCount || 0;
+        bValue = b.clientsCount || 0;
+        break;
+      case 'contracts':
+        aValue = a.contractsCount || 0;
+        bValue = b.contractsCount || 0;
+        break;
+      case 'invoices':
+        aValue = a.invoicesCount || 0;
+        bValue = b.invoicesCount || 0;
+        break;
+      case 'estimates':
+        aValue = a.estimatesCount || 0;
+        bValue = b.estimatesCount || 0;
+        break;
+      case 'projects':
+        aValue = a.projectsCount || 0;
+        bValue = b.projectsCount || 0;
+        break;
+      case 'payments':
+        aValue = a.paymentsCount || 0;
+        bValue = b.paymentsCount || 0;
+        break;
+      case 'permits':
+        aValue = a.permitSearchesCount || 0;
+        bValue = b.permitSearchesCount || 0;
+        break;
+      case 'properties':
+        aValue = a.propertyVerificationsCount || 0;
+        bValue = b.propertyVerificationsCount || 0;
+        break;
+      case 'dualSignatures':
+        aValue = a.dualSignatureContractsCount || 0;
+        bValue = b.dualSignatureContractsCount || 0;
+        break;
+      case 'sharedEstimates':
+        aValue = a.sharedEstimatesCount || 0;
+        bValue = b.sharedEstimatesCount || 0;
+        break;
+      case 'modifications':
+        aValue = a.contractModificationsCount || 0;
+        bValue = b.contractModificationsCount || 0;
+        break;
+      case 'emails':
+        aValue = a.emailsSentCount || 0;
+        bValue = b.emailsSentCount || 0;
+        break;
+      case 'pdfs':
+        aValue = a.pdfsGeneratedCount || 0;
+        bValue = b.pdfsGeneratedCount || 0;
+        break;
+      case 'total':
+        aValue = (a.clientsCount || 0) + (a.contractsCount || 0) + (a.invoicesCount || 0) + 
+                 (a.estimatesCount || 0) + (a.projectsCount || 0) + (a.paymentsCount || 0) +
+                 (a.permitSearchesCount || 0) + (a.propertyVerificationsCount || 0) +
+                 (a.dualSignatureContractsCount || 0) + (a.sharedEstimatesCount || 0) +
+                 (a.contractModificationsCount || 0) + (a.emailsSentCount || 0) + (a.pdfsGeneratedCount || 0);
+        bValue = (b.clientsCount || 0) + (b.contractsCount || 0) + (b.invoicesCount || 0) + 
+                 (b.estimatesCount || 0) + (b.projectsCount || 0) + (b.paymentsCount || 0) +
+                 (b.permitSearchesCount || 0) + (b.propertyVerificationsCount || 0) +
+                 (b.dualSignatureContractsCount || 0) + (b.sharedEstimatesCount || 0) +
+                 (b.contractModificationsCount || 0) + (b.emailsSentCount || 0) + (b.pdfsGeneratedCount || 0);
+        break;
+      default:
+        aValue = 0;
+        bValue = 0;
+    }
+
+    // Compare values
+    if (typeof aValue === 'string') {
+      return sortDirection === 'asc' 
+        ? aValue.localeCompare(bValue)
+        : bValue.localeCompare(aValue);
+    } else {
+      return sortDirection === 'asc'
+        ? aValue - bValue
+        : bValue - aValue;
+    }
+  }) || [];
 
   // Calculate email limit percentage
   const emailLimitPercentage = systemUsage?.emailsSentToday 
@@ -308,22 +419,54 @@ export default function UsageSystem() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-slate-800">
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-slate-400">User</th>
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-slate-400">Email</th>
-                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Clients</th>
-                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Contracts</th>
-                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Invoices</th>
-                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Estimates</th>
-                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Projects</th>
-                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Payments</th>
-                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Permits</th>
-                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Properties</th>
-                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Dual Sigs</th>
-                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Shared Est</th>
-                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Contract Mods</th>
-                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Emails</th>
-                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">PDFs</th>
-                  <th className="text-center py-2 px-3 text-xs font-semibold text-slate-400">Total</th>
+                  <th onClick={() => handleSort('name')} className="text-left py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                    User {sortColumn === 'name' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th onClick={() => handleSort('email')} className="text-left py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                    Email {sortColumn === 'email' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th onClick={() => handleSort('clients')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                    Clients {sortColumn === 'clients' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th onClick={() => handleSort('contracts')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                    Contracts {sortColumn === 'contracts' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th onClick={() => handleSort('invoices')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                    Invoices {sortColumn === 'invoices' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th onClick={() => handleSort('estimates')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                    Estimates {sortColumn === 'estimates' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th onClick={() => handleSort('projects')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                    Projects {sortColumn === 'projects' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th onClick={() => handleSort('payments')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                    Payments {sortColumn === 'payments' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th onClick={() => handleSort('permits')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                    Permits {sortColumn === 'permits' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th onClick={() => handleSort('properties')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                    Properties {sortColumn === 'properties' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th onClick={() => handleSort('dualSignatures')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                    Dual Sigs {sortColumn === 'dualSignatures' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th onClick={() => handleSort('sharedEstimates')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                    Shared Est {sortColumn === 'sharedEstimates' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th onClick={() => handleSort('modifications')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                    Contract Mods {sortColumn === 'modifications' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th onClick={() => handleSort('emails')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                    Emails {sortColumn === 'emails' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th onClick={() => handleSort('pdfs')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                    PDFs {sortColumn === 'pdfs' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th onClick={() => handleSort('total')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                    Total {sortColumn === 'total' && (sortDirection === 'asc' ? '↑' : '↓')}
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -369,7 +512,8 @@ export default function UsageSystem() {
                           {user.permitSearchesCount || 0}
                         </td>
                         <td className="py-2 px-3 text-center text-teal-400 font-semibold text-sm">
-                          0 {/* Property verifications - PostgreSQL, not implemented yet */}
+                          {/* Property verifications - showing total for all users (per-user breakdown pending) */}
+                          {(systemUsage as any)?.totalPropertyVerifications || 0}
                         </td>
                         <td className="py-2 px-3 text-center text-indigo-400 font-semibold text-sm">
                           {user.dualSignatureContractsCount || 0}

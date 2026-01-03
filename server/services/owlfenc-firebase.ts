@@ -270,8 +270,12 @@ export async function getSystemUsageMetrics() {
       
       // NEW: High-priority metrics
       db.collection('permit_search_history').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
-      // Property verifications are in PostgreSQL, will be 0 for now
-      Promise.resolve({ data: () => ({ count: 0 }) }),
+      // Property verifications from PostgreSQL
+      (async () => {
+        const { getPropertyVerificationsCount } = await import('./owlfenc-subscriptions.js');
+        const count = await getPropertyVerificationsCount();
+        return { data: () => ({ count }) };
+      })(),
       db.collection('dualSignatureContracts').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
       db.collection('shared_estimates').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
       db.collection('contractHistory').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
@@ -360,6 +364,7 @@ export async function getUserUsageBreakdown() {
         projectsSnapshot,
         paymentsSnapshot,
         permitSearchesSnapshot,
+        propertyVerificationsCount,
         dualSignatureContractsSnapshot,
         sharedEstimatesSnapshot,
         contractHistorySnapshot,
@@ -376,6 +381,11 @@ export async function getUserUsageBreakdown() {
         
         // NEW: High-priority metrics
         db.collection('permit_search_history').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+        // Property verifications from PostgreSQL
+        (async () => {
+          const { getPropertyVerificationsCount } = await import('./owlfenc-subscriptions.js');
+          return await getPropertyVerificationsCount(userId);
+        })(),
         db.collection('dualSignatureContracts').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
         db.collection('shared_estimates').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
         db.collection('contractHistory').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
@@ -398,6 +408,7 @@ export async function getUserUsageBreakdown() {
         
         // NEW: High-priority metrics
         permitSearchesCount: permitSearchesSnapshot.data().count,
+        propertyVerificationsCount: propertyVerificationsCount,
         dualSignatureContractsCount: dualSignatureContractsSnapshot.data().count,
         sharedEstimatesCount: sharedEstimatesSnapshot.data().count,
         contractModificationsCount: contractHistorySnapshot.data().count,

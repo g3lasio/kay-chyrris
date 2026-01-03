@@ -420,3 +420,44 @@
 - [ ] Handle cases where firebaseUserId vs userId mismatch
 - [ ] Add error handling for missing data
 - [ ] Add data validation before display
+
+
+---
+
+## 🚀 Final Enhancements - Property Verifications, Email/PDF Tracking, Table Sorting
+
+### Property Verifications Tracking (PostgreSQL)
+- [ ] Connect to Owl Fenc PostgreSQL database from Chyrris KAI backend
+- [ ] Query property_search_history table structure
+- [ ] Implement getPropertyVerifications() function to count per user
+- [ ] Update getSystemUsageMetrics() to include total property verifications
+- [ ] Update getUserUsageBreakdown() to include property verifications per user
+- [ ] Test with real PostgreSQL data
+- [ ] Update UI to show actual counts (replace hardcoded 0)
+
+### Email & PDF Tracking Services (Owl Fenc Repository)
+- [ ] Create server/services/emailTrackingService.ts with logEmailSent function
+- [ ] Create server/services/pdfTrackingService.ts with logPdfGenerated function
+- [ ] Define email_logs Firestore collection schema (userId, type, recipient, timestamp, status)
+- [ ] Define pdf_logs Firestore collection schema (userId, type, documentId, timestamp, fileSize)
+- [ ] Integrate emailTrackingService in invoice email sending
+- [ ] Integrate emailTrackingService in estimate email sending
+- [ ] Integrate emailTrackingService in contract email sending
+- [ ] Integrate pdfTrackingService in invoice PDF generation
+- [ ] Integrate pdfTrackingService in contract PDF generation
+- [ ] Integrate pdfTrackingService in estimate PDF generation
+- [ ] Integrate pdfTrackingService in permit report PDF generation
+- [ ] Test email tracking with real email send
+- [ ] Test PDF tracking with real PDF generation
+- [ ] Push changes to Owl Fenc GitHub repository
+
+### Table Sorting (Chyrris KAI)
+- [ ] Add sorting state (column, direction) to UsageSystem.tsx
+- [ ] Implement handleSort function to toggle ascending/descending
+- [ ] Add click handlers to all table headers
+- [ ] Add visual indicators (↑↓ arrows) to sorted column
+- [ ] Sort user data array based on selected column
+- [ ] Handle numeric sorting (clients, contracts, invoices, etc.)
+- [ ] Handle string sorting (name, email)
+- [ ] Test sorting on all columns
+- [ ] Add hover effects to sortable headers

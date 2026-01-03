@@ -235,3 +235,57 @@ export async function getAllSubscriptionsStats() {
     return null;
   }
 }
+
+
+/**
+ * Get property verifications count from PostgreSQL
+ * Queries property_search_history table
+ */
+export async function getPropertyVerificationsCount(firebaseUid?: string): Promise<number> {
+  const pool = getOwlFencPool();
+  if (!pool) {
+    console.log('[OwlFenc Subscriptions] PostgreSQL pool not available for property verifications');
+    return 0;
+  }
+
+  try {
+    // For now, only return total count (per-user filtering requires proper user table mapping)
+    const query = 'SELECT COUNT(*) as count FROM property_search_history';
+    const result = await pool.query(query);
+    return parseInt(result.rows[0]?.count || '0', 10);
+  } catch (error) {
+    console.error('[OwlFenc Subscriptions] Error fetching property verifications:', error);
+    return 0;
+  }
+}
+
+/**
+ * Get all users' property verifications breakdown
+ * Returns array of {userId, count}
+ */
+export async function getPropertyVerificationsBreakdown(): Promise<Array<{firebaseUid: string, count: number}>> {
+  const pool = getOwlFencPool();
+  if (!pool) {
+    console.log('[OwlFenc Subscriptions] PostgreSQL pool not available for property verifications breakdown');
+    return [];
+  }
+
+  try {
+    const query = `
+      SELECT u.firebase_uid as "firebaseUid", COUNT(*) as count 
+      FROM property_search_history psh
+      INNER JOIN users u ON psh.user_id = u.id
+      WHERE u.firebase_uid IS NOT NULL
+      GROUP BY u.firebase_uid
+    `;
+    
+    const result = await pool.query(query);
+    return result.rows.map(row => ({
+      firebaseUid: row.firebaseUid,
+      count: parseInt(row.count, 10)
+    }));
+  } catch (error) {
+    console.error('[OwlFenc Subscriptions] Error fetching property verifications breakdown:', error);
+    return [];
+  }
+}
