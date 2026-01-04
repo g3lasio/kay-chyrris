@@ -619,3 +619,42 @@ Ensure EVERY Resend email send is tracked (per-user and global) to avoid exceedi
 - [ ] Monitor email tracking for 24 hours
 - [ ] Verify no emails are missed
 
+
+
+---
+
+## 🚨 CRITICAL: Email Security & Privacy Audit
+
+### Goal
+Ensure ALL emails in Owl Fenc use `noreply@owlfenc.com` as sender with proper `reply-to` to contractor email. Prevent email leakage between contractors and ensure owner (Gelasio) does NOT receive contractor emails.
+
+### Security Requirements
+- [ ] ALL emails MUST use `from: noreply@owlfenc.com` (NOT contractor email, NOT owner email)
+- [ ] ALL emails MUST have `replyTo: contractor.email` (so client replies go to contractor)
+- [ ] NO emails should go to owner (Gelasio) unless system notifications
+- [ ] NO contractor should see emails from other contractors
+- [ ] Each contractor MUST have registered email in system
+- [ ] Verify no email leakage in invoices, estimates, contracts, payments
+
+### Phase 1: Audit Current Implementation ✅ COMPLETED
+- [x] Audit invoiceEmailService.ts - verify from/reply-to (SECURE - uses default noreply@)
+- [x] Audit estimateEmailService.ts - verify from/reply-to (FIXED - was using estimates@ and notifications@)
+- [x] Audit contractorEmailService.ts - verify from/reply-to (SECURE - uses proxy noreply@)
+- [x] Audit projectPaymentService.ts - verify from/reply-to (NOT FOUND - may not exist)
+- [x] Audit dualSignatureService.ts - verify from/reply-to (NOT FOUND - may not exist)
+- [x] Audit all other email services
+- [x] Document any security issues found (EMAIL_SECURITY_AUDIT_REPORT.md)
+
+### Phase 2: Fix Security Issues ✅ COMPLETED
+- [x] Fix any service NOT using noreply@owlfenc.com (estimateEmailService fixed)
+- [x] Fix any service NOT using contractor reply-to (estimateEmailService fixed)
+- [x] Remove any hardcoded owner email addresses (none found)
+- [x] Verify contractor email is always passed correctly (all services correct)
+
+### Phase 3: Testing & Verification (REQUIRES MANUAL TESTING)
+- [ ] Test invoice send - verify from/reply-to (from: noreply@owlfenc.com, replyTo: contractor.email)
+- [ ] Test estimate send - verify from/reply-to (from: noreply@owlfenc.com, replyTo: contractor.email)
+- [ ] Test contract send - verify from/reply-to (if service exists)
+- [ ] Test payment link - verify from/reply-to (if service exists)
+- [ ] Verify client reply goes to contractor (NOT owner)
+- [ ] Verify no cross-contractor email leakage
