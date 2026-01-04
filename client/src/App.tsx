@@ -6,6 +6,8 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
+import MyApps from "./pages/MyApps";
+import OwlFencDashboard from "./pages/OwlFencDashboard";
 import Users from "./pages/Users";
 import Payments from "./pages/Payments";
 import Announcements from "./pages/Announcements";
@@ -20,10 +22,22 @@ function Router() {
         <Redirect to="/" />
       </Route>
       
-      {/* Protected routes with dashboard layout */}
+      {/* Main dashboard - redirect to My Apps */}
       <Route path="/">
+        <Redirect to="/my-apps" />
+      </Route>
+      
+      {/* My Apps - App selection page */}
+      <Route path="/my-apps">
         <DashboardLayout>
-          <Dashboard />
+          <MyApps />
+        </DashboardLayout>
+      </Route>
+      
+      {/* Owl Fenc App Routes */}
+      <Route path="/apps/owlfenc">
+        <DashboardLayout>
+          <OwlFencDashboard />
         </DashboardLayout>
       </Route>
       
@@ -48,6 +62,16 @@ function Router() {
       <Route path="/usage-system">
         <DashboardLayout>
           <UsageSystem />
+        </DashboardLayout>
+      </Route>
+      
+      {/* LeadPrime App Routes - Coming soon */}
+      <Route path="/apps/leadprime">
+        <DashboardLayout>
+          <div className="container mx-auto py-8 px-4">
+            <h1 className="text-4xl font-bold mb-4">LeadPrime</h1>
+            <p className="text-muted-foreground">Coming soon...</p>
+          </div>
         </DashboardLayout>
       </Route>
       
