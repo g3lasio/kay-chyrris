@@ -388,6 +388,13 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
     const filterStartDate = startDate ? new Date(startDate) : null;
     const filterEndDate = endDate ? new Date(endDate) : null;
     
+    // Get property verifications breakdown ONCE (more efficient than per-user queries)
+    const { getPropertyVerificationsBreakdown } = await import('./owlfenc-subscriptions.js');
+    const propertyVerificationsBreakdown = await getPropertyVerificationsBreakdown();
+    const propertyVerificationsMap = new Map(
+      propertyVerificationsBreakdown.map(item => [item.firebaseUid, item.count])
+    );
+    
     // For each user, count their documents across ALL collections
     const userUsagePromises = listUsersResult.users.map(async (userRecord) => {
       const userId = userRecord.uid;
@@ -417,11 +424,8 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
         
         // NEW: High-priority metrics
         db.collection('permit_search_history').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
-        // Property verifications from PostgreSQL
-        (async () => {
-          const { getPropertyVerificationsCount } = await import('./owlfenc-subscriptions.js');
-          return await getPropertyVerificationsCount(userId);
-        })(),
+        // Property verifications from PostgreSQL (lookup from pre-fetched map)
+        Promise.resolve(propertyVerificationsMap.get(userId) || 0),
         db.collection('dualSignatureContracts').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
         db.collection('shared_estimates').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
         db.collection('contractHistory').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
@@ -459,8 +463,6 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
       const contractsCount = filterUserDocs(contractsSnapshot);
       const invoicesCount = filterUserDocs(invoicesSnapshot);
       const estimatesCount = filterUserDocs(estimatesSnapshot);
-      
-      console.log(`[Firebase Debug] ${userRecord.email}: clients=${clientsCount}, contracts=${contractsCount}, invoices=${invoicesCount}, estimates=${estimatesCount}`);
       
       return {
         uid: userRecord.uid,

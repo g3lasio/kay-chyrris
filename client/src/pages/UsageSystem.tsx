@@ -526,7 +526,8 @@ export default function UsageSystem() {
                     const total = (user.clientsCount || 0) + (user.contractsCount || 0) + 
                                   (user.invoicesCount || 0) + (user.estimatesCount || 0) +
                                   (user.projectsCount || 0) + (user.paymentsCount || 0) +
-                                  (user.permitSearchesCount || 0) + (user.dualSignatureContractsCount || 0) +
+                                  (user.permitSearchesCount || 0) + (user.propertyVerificationsCount || 0) +
+                                  (user.dualSignatureContractsCount || 0) +
                                   (user.sharedEstimatesCount || 0) + (user.contractModificationsCount || 0) +
                                   (user.emailsSentCount || 0) + (user.pdfsGeneratedCount || 0);
                     
@@ -557,8 +558,7 @@ export default function UsageSystem() {
                           {user.permitSearchesCount || 0}
                         </td>
                         <td className="py-2 px-3 text-center text-teal-400 font-semibold text-sm">
-                          {/* Property verifications - showing total for all users (per-user breakdown pending) */}
-                          {(systemUsage as any)?.totalPropertyVerifications || 0}
+                          {user.propertyVerificationsCount || 0}
                         </td>
                         <td className="py-2 px-3 text-center text-indigo-400 font-semibold text-sm">
                           {user.dualSignatureContractsCount || 0}

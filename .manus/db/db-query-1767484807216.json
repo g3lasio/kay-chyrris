@@ -1,0 +1,9 @@
+{
+  "query": "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'users' LIMIT 20",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3mqi4o25ricoykc.c61e951fda9d --database d3rSuxiWgqVtmxU93SmqxC --execute SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'users' LIMIT 20",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 848
+}

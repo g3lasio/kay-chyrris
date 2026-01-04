@@ -427,13 +427,13 @@
 ## 🚀 Final Enhancements - Property Verifications, Email/PDF Tracking, Table Sorting
 
 ### Property Verifications Tracking (PostgreSQL)
-- [ ] Connect to Owl Fenc PostgreSQL database from Chyrris KAI backend
-- [ ] Query property_search_history table structure
-- [ ] Implement getPropertyVerifications() function to count per user
-- [ ] Update getSystemUsageMetrics() to include total property verifications
-- [ ] Update getUserUsageBreakdown() to include property verifications per user
-- [ ] Test with real PostgreSQL data
-- [ ] Update UI to show actual counts (replace hardcoded 0)
+- [x] Connect to Owl Fenc PostgreSQL database from Chyrris KAI backend
+- [x] Query property_search_history table structure
+- [x] Implement getPropertyVerificationsBreakdown() function to count per user with Firebase UID mapping
+- [x] Update getSystemUsageMetrics() to include total property verifications
+- [x] Update getUserUsageBreakdown() to include property verifications per user (using Map lookup for efficiency)
+- [x] Test with real PostgreSQL data (13 total, 9 for owl@chyrris.com, 0 for others)
+- [x] Update UI to show actual counts per user (removed hardcoded global total)
 
 ### Email & PDF Tracking Services (Owl Fenc Repository)
 - [ ] Create server/services/emailTrackingService.ts with logEmailSent function
@@ -548,3 +548,21 @@
 - [ ] Verify no data leaks or inconsistencies
 - [ ] Save final checkpoint
 - [ ] Push to GitHub
+
+
+---
+
+## 🎯 NEW TASK: Per-User Property Verifications
+
+### Goal
+Map Firebase UID to PostgreSQL user_id to show individual property verification counts instead of global total
+
+### Tasks
+- [ ] Analyze PostgreSQL property_search_history table schema
+- [ ] Find mapping between Firebase UID and PostgreSQL user_id
+- [ ] Update getPropertyVerificationsCount() to accept Firebase UID
+- [ ] Query PostgreSQL to get per-user property verification count
+- [ ] Test that individual counts sum to global total
+- [ ] Verify all users show correct property verification counts
+- [ ] Update frontend to display per-user counts
+- [ ] Save checkpoint with per-user property verifications working
