@@ -263,7 +263,6 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
       invoicesSnapshot,
       estimatesSnapshot,
       projectsSnapshot,
-      paymentsSnapshot,
       permitSearchesSnapshot,
       propertyVerificationsSnapshot,
       dualSignatureContractsSnapshot,
@@ -281,7 +280,6 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
       db.collection('invoices').get(),
       db.collection('estimates').get(),
       db.collection('projects').get(),
-      db.collection('paymentHistory').get(),
       
       // NEW: High-priority metrics
       db.collection('permit_search_history').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
@@ -364,7 +362,6 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
       totalInvoices: filterDocs(invoicesSnapshot),
       totalEstimates: filterDocs(estimatesSnapshot),
       totalProjects: filterDocs(projectsSnapshot),
-      totalPayments: filterDocs(paymentsSnapshot),
       
       // NEW: High-priority metrics
       totalPermitSearches: permitSearchesSnapshot.data().count,
@@ -424,7 +421,6 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
         invoicesSnapshot,
         estimatesSnapshot,
         projectsSnapshot,
-        paymentsSnapshot,
         permitSearchesSnapshot,
         propertyVerificationsCount,
         dualSignatureContractsSnapshot,
@@ -438,7 +434,6 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
         db.collection('invoices').where('userId', '==', userId).get(),
         db.collection('estimates').where('firebaseUserId', '==', userId).get(),
         db.collection('projects').where('userId', '==', userId).get(),
-        db.collection('paymentHistory').where('userId', '==', userId).get(),
         
         // NEW: High-priority metrics
         db.collection('permit_search_history').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
@@ -491,7 +486,6 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
         invoicesCount,
         estimatesCount,
         projectsCount: filterUserDocs(projectsSnapshot),
-        paymentsCount: filterUserDocs(paymentsSnapshot),
         
         // NEW: High-priority metrics
         permitSearchesCount: permitSearchesSnapshot.data().count,

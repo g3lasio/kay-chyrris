@@ -294,6 +294,32 @@ export const appRouter = router({
         return [];
       }
     }),
+
+    // Get Resend email usage stats (direct from Resend API)
+    getResendUsage: publicProcedure.query(async () => {
+      try {
+        const { getResendUsageStats } = await import('./services/resend-api');
+        const stats = await getResendUsageStats();
+        return {
+          success: true,
+          data: stats,
+        };
+      } catch (error: any) {
+        console.error('[Router] Error fetching Resend usage:', error);
+        return {
+          success: false,
+          error: error.message,
+          data: {
+            emailsSentToday: 0,
+            emailsSentThisMonth: 0,
+            dailyLimit: 500,
+            usagePercentage: 0,
+            isNearLimit: false,
+            isCritical: false,
+          },
+        };
+      }
+    }),
   }),
 
   // Stripe payment and subscription management

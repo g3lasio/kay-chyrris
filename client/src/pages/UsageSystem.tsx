@@ -7,7 +7,7 @@ import { useState, useEffect } from "react";
 
 type DateRange = "all" | "day" | "month" | "year" | "custom";
 
-type SortColumn = 'name' | 'email' | 'clients' | 'contracts' | 'invoices' | 'estimates' | 'projects' | 'payments' | 'permits' | 'properties' | 'dualSignatures' | 'sharedEstimates' | 'modifications' | 'emails' | 'pdfs' | 'total';
+type SortColumn = 'name' | 'email' | 'clients' | 'contracts' | 'invoices' | 'estimates' | 'projects' | 'permits' | 'properties' | 'dualSignatures' | 'sharedEstimates' | 'modifications' | 'emails' | 'pdfs' | 'total';
 type SortDirection = 'asc' | 'desc';
 
 export default function UsageSystem() {
@@ -74,6 +74,14 @@ export default function UsageSystem() {
       refetchIntervalInBackground: false, // Only refetch when tab is active
     }
   );
+  // Fetch Resend email usage stats (direct from Resend API)
+  const { data: resendUsage, isLoading: loadingResend, refetch: refetchResend } = trpc.owlfenc.getResendUsage.useQuery(
+    undefined,
+    {
+      refetchInterval: 30000, // Refetch every 30 seconds (less frequent since it's external API)
+      refetchIntervalInBackground: false,
+    }
+  );
 
   // Update last updated timestamp when data changes
   useEffect(() => {
@@ -84,6 +92,7 @@ export default function UsageSystem() {
   const handleManualRefresh = () => {
     refetchSystem();
     refetchUsers();
+    refetchResend();
     setLastUpdated(new Date());
   };
 
@@ -145,10 +154,7 @@ export default function UsageSystem() {
         aValue = a.projectsCount || 0;
         bValue = b.projectsCount || 0;
         break;
-      case 'payments':
-        aValue = a.paymentsCount || 0;
-        bValue = b.paymentsCount || 0;
-        break;
+
       case 'permits':
         aValue = a.permitSearchesCount || 0;
         bValue = b.permitSearchesCount || 0;
@@ -179,12 +185,12 @@ export default function UsageSystem() {
         break;
       case 'total':
         aValue = (a.clientsCount || 0) + (a.contractsCount || 0) + (a.invoicesCount || 0) + 
-                 (a.estimatesCount || 0) + (a.projectsCount || 0) + (a.paymentsCount || 0) +
+                 (a.estimatesCount || 0) + (a.projectsCount || 0) +
                  (a.permitSearchesCount || 0) + (a.propertyVerificationsCount || 0) +
                  (a.dualSignatureContractsCount || 0) + (a.sharedEstimatesCount || 0) +
                  (a.contractModificationsCount || 0) + (a.emailsSentCount || 0) + (a.pdfsGeneratedCount || 0);
         bValue = (b.clientsCount || 0) + (b.contractsCount || 0) + (b.invoicesCount || 0) + 
-                 (b.estimatesCount || 0) + (b.projectsCount || 0) + (b.paymentsCount || 0) +
+                 (b.estimatesCount || 0) + (b.projectsCount || 0) +
                  (b.permitSearchesCount || 0) + (b.propertyVerificationsCount || 0) +
                  (b.dualSignatureContractsCount || 0) + (b.sharedEstimatesCount || 0) +
                  (b.contractModificationsCount || 0) + (b.emailsSentCount || 0) + (b.pdfsGeneratedCount || 0);
@@ -344,19 +350,48 @@ export default function UsageSystem() {
             </div>
           </Card>
 
-          {/* PDFs Generated */}
-          <Card className="bg-slate-900 border-slate-800 p-4">
+          {/* Resend Email Usage (with alerts) */}
+          <Card className={`border-slate-800 p-4 ${
+            resendUsage?.data?.isCritical ? 'bg-red-900/20 border-red-500' :
+            resendUsage?.data?.isNearLimit ? 'bg-yellow-900/20 border-yellow-500' :
+            'bg-slate-900'
+          }`}>
             <div className="flex items-center justify-between mb-2">
-              <FileText className="w-6 h-6 text-purple-500" />
+              <Mail className={`w-6 h-6 ${
+                resendUsage?.data?.isCritical ? 'text-red-400' :
+                resendUsage?.data?.isNearLimit ? 'text-yellow-400' :
+                'text-blue-500'
+              }`} />
+              {resendUsage?.data?.isNearLimit && (
+                <AlertTriangle className={`w-5 h-5 ${
+                  resendUsage?.data?.isCritical ? 'text-red-400 animate-pulse' : 'text-yellow-400'
+                }`} />
+              )}
             </div>
             <div className="space-y-1">
-              <p className="text-xs text-slate-400">PDFs Generated ({getDateRangeLabel()})</p>
+              <p className="text-xs text-slate-400">Resend Emails (Today)</p>
               <p className="text-2xl font-bold text-white">
-                {dateRange === "day" ? systemUsage?.pdfsGeneratedToday || 0 : systemUsage?.pdfsGeneratedMonth || 0}
+                {resendUsage?.data?.emailsSentToday || 0}
               </p>
-              <p className="text-xs text-slate-500">
-                {systemUsage?.pdfsGeneratedToday || 0} today
-              </p>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-slate-500">
+                  {resendUsage?.data?.usagePercentage || 0}% of daily limit
+                </span>
+                <span className={`font-semibold ${
+                  resendUsage?.data?.isCritical ? 'text-red-400' :
+                  resendUsage?.data?.isNearLimit ? 'text-yellow-400' :
+                  'text-slate-500'
+                }`}>
+                  {resendUsage?.data?.dailyLimit || 500} max
+                </span>
+              </div>
+              {resendUsage?.data?.isNearLimit && (
+                <p className={`text-xs font-semibold mt-1 ${
+                  resendUsage?.data?.isCritical ? 'text-red-400' : 'text-yellow-400'
+                }`}>
+                  ⚠️ {resendUsage?.data?.isCritical ? 'CRITICAL' : 'WARNING'}: Approaching limit!
+                </p>
+              )}
             </div>
           </Card>
 
@@ -418,10 +453,6 @@ export default function UsageSystem() {
             <div className="bg-slate-800/50 rounded-lg p-3">
               <p className="text-xs text-slate-400 mb-1">Total Projects</p>
               <p className="text-xl font-bold text-blue-400">{(systemUsage as any)?.totalProjects || 0}</p>
-            </div>
-            <div className="bg-slate-800/50 rounded-lg p-3">
-              <p className="text-xs text-slate-400 mb-1">Total Payments</p>
-              <p className="text-xl font-bold text-pink-400">{(systemUsage as any)?.totalPayments || 0}</p>
             </div>
             {/* NEW: High-priority metrics */}
             <div className="bg-slate-800/50 rounded-lg p-3">
@@ -485,9 +516,6 @@ export default function UsageSystem() {
                   <th onClick={() => handleSort('projects')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
                     Projects {sortColumn === 'projects' && (sortDirection === 'asc' ? '↑' : '↓')}
                   </th>
-                  <th onClick={() => handleSort('payments')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
-                    Payments {sortColumn === 'payments' && (sortDirection === 'asc' ? '↑' : '↓')}
-                  </th>
                   <th onClick={() => handleSort('permits')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
                     Permits {sortColumn === 'permits' && (sortDirection === 'asc' ? '↑' : '↓')}
                   </th>
@@ -525,7 +553,7 @@ export default function UsageSystem() {
                   filteredUsers.map((user: any) => {
                     const total = (user.clientsCount || 0) + (user.contractsCount || 0) + 
                                   (user.invoicesCount || 0) + (user.estimatesCount || 0) +
-                                  (user.projectsCount || 0) + (user.paymentsCount || 0) +
+                                  (user.projectsCount || 0) +
                                   (user.permitSearchesCount || 0) + (user.propertyVerificationsCount || 0) +
                                   (user.dualSignatureContractsCount || 0) +
                                   (user.sharedEstimatesCount || 0) + (user.contractModificationsCount || 0) +
@@ -549,9 +577,6 @@ export default function UsageSystem() {
                         </td>
                         <td className="py-2 px-3 text-center text-blue-400 font-semibold text-sm">
                           {user.projectsCount || 0}
-                        </td>
-                        <td className="py-2 px-3 text-center text-pink-400 font-semibold text-sm">
-                          {user.paymentsCount || 0}
                         </td>
                         {/* NEW: High-priority metrics */}
                         <td className="py-2 px-3 text-center text-orange-400 font-semibold text-sm">
