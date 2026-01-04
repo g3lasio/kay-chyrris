@@ -1,4 +1,6 @@
 import { getFirestore, getAuth } from './firebase';
+import { getOwlFencDb } from './owlfenc-db';
+import { sql } from 'drizzle-orm';
 
 export interface OwlFencUser {
   uid: string;
@@ -108,13 +110,18 @@ export async function getOwlFencDashboardStats(): Promise<OwlFencDashboardStats>
     const [usersResult, clientsSnapshot, contractsSnapshot, invoicesSnapshot] = await Promise.all([
       auth.listUsers(1000),
       db.collection('clients').get(),
-      db.collection('contracts').where('status', 'in', ['completed', 'both_signed']).get(),
+      // Query contract history from Firestore (completed contracts are stored here)
+      db.collection('contractHistory').get(),
       db.collection('invoices').get(),
     ]);
 
     const totalUsers = usersResult.users.length;
     const totalClients = clientsSnapshot.size;
-    const totalContracts = contractsSnapshot.size;
+    // Count only completed and both_signed contracts
+    const totalContracts = contractsSnapshot.docs.filter((doc: any) => {
+      const status = doc.data().status;
+      return status === 'completed' || status === 'both_signed';
+    }).length;
     const totalInvoices = invoicesSnapshot.size;
 
     // Calculate active users (signed in within last 30 days)
@@ -269,7 +276,8 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
     ] = await Promise.all([
       // Get all documents (filter in memory to avoid Firestore composite index requirement)
       db.collection('clients').get(),
-      db.collection('contracts').where('status', 'in', ['completed', 'both_signed']).get(),
+      // Query contract history from Firestore (completed contracts are stored here)
+      db.collection('contractHistory').get(),
       db.collection('invoices').get(),
       db.collection('estimates').get(),
       db.collection('projects').get(),
@@ -313,10 +321,20 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
     ]);
     
     // Filter documents in memory if date range is provided
-    const filterDocs = (snapshot: any) => {
-      if (!filterStartDate || !filterEndDate) return snapshot.size;
+    const filterDocs = (snapshot: any, collectionName?: string) => {
+      let docs = snapshot.docs;
       
-      return snapshot.docs.filter((doc: any) => {
+      // Special filter for contracts: only count completed and both_signed
+      if (collectionName === 'contracts') {
+        docs = docs.filter((doc: any) => {
+          const status = doc.data().status;
+          return status === 'completed' || status === 'both_signed';
+        });
+      }
+      
+      if (!filterStartDate || !filterEndDate) return docs.length;
+      
+      return docs.filter((doc: any) => {
         const data = doc.data();
         const createdAt = data.createdAt;
         
@@ -342,7 +360,7 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
     return {
       // Core metrics (filtered in memory)
       totalClients: filterDocs(clientsSnapshot),
-      totalContracts: filterDocs(contractsSnapshot),
+      totalContracts: filterDocs(contractsSnapshot, 'contracts'),
       totalInvoices: filterDocs(invoicesSnapshot),
       totalEstimates: filterDocs(estimatesSnapshot),
       totalProjects: filterDocs(projectsSnapshot),
@@ -416,7 +434,7 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
         pdfsSnapshot
       ] = await Promise.all([
         db.collection('clients').where('userId', '==', userId).get(),
-        db.collection('contracts').where('userId', '==', userId).where('status', 'in', ['completed', 'both_signed']).get(),
+        db.collection('contractHistory').where('userId', '==', userId).where('status', 'in', ['completed', 'both_signed']).get(),
         db.collection('invoices').where('userId', '==', userId).get(),
         db.collection('estimates').where('firebaseUserId', '==', userId).get(),
         db.collection('projects').where('userId', '==', userId).get(),
