@@ -566,3 +566,56 @@ Map Firebase UID to PostgreSQL user_id to show individual property verification 
 - [ ] Verify all users show correct property verification counts
 - [ ] Update frontend to display per-user counts
 - [ ] Save checkpoint with per-user property verifications working
+
+
+---
+
+## 🚨 CRITICAL: Complete Email Tracking Audit & Implementation
+
+### Goal
+Ensure EVERY Resend email send is tracked (per-user and global) to avoid exceeding 500 emails/day limit.
+
+### Phase 1: Owl Fenc Repository Audit
+- [x] Clone/pull latest Owl Fenc repository
+- [x] Search for all Resend API calls (resend.emails.send)
+- [x] Identify all email services (invoiceEmailService, emailService, etc.)
+- [x] Map all email types (invoice, estimate, contract, payment, project, notifications)
+- [x] Document current email tracking implementation (NONE - critical finding)
+- [x] List all files that send emails (31 files identified)
+
+### Phase 2: Email Tracking Implementation in Owl Fenc ✅ COMPLETED
+- [x] Create centralized email tracking service (emailTrackingService.ts)
+- [x] Add logEmailSent function with parameters (userId, emailType, recipient, subject, success)
+- [x] Create Firestore collection: email_logs with complete schema
+- [x] Integrate tracking in resendService.ts (central point - line 286)
+- [x] Update EmailData interface to include userId and emailType
+- [x] Update invoiceEmailService.ts to pass userId and emailType (2 calls)
+- [x] Update estimateEmailService.ts to pass userId and emailType (4 calls)
+- [x] Other services use default values (userId: 'system', emailType: 'general')
+- [x] Add error handling for tracking failures (non-blocking)
+- [ ] Test with real email send (requires Owl Fenc running)
+
+### Phase 3: Chyrris KAI Backend Updates ✅ COMPLETED
+- [x] Verify email_logs collection query in getUserUsageBreakdown() (already implemented)
+- [x] Verify email_logs collection query in getSystemUsageMetrics() (already implemented)
+- [ ] Add email count by type (invoice, estimate, contract, etc.)
+- [ ] Add daily email limit check (warn at 400/500)
+- [ ] Add monthly email statistics
+- [ ] Test with real email_logs data
+
+### Phase 4: Chyrris KAI Frontend Updates
+- [ ] Add email breakdown by type in Usage System
+- [ ] Add per-user email count in user table
+- [ ] Add global email usage progress bar (X/500 daily)
+- [ ] Add critical alert when > 450 emails sent today
+- [ ] Add email type distribution chart
+
+### Phase 5: Testing & Deployment
+- [ ] Test email tracking with real invoice send
+- [ ] Test email tracking with real estimate send
+- [ ] Test email tracking with real contract send
+- [ ] Verify Chyrris KAI displays correct counts
+- [ ] Deploy to Owl Fenc production
+- [ ] Monitor email tracking for 24 hours
+- [ ] Verify no emails are missed
+
