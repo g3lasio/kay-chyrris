@@ -1,0 +1,17 @@
+run = "pnpm run dev"
+entrypoint = "server/_core/index.ts"
+modules = ["nodejs-20"]
+
+hidden = [".config", "tsconfig.json", "tsconfig.node.json", "vite.config.ts", ".gitignore"]
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+run = ["sh", "-c", "pnpm run dev"]
+deploymentTarget = "cloudrun"
+build = ["sh", "-c", "pnpm install && pnpm db:push"]
+
+[[ports]]
+localPort = 3000
+externalPort = 80
