@@ -266,7 +266,6 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
       permitSearchesSnapshot,
       propertyVerificationsSnapshot,
       dualSignatureContractsSnapshot,
-      sharedEstimatesSnapshot,
       contractHistorySnapshot,
       emailsTodaySnapshot,
       emailsMonthSnapshot,
@@ -290,7 +289,6 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
         return { data: () => ({ count }) };
       })(),
       db.collection('dualSignatureContracts').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
-      db.collection('shared_estimates').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
       db.collection('contractHistory').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
       
       // Emails sent TODAY (may not exist yet, will return 0)
@@ -367,7 +365,6 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
       totalPermitSearches: permitSearchesSnapshot.data().count,
       totalPropertyVerifications: propertyVerificationsSnapshot.data().count,
       totalDualSignatureContracts: dualSignatureContractsSnapshot.data().count,
-      totalSharedEstimates: sharedEstimatesSnapshot.data().count,
       totalContractModifications: contractHistorySnapshot.data().count,
       
       // Email tracking (Resend limit: 500/day)
@@ -424,9 +421,7 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
         permitSearchesSnapshot,
         propertyVerificationsCount,
         dualSignatureContractsSnapshot,
-        sharedEstimatesSnapshot,
         contractHistorySnapshot,
-        emailsSnapshot,
         pdfsSnapshot
       ] = await Promise.all([
         db.collection('clients').where('userId', '==', userId).get(),
@@ -440,11 +435,7 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
         // Property verifications from PostgreSQL (lookup from pre-fetched map)
         Promise.resolve(propertyVerificationsMap.get(userId) || 0),
         db.collection('dualSignatureContracts').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
-        db.collection('shared_estimates').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
         db.collection('contractHistory').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
-        
-        // Email and PDF logs (may not exist yet, will return 0)
-        db.collection('email_logs').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
         db.collection('pdf_logs').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
       ]);
       
@@ -491,10 +482,8 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
         permitSearchesCount: permitSearchesSnapshot.data().count,
         propertyVerificationsCount: propertyVerificationsCount,
         dualSignatureContractsCount: dualSignatureContractsSnapshot.data().count,
-        sharedEstimatesCount: sharedEstimatesSnapshot.data().count,
         contractModificationsCount: contractHistorySnapshot.data().count,
         
-        emailsSentCount: emailsSnapshot.data().count,
         pdfsGeneratedCount: pdfsSnapshot.data().count,
       };
     });

@@ -708,3 +708,13 @@ Ensure ALL emails in Owl Fenc use `noreply@owlfenc.com` as sender with proper `r
 - [ ] Test date filtering on per-user table
 - [ ] Verify all counts match expected values
 - [ ] Update dashboard to show correct data
+
+## 🔥 CURRENT: Remove Unused Columns from Usage System
+- [x] Remove "Emails" (per-user) column from Usage System table
+- [x] Remove "Shared Estimates" column from Usage System table
+- [x] Remove backend queries for emailsSentCount per-user
+- [x] Remove backend queries for sharedEstimatesCount
+- [x] Update sort logic to exclude removed columns
+- [x] Update total calculation to exclude removed columns
+- [x] Test Usage System after removal
+- [ ] Save checkpoint and push to GitHub

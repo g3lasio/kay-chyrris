@@ -7,7 +7,7 @@ import { useState, useEffect } from "react";
 
 type DateRange = "all" | "day" | "month" | "year" | "custom";
 
-type SortColumn = 'name' | 'email' | 'clients' | 'contracts' | 'invoices' | 'estimates' | 'projects' | 'permits' | 'properties' | 'dualSignatures' | 'sharedEstimates' | 'modifications' | 'emails' | 'pdfs' | 'total';
+type SortColumn = 'name' | 'email' | 'clients' | 'contracts' | 'invoices' | 'estimates' | 'projects' | 'permits' | 'properties' | 'dualSignatures' | 'modifications' | 'pdfs' | 'total';
 type SortDirection = 'asc' | 'desc';
 
 export default function UsageSystem() {
@@ -167,18 +167,12 @@ export default function UsageSystem() {
         aValue = a.dualSignatureContractsCount || 0;
         bValue = b.dualSignatureContractsCount || 0;
         break;
-      case 'sharedEstimates':
-        aValue = a.sharedEstimatesCount || 0;
-        bValue = b.sharedEstimatesCount || 0;
-        break;
+
       case 'modifications':
         aValue = a.contractModificationsCount || 0;
         bValue = b.contractModificationsCount || 0;
         break;
-      case 'emails':
-        aValue = a.emailsSentCount || 0;
-        bValue = b.emailsSentCount || 0;
-        break;
+
       case 'pdfs':
         aValue = a.pdfsGeneratedCount || 0;
         bValue = b.pdfsGeneratedCount || 0;
@@ -187,13 +181,13 @@ export default function UsageSystem() {
         aValue = (a.clientsCount || 0) + (a.contractsCount || 0) + (a.invoicesCount || 0) + 
                  (a.estimatesCount || 0) + (a.projectsCount || 0) +
                  (a.permitSearchesCount || 0) + (a.propertyVerificationsCount || 0) +
-                 (a.dualSignatureContractsCount || 0) + (a.sharedEstimatesCount || 0) +
-                 (a.contractModificationsCount || 0) + (a.emailsSentCount || 0) + (a.pdfsGeneratedCount || 0);
+                 (a.dualSignatureContractsCount || 0) +
+                 (a.contractModificationsCount || 0) + (a.pdfsGeneratedCount || 0);
         bValue = (b.clientsCount || 0) + (b.contractsCount || 0) + (b.invoicesCount || 0) + 
                  (b.estimatesCount || 0) + (b.projectsCount || 0) +
                  (b.permitSearchesCount || 0) + (b.propertyVerificationsCount || 0) +
-                 (b.dualSignatureContractsCount || 0) + (b.sharedEstimatesCount || 0) +
-                 (b.contractModificationsCount || 0) + (b.emailsSentCount || 0) + (b.pdfsGeneratedCount || 0);
+                 (b.dualSignatureContractsCount || 0) +
+                 (b.contractModificationsCount || 0) + (b.pdfsGeneratedCount || 0);
         break;
       default:
         aValue = 0;
@@ -468,10 +462,6 @@ export default function UsageSystem() {
               <p className="text-xl font-bold text-indigo-400">{(systemUsage as any)?.totalDualSignatureContracts || 0}</p>
             </div>
             <div className="bg-slate-800/50 rounded-lg p-3">
-              <p className="text-xs text-slate-400 mb-1">Shared Estimates</p>
-              <p className="text-xl font-bold text-rose-400">{(systemUsage as any)?.totalSharedEstimates || 0}</p>
-            </div>
-            <div className="bg-slate-800/50 rounded-lg p-3">
               <p className="text-xs text-slate-400 mb-1">Contract Mods</p>
               <p className="text-xl font-bold text-violet-400">{(systemUsage as any)?.totalContractModifications || 0}</p>
             </div>
@@ -525,14 +515,8 @@ export default function UsageSystem() {
                   <th onClick={() => handleSort('dualSignatures')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
                     Dual Sigs {sortColumn === 'dualSignatures' && (sortDirection === 'asc' ? '↑' : '↓')}
                   </th>
-                  <th onClick={() => handleSort('sharedEstimates')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
-                    Shared Est {sortColumn === 'sharedEstimates' && (sortDirection === 'asc' ? '↑' : '↓')}
-                  </th>
                   <th onClick={() => handleSort('modifications')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
                     Contract Mods {sortColumn === 'modifications' && (sortDirection === 'asc' ? '↑' : '↓')}
-                  </th>
-                  <th onClick={() => handleSort('emails')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
-                    Emails {sortColumn === 'emails' && (sortDirection === 'asc' ? '↑' : '↓')}
                   </th>
                   <th onClick={() => handleSort('pdfs')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
                     PDFs {sortColumn === 'pdfs' && (sortDirection === 'asc' ? '↑' : '↓')}
@@ -545,7 +529,7 @@ export default function UsageSystem() {
               <tbody>
                 {filteredUsers.length === 0 ? (
                   <tr>
-                    <td colSpan={16} className="text-center py-6 text-slate-500 text-sm">
+                    <td colSpan={14} className="text-center py-6 text-slate-500 text-sm">
                       No users found
                     </td>
                   </tr>
@@ -556,8 +540,7 @@ export default function UsageSystem() {
                                   (user.projectsCount || 0) +
                                   (user.permitSearchesCount || 0) + (user.propertyVerificationsCount || 0) +
                                   (user.dualSignatureContractsCount || 0) +
-                                  (user.sharedEstimatesCount || 0) + (user.contractModificationsCount || 0) +
-                                  (user.emailsSentCount || 0) + (user.pdfsGeneratedCount || 0);
+                                  (user.contractModificationsCount || 0) + (user.pdfsGeneratedCount || 0);
                     
                     return (
                       <tr key={user.uid} className="border-b border-slate-800 hover:bg-slate-800/50">
@@ -588,14 +571,8 @@ export default function UsageSystem() {
                         <td className="py-2 px-3 text-center text-indigo-400 font-semibold text-sm">
                           {user.dualSignatureContractsCount || 0}
                         </td>
-                        <td className="py-2 px-3 text-center text-rose-400 font-semibold text-sm">
-                          {user.sharedEstimatesCount || 0}
-                        </td>
                         <td className="py-2 px-3 text-center text-violet-400 font-semibold text-sm">
                           {user.contractModificationsCount || 0}
-                        </td>
-                        <td className="py-2 px-3 text-center text-cyan-300 font-semibold text-sm">
-                          {user.emailsSentCount || 0}
                         </td>
                         <td className="py-2 px-3 text-center text-purple-300 font-semibold text-sm">
                           {user.pdfsGeneratedCount || 0}
