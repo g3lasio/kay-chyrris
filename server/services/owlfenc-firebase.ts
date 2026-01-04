@@ -108,7 +108,7 @@ export async function getOwlFencDashboardStats(): Promise<OwlFencDashboardStats>
     const [usersResult, clientsSnapshot, contractsSnapshot, invoicesSnapshot] = await Promise.all([
       auth.listUsers(1000),
       db.collection('clients').get(),
-      db.collection('contracts').get(),
+      db.collection('contracts').where('status', 'in', ['completed', 'both_signed']).get(),
       db.collection('invoices').get(),
     ]);
 
@@ -269,7 +269,7 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
     ] = await Promise.all([
       // Get all documents (filter in memory to avoid Firestore composite index requirement)
       db.collection('clients').get(),
-      db.collection('contracts').get(),
+      db.collection('contracts').where('status', 'in', ['completed', 'both_signed']).get(),
       db.collection('invoices').get(),
       db.collection('estimates').get(),
       db.collection('projects').get(),
@@ -416,7 +416,7 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
         pdfsSnapshot
       ] = await Promise.all([
         db.collection('clients').where('userId', '==', userId).get(),
-        db.collection('contracts').where('userId', '==', userId).get(),
+        db.collection('contracts').where('userId', '==', userId).where('status', 'in', ['completed', 'both_signed']).get(),
         db.collection('invoices').where('userId', '==', userId).get(),
         db.collection('estimates').where('firebaseUserId', '==', userId).get(),
         db.collection('projects').where('userId', '==', userId).get(),

@@ -658,3 +658,53 @@ Ensure ALL emails in Owl Fenc use `noreply@owlfenc.com` as sender with proper `r
 - [ ] Test payment link - verify from/reply-to (if service exists)
 - [ ] Verify client reply goes to contractor (NOT owner)
 - [ ] Verify no cross-contractor email leakage
+
+
+---
+
+## 🚨 CRITICAL: Fix Usage System Tracking Issues
+
+**Reported Issues:**
+1. ❌ Contracts showing 0 (should track only "completed" contracts, not drafts/progress/archived)
+2. ❌ Payments showing 0 (should track payment history from Firebase/PostgreSQL, not just Stripe)
+3. ❌ PDFs showing 0 (no tracking system exists yet - need to implement)
+4. ❌ Per-user table NOT respecting date filters (Day/Month/Year/Custom/All Time)
+
+---
+
+### Phase 1: Contracts Tracking Analysis ✅ COMPLETED
+- [x] Review Owl Fenc Firebase structure for contracts
+- [x] Understand contract states: drafts, progress, completed, archived, both_signed
+- [x] Find where "completed" contracts are stored (contracts collection)
+- [x] Review Legal Defense system (4 steps: 0-select type, 1-project/adjustments, 2-preview, 3-complete)
+- [x] Identify how Legal Defense counts contracts for Mero Patron plan (50 contract limit)
+- [x] Determine correct Firestore collection/query for completed contracts
+- [x] Update Chyrris KAI backend to query completed contracts only (status in ['completed', 'both_signed'])
+
+### Phase 2: Payments Tracking Analysis
+- [ ] Review Owl Fenc payment history structure
+- [ ] Understand payment types: link payments (Stripe), cash, check, Zelle
+- [ ] Determine if payment history is in Firebase or PostgreSQL
+- [ ] Find correct collection/table for payment history
+- [ ] Update Chyrris KAI backend to query all payment types (not just Stripe)
+- [ ] Test with real payment data
+
+### Phase 3: Date Filtering for Per-User Table ✅ ALREADY WORKING
+- [x] Review current per-user breakdown implementation
+- [x] Identify why date filters are not being applied to per-user data (FALSE ALARM - already working)
+- [x] Update getUserUsageBreakdown() to accept and apply date parameters (already done)
+- [x] Ensure date filters work for: Day, Month, Year, Custom Range, All Time (already implemented)
+- [x] Frontend already passes dateParams to getUserUsageBreakdown query
+
+### Phase 4: PDF Tracking System (LOW PRIORITY)
+- [ ] Design PDF tracking system for Owl Fenc
+- [ ] Determine where to track PDF generations (Firebase or PostgreSQL)
+- [ ] Plan implementation strategy
+- [ ] Document for future implementation
+
+### Phase 5: Testing & Verification
+- [ ] Test contracts count with real data
+- [ ] Test payments count with real data
+- [ ] Test date filtering on per-user table
+- [ ] Verify all counts match expected values
+- [ ] Update dashboard to show correct data
