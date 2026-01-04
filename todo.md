@@ -718,3 +718,11 @@ Ensure ALL emails in Owl Fenc use `noreply@owlfenc.com` as sender with proper `r
 - [x] Update total calculation to exclude removed columns
 - [x] Test Usage System after removal
 - [ ] Save checkpoint and push to GitHub
+
+## 🔥 CURRENT: Usage System Improvements
+- [x] Remove "Emails Sent (All Time)" card (unused, only Resend tracking needed)
+- [x] Fix "Total Operations" calculation to include all metrics (not just Clients + Contracts + Invoices)
+- [x] Verify and fix date range filtering functionality with Firebase queries
+- [x] Test all date range filters (day, month, year, custom)
+- [x] Verify Total Operations shows correct sum
+- [ ] Save checkpoint and push to GitHub

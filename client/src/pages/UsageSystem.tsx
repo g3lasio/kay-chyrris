@@ -34,10 +34,15 @@ export default function UsageSystem() {
     let endDate: string | undefined;
 
     switch (dateRange) {
-      case "day":
-        startDate = new Date(now.setHours(0, 0, 0, 0)).toISOString();
-        endDate = new Date(now.setHours(23, 59, 59, 999)).toISOString();
+      case "day": {
+        const dayStart = new Date(now);
+        dayStart.setHours(0, 0, 0, 0);
+        const dayEnd = new Date(now);
+        dayEnd.setHours(23, 59, 59, 999);
+        startDate = dayStart.toISOString();
+        endDate = dayEnd.toISOString();
         break;
+      }
       case "month":
         startDate = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
         endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999).toISOString();
@@ -311,39 +316,6 @@ export default function UsageSystem() {
 
         {/* Compact Global System Metrics */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-          {/* Emails Sent */}
-          <Card className="bg-slate-900 border-slate-800 p-4">
-            <div className="flex items-center justify-between mb-2">
-              <Mail className="w-6 h-6 text-cyan-500" />
-              {emailLimitPercentage >= 80 && (
-                <AlertTriangle className="w-4 h-4 text-amber-500" />
-              )}
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs text-slate-400">Emails Sent ({getDateRangeLabel()})</p>
-              <p className="text-2xl font-bold text-white">
-                {dateRange === "day" ? systemUsage?.emailsSentToday || 0 : (systemUsage as any)?.emailsSentMonth || 0}
-                {dateRange === "day" && <span className="text-sm text-slate-400"> / 500</span>}
-              </p>
-              {dateRange === "day" && (
-                <>
-                  <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                    <div 
-                      className={`h-full transition-all ${
-                        emailLimitPercentage >= 95 ? 'bg-red-500' :
-                        emailLimitPercentage >= 80 ? 'bg-amber-500' : 'bg-cyan-500'
-                      }`}
-                      style={{ width: `${Math.min(emailLimitPercentage, 100)}%` }}
-                    />
-                  </div>
-                  <p className="text-xs text-slate-500">
-                    {emailLimitPercentage.toFixed(1)}% of daily limit
-                  </p>
-                </>
-              )}
-            </div>
-          </Card>
-
           {/* Resend Email Usage (with alerts) */}
           <Card className={`border-slate-800 p-4 ${
             resendUsage?.data?.isCritical ? 'bg-red-900/20 border-red-500' :
@@ -399,10 +371,16 @@ export default function UsageSystem() {
               <p className="text-2xl font-bold text-white">
                 {(systemUsage?.totalClients || 0) + 
                  (systemUsage?.totalContracts || 0) + 
-                 (systemUsage?.totalInvoices || 0)}
+                 (systemUsage?.totalInvoices || 0) +
+                 (systemUsage?.totalEstimates || 0) +
+                 (systemUsage?.totalProjects || 0) +
+                 (systemUsage?.totalPermitSearches || 0) +
+                 (systemUsage?.totalPropertyVerifications || 0) +
+                 (systemUsage?.totalDualSignatureContracts || 0) +
+                 (systemUsage?.totalContractModifications || 0)}
               </p>
               <p className="text-xs text-slate-500">
-                Clients + Contracts + Invoices
+                All tracked operations
               </p>
             </div>
           </Card>

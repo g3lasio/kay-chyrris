@@ -248,11 +248,11 @@ export const appRouter = router({
       .input(z.object({
         startDate: z.string().optional(),
         endDate: z.string().optional(),
-      }))
+      }).optional())
       .query(async ({ input }) => {
       try {
         const { getSystemUsageMetrics } = await import('./services/owlfenc-firebase');
-        const metrics = await getSystemUsageMetrics(input.startDate, input.endDate);
+        const metrics = await getSystemUsageMetrics(input?.startDate, input?.endDate);
         return metrics;
       } catch (error: any) {
         console.error('[Router] Error fetching system usage:', error);
@@ -283,11 +283,11 @@ export const appRouter = router({
       .input(z.object({
         startDate: z.string().optional(),
         endDate: z.string().optional(),
-      }))
+      }).optional())
       .query(async ({ input }) => {
       try {
         const { getUserUsageBreakdown } = await import('./services/owlfenc-firebase');
-        const breakdown = await getUserUsageBreakdown(input.startDate, input.endDate);
+        const breakdown = await getUserUsageBreakdown(input?.startDate, input?.endDate);
         return breakdown;
       } catch (error: any) {
         console.error('[Router] Error fetching user usage breakdown:', error);
