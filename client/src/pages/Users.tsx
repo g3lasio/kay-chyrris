@@ -31,10 +31,12 @@ export default function Users() {
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [confirmAction, setConfirmAction] = useState<{
-    type: 'disable' | 'enable' | 'delete' | 'reset';
+    type: 'disable' | 'enable' | 'delete' | 'reset' | 'changeEmail';
     title: string;
     description: string;
   } | null>(null);
+  const [showChangeEmailDialog, setShowChangeEmailDialog] = useState(false);
+  const [newEmail, setNewEmail] = useState('');
 
   const utils = trpc.useUtils();
 
@@ -85,6 +87,19 @@ export default function Users() {
     onSuccess: () => {
       toast.success('Password reset email sent');
       setShowConfirmDialog(false);
+    },
+    onError: (error) => {
+      toast.error(`Error: ${error.message}`);
+    },
+  });
+
+  const updateEmailMutation = trpc.owlfenc.updateEmail.useMutation({
+    onSuccess: () => {
+      toast.success('Email updated successfully. User needs to verify new email.');
+      utils.owlfenc.getUsers.invalidate();
+      setShowChangeEmailDialog(false);
+      setShowDetailModal(false);
+      setNewEmail('');
     },
     onError: (error) => {
       toast.error(`Error: ${error.message}`);
@@ -158,6 +173,21 @@ export default function Users() {
       description: `Send a password reset email to ${selectedUser.email}?`,
     });
     setShowConfirmDialog(true);
+  };
+
+  const handleChangeEmail = () => {
+    if (!selectedUser) return;
+    setNewEmail(selectedUser.email || '');
+    setShowChangeEmailDialog(true);
+  };
+
+  const executeChangeEmail = () => {
+    if (!selectedUser || !newEmail) return;
+    if (newEmail === selectedUser.email) {
+      toast.error('New email must be different from current email');
+      return;
+    }
+    updateEmailMutation.mutate({ uid: selectedUser.uid, newEmail });
   };
 
   const executeConfirmedAction = () => {
@@ -500,9 +530,17 @@ export default function Users() {
                     Reset Password
                   </Button>
                   <Button
+                    onClick={handleChangeEmail}
+                    variant="outline"
+                    className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                  >
+                    <Key className="h-4 w-4 mr-2" />
+                    Change Email
+                  </Button>
+                  <Button
                     onClick={handleDeleteUser}
                     variant="outline"
-                    className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                    className="border-red-500/30 text-red-400 hover:bg-red-500/10 col-span-2"
                   >
                     <Trash2 className="h-4 w-4 mr-2" />
                     Delete User
@@ -551,6 +589,60 @@ export default function Users() {
               }
             >
               Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Change Email Dialog */}
+      <Dialog open={showChangeEmailDialog} onOpenChange={setShowChangeEmailDialog}>
+        <DialogContent className="bg-slate-900 border-slate-800 text-white">
+          <DialogHeader>
+            <DialogTitle className="text-white">Change User Email</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Update the email address for {selectedUser?.displayName || selectedUser?.email}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div>
+              <label className="text-sm text-slate-400 mb-2 block">Current Email</label>
+              <Input
+                value={selectedUser?.email || ''}
+                disabled
+                className="bg-slate-800 border-slate-700 text-slate-400"
+              />
+            </div>
+            <div>
+              <label className="text-sm text-slate-400 mb-2 block">New Email</label>
+              <Input
+                type="email"
+                value={newEmail}
+                onChange={(e) => setNewEmail(e.target.value)}
+                placeholder="Enter new email address"
+                className="bg-slate-800 border-slate-700 text-white"
+              />
+            </div>
+            <p className="text-xs text-amber-400">
+              ⚠️ The user will need to verify the new email address
+            </p>
+          </div>
+          <DialogFooter>
+            <Button 
+              variant="outline" 
+              onClick={() => {
+                setShowChangeEmailDialog(false);
+                setNewEmail('');
+              }}
+              className="border-slate-700 text-slate-300"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={executeChangeEmail}
+              disabled={!newEmail || newEmail === selectedUser?.email}
+              className="bg-purple-600 hover:bg-purple-700 text-white"
+            >
+              Update Email
             </Button>
           </DialogFooter>
         </DialogContent>
