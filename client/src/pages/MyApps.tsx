@@ -13,7 +13,7 @@ export default function MyApps() {
       description: "Construction Management Platform",
       icon: Hammer,
       color: "from-orange-500 to-amber-600",
-      route: "/apps/owlfenc",
+      route: "/owlfenc",
       stats: {
         users: "7 users",
         clients: "996 clients",

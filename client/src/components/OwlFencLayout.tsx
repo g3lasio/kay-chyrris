@@ -1,4 +1,3 @@
-import { trpc } from '@/lib/trpc';
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -21,22 +20,25 @@ import {
 } from "@/components/ui/sidebar";
 
 import { useIsMobile } from "@/hooks/useMobile";
-import { LayoutDashboard, LogOut, PanelLeft, Grid } from "lucide-react";
+import { LayoutDashboard, LogOut, PanelLeft, Users, DollarSign, Megaphone, Activity, ArrowLeft } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
-import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
 import { Button } from "./ui/button";
 
 const menuItems = [
-  { icon: Grid, label: "My Apps", path: "/my-apps" },
+  { icon: LayoutDashboard, label: "Dashboard", path: "/owlfenc" },
+  { icon: Users, label: "Users", path: "/owlfenc/users" },
+  { icon: DollarSign, label: "Payments", path: "/owlfenc/payments" },
+  { icon: Activity, label: "Usage System", path: "/owlfenc/usage-system" },
+  { icon: Megaphone, label: "Announcements", path: "/owlfenc/announcements" },
 ];
 
-const SIDEBAR_WIDTH_KEY = "sidebar-width";
+const SIDEBAR_WIDTH_KEY = "owlfenc-sidebar-width";
 const DEFAULT_WIDTH = 280;
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
 
-export default function DashboardLayout({
+export default function OwlFencLayout({
   children,
 }: {
   children: React.ReactNode;
@@ -45,22 +47,11 @@ export default function DashboardLayout({
     const saved = localStorage.getItem(SIDEBAR_WIDTH_KEY);
     return saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
   });
-  // AUTHENTICATION DISABLED TEMPORARILY
   const user = { name: 'Admin', email: 'admin@chyrris.com', role: 'super_admin' };
-  const loading = false;
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebarWidth.toString());
   }, [sidebarWidth]);
-
-  // if (loading) {
-  //   return <DashboardLayoutSkeleton />
-  // }
-
-  // if (!user) {
-  //   window.location.href = '/login';
-  //   return null;
-  // }
 
   return (
     <SidebarProvider
@@ -70,27 +61,25 @@ export default function DashboardLayout({
         } as CSSProperties
       }
     >
-      <DashboardLayoutContent setSidebarWidth={setSidebarWidth}>
+      <OwlFencLayoutContent setSidebarWidth={setSidebarWidth}>
         {children}
-      </DashboardLayoutContent>
+      </OwlFencLayoutContent>
     </SidebarProvider>
   );
 }
 
-type DashboardLayoutContentProps = {
+type OwlFencLayoutContentProps = {
   children: React.ReactNode;
   setSidebarWidth: (width: number) => void;
 };
 
-function DashboardLayoutContent({
+function OwlFencLayoutContent({
   children,
   setSidebarWidth,
-}: DashboardLayoutContentProps) {
-  // AUTHENTICATION COMPLETELY DISABLED - No Manus dependencies
+}: OwlFencLayoutContentProps) {
   const user = { name: 'Admin', email: 'admin@chyrris.com', role: 'super_admin' };
   
   const logout = async () => {
-    // Authentication disabled - no logout functionality
     console.log('[Auth] Logout disabled - no authentication system');
   };
   const [location, setLocation] = useLocation();
@@ -157,7 +146,7 @@ function DashboardLayoutContent({
               {!isCollapsed ? (
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="font-semibold tracking-tight truncate">
-                    Navigation
+                    Owl Fenc
                   </span>
                 </div>
               ) : null}
@@ -165,6 +154,19 @@ function DashboardLayoutContent({
           </SidebarHeader>
 
           <SidebarContent className="gap-0">
+            {/* Back to My Apps Button */}
+            <div className="px-2 py-2 border-b">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => setLocation("/my-apps")}
+              >
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                {!isCollapsed && "Back to My Apps"}
+              </Button>
+            </div>
+
             <SidebarMenu className="px-2 py-1">
               {menuItems.map(item => {
                 const isActive = location === item.path;

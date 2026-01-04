@@ -13,6 +13,7 @@ import Payments from "./pages/Payments";
 import Announcements from "./pages/Announcements";
 import UsageSystem from "./pages/UsageSystem";
 import DashboardLayout from "./components/DashboardLayout";
+import OwlFencLayout from "./components/OwlFencLayout";
 
 function Router() {
   return (
@@ -35,34 +36,34 @@ function Router() {
       </Route>
       
       {/* Owl Fenc App Routes */}
-      <Route path="/apps/owlfenc">
-        <DashboardLayout>
+      <Route path="/owlfenc">
+        <OwlFencLayout>
           <OwlFencDashboard />
-        </DashboardLayout>
+        </OwlFencLayout>
       </Route>
       
-      <Route path="/users">
-        <DashboardLayout>
+      <Route path="/owlfenc/users">
+        <OwlFencLayout>
           <Users />
-        </DashboardLayout>
+        </OwlFencLayout>
       </Route>
       
-      <Route path="/payments">
-        <DashboardLayout>
+      <Route path="/owlfenc/payments">
+        <OwlFencLayout>
           <Payments />
-        </DashboardLayout>
+        </OwlFencLayout>
       </Route>
       
-      <Route path="/announcements">
-        <DashboardLayout>
+      <Route path="/owlfenc/announcements">
+        <OwlFencLayout>
           <Announcements />
-        </DashboardLayout>
+        </OwlFencLayout>
       </Route>
       
-      <Route path="/usage-system">
-        <DashboardLayout>
+      <Route path="/owlfenc/usage-system">
+        <OwlFencLayout>
           <UsageSystem />
-        </DashboardLayout>
+        </OwlFencLayout>
       </Route>
       
       {/* LeadPrime App Routes - Coming soon */}

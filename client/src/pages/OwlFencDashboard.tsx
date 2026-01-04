@@ -14,35 +14,35 @@ import {
 
 export default function OwlFencDashboard() {
   const [, setLocation] = useLocation();
-  const { data: dashboardStats, isLoading } = trpc.owlfenc.getDashboardStats.useQuery();
+  const { data: dashboardStats, isLoading } = trpc.owlfenc.getStats.useQuery();
 
   const quickActions = [
     {
       title: "Manage Users",
       description: "View and manage all users",
       icon: Users,
-      route: "/users",
+      route: "/owlfenc/users",
       color: "from-blue-500 to-cyan-600"
     },
     {
       title: "Payments",
       description: "Track subscriptions & revenue",
       icon: DollarSign,
-      route: "/payments",
+      route: "/owlfenc/payments",
       color: "from-green-500 to-emerald-600"
     },
     {
       title: "Usage System",
       description: "Monitor system usage metrics",
       icon: Activity,
-      route: "/usage-system",
+      route: "/owlfenc/usage-system",
       color: "from-purple-500 to-pink-600"
     },
     {
       title: "Announcements",
       description: "Send notifications to users",
       icon: Megaphone,
-      route: "/announcements",
+      route: "/owlfenc/announcements",
       color: "from-orange-500 to-red-600"
     }
   ];
@@ -78,7 +78,7 @@ export default function OwlFencDashboard() {
             <Users className="h-5 w-5 text-blue-500" />
           </div>
           <p className="text-3xl font-bold">
-            {isLoading ? "..." : dashboardStats?.totalUsers || 0}
+            {isLoading ? "..." : dashboardStats?.data?.totalUsers || 0}
           </p>
           <p className="text-xs text-muted-foreground mt-1">All registered users</p>
         </Card>
@@ -89,7 +89,7 @@ export default function OwlFencDashboard() {
             <Users className="h-5 w-5 text-green-500" />
           </div>
           <p className="text-3xl font-bold">
-            {isLoading ? "..." : dashboardStats?.totalClients || 0}
+            {isLoading ? "..." : dashboardStats?.data?.totalClients || 0}
           </p>
           <p className="text-xs text-muted-foreground mt-1">Clients in database</p>
         </Card>
@@ -100,7 +100,7 @@ export default function OwlFencDashboard() {
             <FileText className="h-5 w-5 text-purple-500" />
           </div>
           <p className="text-3xl font-bold">
-            {isLoading ? "..." : dashboardStats?.totalContracts || 0}
+            {isLoading ? "..." : dashboardStats?.data?.totalContracts || 0}
           </p>
           <p className="text-xs text-muted-foreground mt-1">Completed contracts</p>
         </Card>
@@ -111,7 +111,7 @@ export default function OwlFencDashboard() {
             <DollarSign className="h-5 w-5 text-orange-500" />
           </div>
           <p className="text-3xl font-bold">
-            {isLoading ? "..." : dashboardStats?.totalInvoices || 0}
+            {isLoading ? "..." : dashboardStats?.data?.totalInvoices || 0}
           </p>
           <p className="text-xs text-muted-foreground mt-1">Total invoices</p>
         </Card>
@@ -129,7 +129,7 @@ export default function OwlFencDashboard() {
               <span className="text-sm font-medium">Total Clients</span>
               <div className="flex items-center gap-2">
                 <span className="text-sm font-bold">
-                  {dashboardStats?.totalClients || 0}
+                  {dashboardStats?.data?.totalClients || 0}
                 </span>
                 <span className="text-xs text-muted-foreground">100%</span>
               </div>
@@ -144,11 +144,11 @@ export default function OwlFencDashboard() {
               <span className="text-sm font-medium">Contracts</span>
               <div className="flex items-center gap-2">
                 <span className="text-sm font-bold">
-                  {dashboardStats?.totalContracts || 0}
+                  {dashboardStats?.data?.totalContracts || 0}
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  {dashboardStats?.totalClients
-                    ? Math.round(((dashboardStats?.totalContracts || 0) / dashboardStats.totalClients) * 100)
+                  {dashboardStats?.data?.totalClients
+                    ? Math.round(((dashboardStats?.data?.totalContracts || 0) / dashboardStats.data.totalClients) * 100)
                     : 0}%
                 </span>
               </div>
@@ -157,8 +157,8 @@ export default function OwlFencDashboard() {
               <div
                 className="h-full bg-gradient-to-r from-green-500 to-emerald-500"
                 style={{
-                  width: dashboardStats?.totalClients
-                    ? `${Math.min(((dashboardStats?.totalContracts || 0) / dashboardStats.totalClients) * 100, 100)}%`
+                  width: dashboardStats?.data?.totalClients
+                    ? `${Math.min(((dashboardStats?.data?.totalContracts || 0) / dashboardStats.data.totalClients) * 100, 100)}%`
                     : "0%"
                 }}
               />
@@ -170,11 +170,11 @@ export default function OwlFencDashboard() {
               <span className="text-sm font-medium">Invoices</span>
               <div className="flex items-center gap-2">
                 <span className="text-sm font-bold">
-                  {dashboardStats?.totalInvoices || 0}
+                  {dashboardStats?.data?.totalInvoices || 0}
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  {dashboardStats?.totalClients
-                    ? Math.round(((dashboardStats?.totalInvoices || 0) / dashboardStats.totalClients) * 100)
+                  {dashboardStats?.data?.totalClients
+                    ? Math.round(((dashboardStats?.data?.totalInvoices || 0) / dashboardStats.data.totalClients) * 100)
                     : 0}%
                 </span>
               </div>
@@ -183,8 +183,8 @@ export default function OwlFencDashboard() {
               <div
                 className="h-full bg-gradient-to-r from-purple-500 to-pink-500"
                 style={{
-                  width: dashboardStats?.totalClients
-                    ? `${Math.min(((dashboardStats?.totalInvoices || 0) / dashboardStats.totalClients) * 100, 100)}%`
+                  width: dashboardStats?.data?.totalClients
+                    ? `${Math.min(((dashboardStats?.data?.totalInvoices || 0) / dashboardStats.data.totalClients) * 100, 100)}%`
                     : "0%"
                 }}
               />
