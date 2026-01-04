@@ -831,3 +831,25 @@ Ensure ALL emails in Owl Fenc use `noreply@owlfenc.com` as sender with proper `r
 - ✅ Data isolation verified - Owl Fenc data only in Owl Fenc app
 - ✅ Navigation flow tested and working perfectly
 - ✅ Ready for LeadPrime app encapsulation (future work)
+
+---
+
+## 🤖 AI Message Enhancement for Announcements - NEW FEATURE
+
+### Feature Requirements
+- [x] Create Anthropic API integration service
+- [x] Add "Enhance with AI" button in Announcements message field
+- [x] Implement AI rewriting to professional tone
+- [x] Translate message to English automatically
+- [x] Add loading state during AI processing
+- [x] Handle errors gracefully with user feedback
+- [ ] Configure ANTHROPIC_API_KEY in Replit secrets (user will do this)
+
+### Technical Implementation
+- [x] Install @anthropic-ai/sdk package
+- [x] Create server/services/anthropic-service.ts
+- [x] Add tRPC endpoint: announcements.enhanceMessage
+- [x] Update Announcements.tsx with AI enhancement UI
+- [x] Add prompt engineering for professional tone
+- [ ] Test with various input texts (Spanish, English, informal) - requires API key
+- [x] Push changes to GitHub for Replit deployment

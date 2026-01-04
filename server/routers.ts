@@ -360,6 +360,16 @@ export const appRouter = router({
       .query(async () => {
         return await getCampaignHistory(50);
       }),
+    
+    // AI-powered message enhancement
+    enhanceMessage: protectedProcedure
+      .input(z.object({
+        message: z.string().min(1, 'Message cannot be empty'),
+      }))
+      .mutation(async ({ input }) => {
+        const { enhanceMessageWithAI } = await import('./services/anthropic-service');
+        return await enhanceMessageWithAI(input.message);
+      }),
   }),
 });
 

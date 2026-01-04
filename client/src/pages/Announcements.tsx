@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Megaphone, Send, Users, Loader2, CheckCircle2, XCircle } from "lucide-react";
+import { Megaphone, Send, Users, Loader2, CheckCircle2, XCircle, Sparkles } from "lucide-react";
 
 type CampaignType = 'announcement' | 'event' | 'update' | 'offer';
 type TargetAudience = 'all' | 'free' | 'patron' | 'master';
@@ -17,6 +17,7 @@ export default function Announcements() {
   const [message, setMessage] = useState("");
   const [type, setType] = useState<CampaignType>("announcement");
   const [targetAudience, setTargetAudience] = useState<TargetAudience>("all");
+  const [isEnhancing, setIsEnhancing] = useState(false);
 
   const sendCampaignMutation = trpc.notifications.sendCampaign.useMutation({
     onSuccess: (data) => {
@@ -36,6 +37,32 @@ export default function Announcements() {
   });
 
   const campaignsQuery = trpc.notifications.getCampaigns.useQuery();
+
+  const enhanceMessageMutation = trpc.notifications.enhanceMessage.useMutation({
+    onSuccess: (data) => {
+      setIsEnhancing(false);
+      if (data.success && data.enhancedMessage) {
+        setMessage(data.enhancedMessage);
+        toast.success("Message enhanced with AI! ✨");
+      } else {
+        toast.error(data.error || "Failed to enhance message");
+      }
+    },
+    onError: (error) => {
+      setIsEnhancing(false);
+      toast.error(`AI Enhancement Error: ${error.message}`);
+    },
+  });
+
+  const handleEnhanceWithAI = () => {
+    if (!message.trim()) {
+      toast.error("Please write a message first");
+      return;
+    }
+
+    setIsEnhancing(true);
+    enhanceMessageMutation.mutate({ message });
+  };
 
   const handleSend = () => {
     if (!title.trim() || !message.trim()) {
@@ -109,15 +136,40 @@ export default function Announcements() {
 
             {/* Message */}
             <div className="space-y-2">
-              <Label htmlFor="message">Message</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="message">Message</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleEnhanceWithAI}
+                  disabled={isEnhancing || !message.trim()}
+                  className="h-8 gap-2 bg-gradient-to-r from-purple-500/10 to-pink-500/10 border-purple-500/30 hover:border-purple-500/50 text-purple-400 hover:text-purple-300"
+                >
+                  {isEnhancing ? (
+                    <>
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Enhancing...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-3 h-3" />
+                      Enhance with AI
+                    </>
+                  )}
+                </Button>
+              </div>
               <Textarea
                 id="message"
-                placeholder="Write your announcement message here..."
+                placeholder="Write your announcement message here... (Try the AI enhancement button above!)" 
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 rows={6}
                 className="futuristic-input resize-none"
               />
+              <p className="text-xs text-muted-foreground">
+                💡 Tip: Write your message in any language, then click "Enhance with AI" to make it professional and translate to English
+              </p>
             </div>
 
             {/* Type */}
