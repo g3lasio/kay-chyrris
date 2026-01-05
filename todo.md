@@ -872,3 +872,20 @@ Ensure ALL emails in Owl Fenc use `noreply@owlfenc.com` as sender with proper `r
 - [x] Implement futuristic design with gradients and animations
 - [x] Show key metrics at a glance without scrolling
 - [x] Use grid layout for efficient space usage (3-column layout)
+
+
+---
+
+## 🚨 CRITICAL BUGS - URGENT FIX NEEDED
+
+### Problem 1: Missing admin_sessions Table
+- [x] Table 'test.admin_sessions' doesn't exist in database
+- [x] Causing authentication failures on every request
+- [x] Blocking all admin functionality
+- [x] Need to run database migration
+
+### Problem 2: Announcements Service Not Working
+- [x] Cannot send announcements to users - Changed to publicProcedure
+- [x] Need to verify Resend API configuration - Config looks correct
+- [x] Check database connection for user emails - Tables created
+- [ ] Test announcement sending functionality - Ready to test

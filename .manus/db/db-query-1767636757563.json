@@ -1,0 +1,9 @@
+{
+  "query": "INSERT INTO `applications` (`name`, `slug`, `description`, `database_url`, `color`) VALUES\n('Owl Fenc', 'owlfenc', 'AI-Powered Construction Management Platform', 'postgresql://neondb_owner:npg_ZT0PokJOevI4@ep-patient-pond-a4sbimqt.us-east-1.aws.neon.tech/neondb?sslmode=require', '#6366f1'),\n('LeadPrime', 'leadprime', 'Mini CRM for Construction Contractors', 'postgresql://neondb_owner:npg_O1XRz3cblmEG@ep-steep-breeze-afkoir6b-pooler.c-2.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require', '#10b981')\nON DUPLICATE KEY UPDATE name=name",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3mqi4o25ricoykc.c61e951fda9d --database d3rSuxiWgqVtmxU93SmqxC --execute INSERT INTO `applications` (`name`, `slug`, `description`, `database_url`, `color`) VALUES\n('Owl Fenc', 'owlfenc', 'AI-Powered Construction Management Platform', 'postgresql://neondb_owner:npg_ZT0PokJOevI4@ep-patient-pond-a4sbimqt.us-east-1.aws.neon.tech/neondb?sslmode=require', '#6366f1'),\n('LeadPrime', 'leadprime', 'Mini CRM for Construction Contractors', 'postgresql://neondb_owner:npg_O1XRz3cblmEG@ep-steep-breeze-afkoir6b-pooler.c-2.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require', '#10b981')\nON DUPLICATE KEY UPDATE name=name",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 119
+}

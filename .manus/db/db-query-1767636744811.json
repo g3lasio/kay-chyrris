@@ -1,0 +1,9 @@
+{
+  "query": "CREATE TABLE IF NOT EXISTS `notification_campaigns` (\n  `id` int AUTO_INCREMENT NOT NULL,\n  `application_id` int NOT NULL,\n  `name` varchar(255) NOT NULL,\n  `subject` varchar(255) NOT NULL,\n  `message` text NOT NULL,\n  `target_segment` json,\n  `status` enum('draft','scheduled','sending','sent','failed') NOT NULL DEFAULT 'draft',\n  `scheduled_at` timestamp,\n  `sent_at` timestamp,\n  `total_recipients` int NOT NULL DEFAULT 0,\n  `successful_sends` int NOT NULL DEFAULT 0,\n  `failed_sends` int NOT NULL DEFAULT 0,\n  `created_by` int NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT (now()),\n  `updated_at` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,\n  CONSTRAINT `notification_campaigns_id` PRIMARY KEY(`id`)\n)",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3mqi4o25ricoykc.c61e951fda9d --database d3rSuxiWgqVtmxU93SmqxC --execute CREATE TABLE IF NOT EXISTS `notification_campaigns` (\n  `id` int AUTO_INCREMENT NOT NULL,\n  `application_id` int NOT NULL,\n  `name` varchar(255) NOT NULL,\n  `subject` varchar(255) NOT NULL,\n  `message` text NOT NULL,\n  `target_segment` json,\n  `status` enum('draft','scheduled','sending','sent','failed') NOT NULL DEFAULT 'draft',\n  `scheduled_at` timestamp,\n  `sent_at` timestamp,\n  `total_recipients` int NOT NULL DEFAULT 0,\n  `successful_sends` int NOT NULL DEFAULT 0,\n  `failed_sends` int NOT NULL DEFAULT 0,\n  `created_by` int NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT (now()),\n  `updated_at` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,\n  CONSTRAINT `notification_campaigns_id` PRIMARY KEY(`id`)\n)",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 53
+}

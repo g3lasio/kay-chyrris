@@ -1,0 +1,9 @@
+{
+  "query": "CREATE TABLE IF NOT EXISTS `applications` (\n  `id` int AUTO_INCREMENT NOT NULL,\n  `name` varchar(100) NOT NULL,\n  `slug` varchar(50) NOT NULL,\n  `description` text,\n  `database_url` text NOT NULL,\n  `database_type` varchar(50) NOT NULL DEFAULT 'postgresql',\n  `status` enum('active','inactive','maintenance') NOT NULL DEFAULT 'active',\n  `icon_url` text,\n  `color` varchar(7),\n  `created_at` timestamp NOT NULL DEFAULT (now()),\n  `updated_at` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,\n  CONSTRAINT `applications_id` PRIMARY KEY(`id`),\n  CONSTRAINT `applications_slug_unique` UNIQUE(`slug`)\n)",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3mqi4o25ricoykc.c61e951fda9d --database d3rSuxiWgqVtmxU93SmqxC --execute CREATE TABLE IF NOT EXISTS `applications` (\n  `id` int AUTO_INCREMENT NOT NULL,\n  `name` varchar(100) NOT NULL,\n  `slug` varchar(50) NOT NULL,\n  `description` text,\n  `database_url` text NOT NULL,\n  `database_type` varchar(50) NOT NULL DEFAULT 'postgresql',\n  `status` enum('active','inactive','maintenance') NOT NULL DEFAULT 'active',\n  `icon_url` text,\n  `color` varchar(7),\n  `created_at` timestamp NOT NULL DEFAULT (now()),\n  `updated_at` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,\n  CONSTRAINT `applications_id` PRIMARY KEY(`id`),\n  CONSTRAINT `applications_slug_unique` UNIQUE(`slug`)\n)",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 54
+}

@@ -344,7 +344,7 @@ export const appRouter = router({
 
   // Mass notifications system
   notifications: router({
-    sendCampaign: protectedProcedure
+    sendCampaign: publicProcedure
       .input(z.object({
         title: z.string(),
         message: z.string(),
@@ -356,13 +356,13 @@ export const appRouter = router({
         return await createAndSendCampaign(input);
       }),
     
-    getCampaigns: protectedProcedure
+    getCampaigns: publicProcedure
       .query(async () => {
         return await getCampaignHistory(50);
       }),
     
     // AI-powered message enhancement
-    enhanceMessage: protectedProcedure
+    enhanceMessage: publicProcedure
       .input(z.object({
         message: z.string().min(1, 'Message cannot be empty'),
       }))

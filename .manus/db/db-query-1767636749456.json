@@ -1,0 +1,9 @@
+{
+  "query": "CREATE TABLE IF NOT EXISTS `campaign_recipients` (\n  `id` int AUTO_INCREMENT NOT NULL,\n  `campaign_id` int NOT NULL,\n  `user_email` varchar(255) NOT NULL,\n  `user_id` varchar(100),\n  `status` enum('pending','sent','failed','bounced') NOT NULL DEFAULT 'pending',\n  `error_message` text,\n  `sent_at` timestamp,\n  `created_at` timestamp NOT NULL DEFAULT (now()),\n  CONSTRAINT `campaign_recipients_id` PRIMARY KEY(`id`)\n)",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3mqi4o25ricoykc.c61e951fda9d --database d3rSuxiWgqVtmxU93SmqxC --execute CREATE TABLE IF NOT EXISTS `campaign_recipients` (\n  `id` int AUTO_INCREMENT NOT NULL,\n  `campaign_id` int NOT NULL,\n  `user_email` varchar(255) NOT NULL,\n  `user_id` varchar(100),\n  `status` enum('pending','sent','failed','bounced') NOT NULL DEFAULT 'pending',\n  `error_message` text,\n  `sent_at` timestamp,\n  `created_at` timestamp NOT NULL DEFAULT (now()),\n  CONSTRAINT `campaign_recipients_id` PRIMARY KEY(`id`)\n)",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 56
+}
