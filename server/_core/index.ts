@@ -44,6 +44,23 @@ async function startServer() {
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  
+  // Health check endpoint for Cloud Run / deployment
+  app.get("/health", (_req, res) => {
+    res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+  
+  // Root health check for Cloud Run (responds immediately without parameters)
+  app.get("/", (req, res, next) => {
+    // If it's a health check (no accept header for HTML), respond with 200
+    const acceptHeader = req.headers.accept || "";
+    if (!acceptHeader.includes("text/html")) {
+      return res.status(200).json({ status: "ok" });
+    }
+    // Otherwise, let Vite/static serve handle it
+    next();
+  });
+  
   // OAuth disabled - no Manus dependencies
   // registerOAuthRoutes(app);
   // tRPC API
@@ -61,7 +78,7 @@ async function startServer() {
     serveStatic(app);
   }
 
-  const preferredPort = parseInt(process.env.PORT || "3000");
+  const preferredPort = parseInt(process.env.PORT || "5000");
   const port = await findAvailablePort(preferredPort);
 
   if (port !== preferredPort) {
