@@ -1,4 +1,4 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, decimal, boolean, json } from "drizzle-orm/mysql-core";
+import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, decimal, boolean, json, index, time } from "drizzle-orm/mysql-core";
 
 /**
  * CHYRRIS KAI - Multi-Application Admin Control Platform
@@ -196,6 +196,44 @@ export const dailyMetrics = mysqlTable("daily_metrics", {
 });
 
 // ================================================
+// IN-APP PUSH NOTIFICATIONS
+// ================================================
+
+export const inAppNotifications = mysqlTable("in_app_notifications", {
+  id: int("id").autoincrement().primaryKey(),
+  applicationId: int("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
+  userId: varchar("user_id", { length: 100 }), // Null = broadcast to all
+  title: varchar("title", { length: 255 }).notNull(),
+  message: text("message").notNull(),
+  priority: mysqlEnum("priority", ["info", "warning", "important", "critical"]).default("info").notNull(),
+  category: varchar("category", { length: 50 }), // 'payment', 'contract', 'user', 'system', 'lead', etc.
+  actionUrl: text("action_url"),
+  actionLabel: varchar("action_label", { length: 50 }),
+  icon: varchar("icon", { length: 50 }),
+  read: boolean("read").default(false).notNull(),
+  readAt: timestamp("read_at"),
+  archived: boolean("archived").default(false).notNull(),
+  expiresAt: timestamp("expires_at"),
+  metadata: json("metadata").$type<Record<string, any>>(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  userUnreadIdx: index("idx_user_unread").on(table.userId, table.read, table.createdAt),
+  appPriorityIdx: index("idx_app_priority").on(table.applicationId, table.priority, table.createdAt),
+}));
+
+export const notificationPreferences = mysqlTable("notification_preferences", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: varchar("user_id", { length: 100 }).notNull().unique(),
+  applicationId: int("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
+  enabled: boolean("enabled").default(true).notNull(),
+  minPriority: mysqlEnum("min_priority", ["info", "warning", "important", "critical"]).default("info"),
+  categoriesEnabled: json("categories_enabled").$type<string[]>(),
+  quietHoursStart: time("quiet_hours_start"),
+  quietHoursEnd: time("quiet_hours_end"),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+});
+
+// ================================================
 // TYPE EXPORTS
 // ================================================
 
@@ -234,6 +272,12 @@ export type InsertStripeCustomerCache = typeof stripeCustomersCache.$inferInsert
 
 export type DailyMetric = typeof dailyMetrics.$inferSelect;
 export type InsertDailyMetric = typeof dailyMetrics.$inferInsert;
+
+export type InAppNotification = typeof inAppNotifications.$inferSelect;
+export type InsertInAppNotification = typeof inAppNotifications.$inferInsert;
+
+export type NotificationPreference = typeof notificationPreferences.$inferSelect;
+export type InsertNotificationPreference = typeof notificationPreferences.$inferInsert;
 
 // Legacy exports for compatibility with auth system
 export const users = adminUsers;

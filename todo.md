@@ -889,3 +889,43 @@ Ensure ALL emails in Owl Fenc use `noreply@owlfenc.com` as sender with proper `r
 - [x] Need to verify Resend API configuration - Config looks correct
 - [x] Check database connection for user emails - Tables created
 - [ ] Test announcement sending functionality - Ready to test
+
+
+---
+
+## 🔔 Push Notifications System Implementation
+
+### Phase 1: Database & Backend Service
+- [x] Create `in_app_notifications` table (schema updated)
+- [x] Create `notification_preferences` table (schema updated)
+- [ ] Create notification service in `server/services/notifications-push.ts`
+- [ ] Add helper functions (create, markAsRead, getAll, archive)
+
+### Phase 2: tRPC Endpoints
+- [ ] Add `notifications.getAll` endpoint
+- [ ] Add `notifications.markAsRead` endpoint
+- [ ] Add `notifications.markAllAsRead` endpoint
+- [ ] Add `notifications.archive` endpoint
+- [ ] Add `notifications.create` endpoint (admin)
+- [ ] Add `notifications.getUnreadCount` endpoint
+
+### Phase 3: UI Components
+- [ ] Create `NotificationBell` component with badge
+- [ ] Create `NotificationDropdown` with list
+- [ ] Create `NotificationToast` with priority styles
+- [ ] Create `NotificationCenter` page with filters
+- [ ] Add notification bell to main header
+
+### Phase 4: Integration with Events
+- [ ] Trigger notification on new Owl Fenc payment
+- [ ] Trigger notification on new Owl Fenc contract
+- [ ] Trigger notification on new Owl Fenc user
+- [ ] Trigger notification on LeadPrime new lead
+- [ ] Trigger notification on system errors
+
+### Phase 5: Testing & Polish
+- [ ] Test all priority levels (info, warning, important, critical)
+- [ ] Test mark as read functionality
+- [ ] Test notification center filters
+- [ ] Test toast auto-dismiss timers
+- [ ] End-to-end testing
