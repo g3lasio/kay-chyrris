@@ -895,26 +895,25 @@ Ensure ALL emails in Owl Fenc use `noreply@owlfenc.com` as sender with proper `r
 
 ## 🔔 Push Notifications System Implementation
 
-### Phase 1: Database & Backend Service
+#### Phase 1: Database & Backend Service
 - [x] Create `in_app_notifications` table (schema updated)
 - [x] Create `notification_preferences` table (schema updated)
-- [ ] Create notification service in `server/services/notifications-push.ts`
-- [ ] Add helper functions (create, markAsRead, getAll, archive)
+- [x] Create notification service in `server/services/notifications-push.ts`
+- [x] Add helper functions (create, markAsRead, getAll, archive)
 
 ### Phase 2: tRPC Endpoints
-- [ ] Add `notifications.getAll` endpoint
-- [ ] Add `notifications.markAsRead` endpoint
-- [ ] Add `notifications.markAllAsRead` endpoint
-- [ ] Add `notifications.archive` endpoint
-- [ ] Add `notifications.create` endpoint (admin)
-- [ ] Add `notifications.getUnreadCount` endpoint
-
-### Phase 3: UI Components
-- [ ] Create `NotificationBell` component with badge
-- [ ] Create `NotificationDropdown` with list
-- [ ] Create `NotificationToast` with priority styles
-- [ ] Create `NotificationCenter` page with filters
-- [ ] Add notification bell to main header
+- [x] Add `pushNotifications.getAll` endpoint
+- [x] Add `pushNotifications.markAsRead` endpoint
+- [x] Add `pushNotifications.markAllAsRead` endpoint
+- [x] Add `pushNotifications.archive` endpoint
+- [x] Add `pushNotifications.create` endpoint (admin)
+- [x] Add `pushNotifications.getPreferences` endpoint
+- [x] Add `pushNotifications.updatePreferences` endpoin### Phase 3: UI Components
+- [x] Create `NotificationBell` component with badge and dropdown
+- [x] Create `NotificationToast` with priority styles and auto-dismiss
+- [x] Create `NotificationCenter` page with filters and tabs
+- [ ] Add notification bell to main header (OwlFencLayout)
+- [ ] Add CSS animations for toast (shrink animation)der
 
 ### Phase 4: Integration with Events
 - [ ] Trigger notification on new Owl Fenc payment

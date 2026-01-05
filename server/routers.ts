@@ -14,6 +14,7 @@ import {
 } from "./services/owlfenc-db";
 import * as stripeService from './services/stripe-service';
 import { createAndSendCampaign, getCampaignHistory } from './services/notifications';
+import * as pushNotifications from './services/notifications-push';
 
 export const appRouter = router({
   system: systemRouter,
@@ -369,6 +370,112 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         const { enhanceMessageWithAI } = await import('./services/anthropic-service');
         return await enhanceMessageWithAI(input.message);
+      }),
+  }),
+
+  // In-app push notifications
+  pushNotifications: router({
+    // Get all notifications for a user
+    getAll: publicProcedure
+      .input(z.object({
+        userId: z.string().optional(),
+        applicationId: z.number(),
+        priority: z.enum(['info', 'warning', 'important', 'critical']).optional(),
+        category: z.string().optional(),
+        unreadOnly: z.boolean().optional(),
+        limit: z.number().default(50),
+        offset: z.number().default(0),
+      }))
+      .query(async ({ input }) => {
+        return await pushNotifications.getNotifications(input);
+      }),
+
+    // Get unread count
+    getUnreadCount: publicProcedure
+      .input(z.object({
+        userId: z.string(),
+        applicationId: z.number(),
+      }))
+      .query(async ({ input }) => {
+        return await pushNotifications.getUnreadCount(input.userId, input.applicationId);
+      }),
+
+    // Mark as read
+    markAsRead: publicProcedure
+      .input(z.object({
+        notificationId: z.number(),
+      }))
+      .mutation(async ({ input }) => {
+        await pushNotifications.markAsRead(input.notificationId);
+        return { success: true };
+      }),
+
+    // Mark all as read
+    markAllAsRead: publicProcedure
+      .input(z.object({
+        userId: z.string(),
+        applicationId: z.number(),
+      }))
+      .mutation(async ({ input }) => {
+        await pushNotifications.markAllAsRead(input.userId, input.applicationId);
+        return { success: true };
+      }),
+
+    // Archive notification
+    archive: publicProcedure
+      .input(z.object({
+        notificationId: z.number(),
+      }))
+      .mutation(async ({ input }) => {
+        await pushNotifications.archiveNotification(input.notificationId);
+        return { success: true };
+      }),
+
+    // Create notification (admin/system)
+    create: publicProcedure
+      .input(z.object({
+        applicationId: z.number(),
+        userId: z.string().optional().nullable(),
+        title: z.string(),
+        message: z.string(),
+        priority: z.enum(['info', 'warning', 'important', 'critical']),
+        category: z.string().optional(),
+        actionUrl: z.string().optional(),
+        actionLabel: z.string().optional(),
+        icon: z.string().optional(),
+        expiresAt: z.date().optional(),
+        metadata: z.record(z.any()).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const notification = await pushNotifications.createNotification(input);
+        return { success: true, notification };
+      }),
+
+    // Get user preferences
+    getPreferences: publicProcedure
+      .input(z.object({
+        userId: z.string(),
+        applicationId: z.number(),
+      }))
+      .query(async ({ input }) => {
+        return await pushNotifications.getUserPreferences(input.userId, input.applicationId);
+      }),
+
+    // Update user preferences
+    updatePreferences: publicProcedure
+      .input(z.object({
+        userId: z.string(),
+        applicationId: z.number(),
+        enabled: z.boolean().optional(),
+        minPriority: z.enum(['info', 'warning', 'important', 'critical']).optional(),
+        categoriesEnabled: z.array(z.string()).optional(),
+        quietHoursStart: z.string().optional(),
+        quietHoursEnd: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { userId, applicationId, ...updates } = input;
+        await pushNotifications.updateUserPreferences(userId, applicationId, updates);
+        return { success: true };
       }),
   }),
 });
