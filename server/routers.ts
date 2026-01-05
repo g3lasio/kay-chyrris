@@ -513,7 +513,7 @@ export const appRouter = router({
         actionLabel: z.string().optional(),
         icon: z.string().optional(),
         expiresAt: z.date().optional(),
-        metadata: z.record(z.any()).optional(),
+        metadata: z.record(z.string(), z.any()).optional(),
       }))
       .mutation(async ({ input }) => {
         const notification = await pushNotifications.createNotification(input);
