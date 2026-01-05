@@ -928,3 +928,42 @@ Ensure ALL emails in Owl Fenc use `noreply@owlfenc.com` as sender with proper `r
 - [ ] Test notification center filters
 - [ ] Test toast auto-dismiss timers
 - [ ] End-to-end testing
+
+
+---
+
+## 💰 Dashboard Redesign - Revenue & Growth Focus
+
+### Problem
+- Current dashboard shows redundant data (estimates, contracts, clients)
+- These metrics already appear in Usage and Users pages
+- Need to focus on financial and growth metrics only
+
+### Solution
+- [ ] Remove redundant metrics (estimates, contracts, clients counts)
+- [ ] Add MRR (Monthly Recurring Revenue) calculation
+- [ ] Add total revenue for current year
+- [ ] Add revenue growth chart (month by month)
+- [ ] Add total users count
+- [ ] Add new users this month
+- [ ] Add user growth percentage
+- [ ] Create line charts for revenue trends
+- [ ] Create area chart for user growth
+- [ ] Add year-over-year comparison
+
+### Backend Implementation
+- [x] Create `getRevenueMetrics` endpoint (MRR, yearly total, growth %)
+- [x] Create `getUserGrowthMetrics` endpoint (total, new this month, growth %)
+- [x] Create `getRevenueHistory` endpoint (monthly data for charts)
+- [x] Create `getUserGrowthHistory` endpoint (monthly data for charts)
+- [x] Query Stripe for subscription data
+- [x] Query Firebase Auth for user registration dates
+
+### Frontend Implementation
+- [x] Redesign OwlFencDashboard.tsx with new layout
+- [x] Add revenue metrics cards with icons (MRR, Yearly Revenue, Growth)
+- [x] Add user growth metrics cards (Total, New This Month, Growth %)
+- [x] Implement line chart for revenue trends (last 12 months)
+- [x] Implement area chart for user growth (last 12 months)
+- [ ] Add date range selector (month, quarter, year) - Optional enhancement
+- [x] Remove old redundant metrics (estimates, contracts, clients)

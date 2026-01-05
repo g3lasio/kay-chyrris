@@ -15,6 +15,7 @@ import {
 import * as stripeService from './services/stripe-service';
 import { createAndSendCampaign, getCampaignHistory } from './services/notifications';
 import * as pushNotifications from './services/notifications-push';
+import * as revenueMetrics from './services/revenue-metrics';
 
 export const appRouter = router({
   system: systemRouter,
@@ -225,6 +226,74 @@ export const appRouter = router({
         const { updateUserPhone } = await import('./services/firebase-admin-actions');
         return await updateUserPhone(input.uid, input.newPhone);
       }),
+
+    // Get revenue metrics (MRR, yearly revenue, growth)
+    getRevenueMetrics: publicProcedure.query(async () => {
+      try {
+        const metrics = await revenueMetrics.getRevenueMetrics();
+        return {
+          success: true,
+          data: metrics,
+        };
+      } catch (error: any) {
+        console.error('[Router] Error fetching revenue metrics:', error);
+        return {
+          success: false,
+          error: error.message,
+        };
+      }
+    }),
+
+    // Get user growth metrics
+    getUserGrowthMetrics: publicProcedure.query(async () => {
+      try {
+        const metrics = await revenueMetrics.getUserGrowthMetrics();
+        return {
+          success: true,
+          data: metrics,
+        };
+      } catch (error: any) {
+        console.error('[Router] Error fetching user growth metrics:', error);
+        return {
+          success: false,
+          error: error.message,
+        };
+      }
+    }),
+
+    // Get revenue history for charts (last 12 months)
+    getRevenueHistory: publicProcedure.query(async () => {
+      try {
+        const history = await revenueMetrics.getRevenueHistory();
+        return {
+          success: true,
+          data: history,
+        };
+      } catch (error: any) {
+        console.error('[Router] Error fetching revenue history:', error);
+        return {
+          success: false,
+          error: error.message,
+        };
+      }
+    }),
+
+    // Get user growth history for charts (last 12 months)
+    getUserGrowthHistory: publicProcedure.query(async () => {
+      try {
+        const history = await revenueMetrics.getUserGrowthHistory();
+        return {
+          success: true,
+          data: history,
+        };
+      } catch (error: any) {
+        console.error('[Router] Error fetching user growth history:', error);
+        return {
+          success: false,
+          error: error.message,
+        };
+      }
+    }),
 
     // Get dashboard stats from Firebase (REAL DATA)
     getStats: publicProcedure.query(async () => {
