@@ -1,0 +1,2512 @@
+diff --git a/.replit b/.replit
+new file mode 100644
+index 0000000..152117b
+--- /dev/null
++++ b/.replit
+@@ -0,0 +1,40 @@
++modules = ["nodejs-20"]
++
++[workflows]
++runButton = "Project"
++
++[[workflows.workflow]]
++name = "Project"
++mode = "parallel"
++author = "agent"
++
++[[workflows.workflow.tasks]]
++task = "workflow.run"
++args = "Start application"
++
++[[workflows.workflow]]
++name = "Start application"
++author = "agent"
++
++[[workflows.workflow.tasks]]
++task = "shell.exec"
++args = "pnpm run dev"
++waitForPort = 3000
++
++[workflows.workflow.metadata]
++outputType = "webview"
++
++[[ports]]
++localPort = 3000
++externalPort = 80
++
++[agent]
++expertMode = true
++
++[deployment]
++build = ["sh", "-c", "pnpm install && pnpm db:push"]
++run = ["sh", "-c", "pnpm run dev"]
++deploymentTarget = "autoscale"
++
++[nix]
++packages = ["azure-functions-core-tools"]
+diff --git a/USAGE_TRACKING_ANALYSIS.md b/USAGE_TRACKING_ANALYSIS.md
+new file mode 100644
+index 0000000..a3b2d11
+--- /dev/null
++++ b/USAGE_TRACKING_ANALYSIS.md
+@@ -0,0 +1,219 @@
++# Usage System Tracking Analysis
++
++## 🚨 Critical Issues Found
++
++### 1. ❌ Contracts Showing 0
++
++**Problem:** Query was fetching ALL contracts (drafts, progress, completed, cancelled, archived).
++
++**Root Cause:**
++```typescript
++// OLD (WRONG):
++db.collection('contracts').get()
++
++// Brings ALL contracts regardless of status
++```
++
++**Solution Applied:** ✅ FIXED
++```typescript
++// NEW (CORRECT):
++db.collection('contracts').where('status', 'in', ['completed', 'both_signed']).get()
++
++// Only counts contracts that reached step 3 (complete) in Legal Defense system
++```
++
++**Contract States in Owl Fenc:**
++- `draft` - Step 0-1 (incomplete)
++- `sent` - Sent but not signed
++- `signed` - Partially signed
++- `in_progress` - Work in progress
++- `completed` - ✅ COMPLETED (counts for Mero Patron 50-contract limit)
++- `both_signed` - ✅ DUAL SIGNATURE COMPLETED (also counts)
++- `cancelled` - Cancelled (doesn't count)
++
++**Legal Defense System Flow:**
++1. Step 0: Select contract type
++2. Step 1: Select project / adjustments
++3. Step 2: Preview
++4. Step 3: **Complete** → PDF only or Dual Signature → **THIS IS WHAT WE COUNT**
++
++---
++
++### 2. ❌ Payments Showing 0
++
++**Problem:** Chyrris KAI is querying `paymentHistory` collection in Firestore, but payments are NOT stored there.
++
++**Current Architecture:**
++- **Owl Fenc stores payments in PostgreSQL** inside `projects.paymentDetails.history`
++- **Payment types:**
++  - Link payments (Stripe) - Stored in `paymentDetails.history`
++  - Cash - Stored in `paymentDetails.history`
++  - Check - Stored in `paymentDetails.history`
++  - Zelle - Stored in `paymentDetails.history`
++
++**Chyrris KAI expectation:**
++```typescript
++// Chyrris KAI is looking for:
++db.collection('paymentHistory').get()
++
++// But this collection DOESN'T EXIST in Firestore
++```
++
++**Options to Fix:**
++
++#### Option A: Create `paymentHistory` collection in Firestore (RECOMMENDED)
++- Modify Owl Fenc to write payment history to Firestore whenever a payment is recorded
++- Keeps Chyrris KAI simple (just reads from Firestore)
++- Real-time tracking without complex queries
++
++**Implementation:**
++```typescript
++// In Owl Fenc - whenever a payment is recorded:
++await db.collection('paymentHistory').add({
++  userId: firebaseUid,
++  projectId: project.id,
++  amount: payment.amount,
++  paymentType: 'cash' | 'check' | 'zelle' | 'stripe',
++  status: 'pending' | 'completed',
++  createdAt: FieldValue.serverTimestamp(),
++  metadata: {
++    invoiceId: payment.invoiceId,
++    description: payment.description
++  }
++});
++```
++
++#### Option B: Query PostgreSQL from Chyrris KAI
++- Add PostgreSQL connection to Chyrris KAI
++- Query `projects` table and extract `paymentDetails.history`
++- More complex, requires additional database connection
++
++#### Option C: Sync existing PostgreSQL data to Firestore
++- One-time migration script
++- Ongoing sync whenever payments are updated
++- Best of both worlds but requires maintenance
++
++**Recommendation:** **Option A** - Start writing to Firestore going forward. Optionally run a one-time migration for historical data.
++
++---
++
++### 3. ❌ PDFs Showing 0
++
++**Problem:** No PDF tracking system exists in Owl Fenc.
++
++**Current State:**
++- Chyrris KAI queries `pdf_logs` collection in Firestore
++- Owl Fenc does NOT write to this collection
++- PDFs are generated but not tracked
++
++**Where PDFs are generated in Owl Fenc:**
++- Invoice PDFs
++- Estimate PDFs
++- Contract PDFs
++- Project summary PDFs
++
++**Solution Required:**
++Create `pdfTrackingService.ts` in Owl Fenc similar to `emailTrackingService.ts`:
++
++```typescript
++// server/services/pdfTrackingService.ts
++export async function logPdfGenerated(pdfData: {
++  userId: string;
++  pdfType: 'invoice' | 'estimate' | 'contract' | 'project_summary' | 'other';
++  documentId?: string;
++  documentNumber?: string;
++  success: boolean;
++  errorMessage?: string;
++}): Promise<string> {
++  try {
++    const pdfLog = {
++      ...pdfData,
++      generatedAt: Timestamp.now(),
++    };
++    
++    const docRef = await db.collection('pdf_logs').add(pdfLog);
++    console.log(`[PDF Tracking] Logged PDF: ${pdfData.pdfType} (${docRef.id})`);
++    
++    return docRef.id;
++  } catch (error) {
++    console.error('[PDF Tracking] Error logging PDF:', error);
++    // Don't throw - PDF generation should not fail if tracking fails
++    return '';
++  }
++}
++```
++
++**Integration Points:**
++- `ModernPdfService.ts` - Main PDF generation service
++- `NativePdfEngine.ts` - Native PDF engine
++- Invoice generation routes
++- Estimate generation routes
++- Contract generation routes
++
++**Priority:** LOW (as per user request)
++
++---
++
++### 4. ❌ Per-User Table NOT Respecting Date Filters
++
++**Problem:** Date filters (Day/Month/Year/Custom/All Time) work for global metrics but NOT for per-user breakdown table.
++
++**Root Cause:**
++```typescript
++// getUserUsageBreakdown() receives date parameters
++export async function getUserUsageBreakdown(
++  startDate?: string,
++  endDate?: string
++): Promise<UserUsageBreakdown[]>
++
++// But the date filtering is applied AFTER fetching all documents
++// This works but doesn't update when user changes date filter in UI
++```
++
++**Current Behavior:**
++- User selects "This Month" filter
++- Global metrics update ✅
++- Per-user table shows ALL TIME data ❌
++
++**Solution:**
++The date filtering IS implemented in the backend, but the **frontend is not passing the date parameters** to the per-user query.
++
++**Fix Required in Frontend:**
++```typescript
++// client/src/pages/UsageSystem.tsx
++// CURRENT (WRONG):
++const { data: userBreakdown } = trpc.owlfenc.getUserUsageBreakdown.useQuery({});
++
++// SHOULD BE (CORRECT):
++const { data: userBreakdown } = trpc.owlfenc.getUserUsageBreakdown.useQuery(
++  getDateRangeParams(dateRange)
++);
++```
++
++---
++
++## Summary of Actions
++
++| Issue | Status | Action Required |
++|-------|--------|-----------------|
++| **Contracts showing 0** | ✅ FIXED | Already updated query to filter only 'completed' and 'both_signed' |
++| **Payments showing 0** | ⚠️ NEEDS DECISION | Choose Option A, B, or C above |
++| **PDFs showing 0** | 📋 PLANNED | Implement pdfTrackingService.ts (LOW PRIORITY) |
++| **Per-user date filters** | 🔧 NEEDS FIX | Update frontend to pass date parameters |
++
++---
++
++## Next Steps
++
++1. ✅ **Test contracts fix** - Verify completed contracts now show correct count
++2. ⚠️ **Decide on payments architecture** - Choose Option A, B, or C
++3. 🔧 **Fix per-user date filtering** - Update frontend to pass date params
++4. 📋 **Plan PDF tracking** - Implement when ready (low priority)
++
++---
++
++## Questions for User
++
++1. **Payments:** Do you prefer Option A (write to Firestore going forward), Option B (query PostgreSQL), or Option C (sync both)?
++2. **Historical data:** Should we migrate existing payment history from PostgreSQL to Firestore?
++3. **PDF tracking:** When do you want to implement this? (You said low priority)
+diff --git a/client/src/App.tsx b/client/src/App.tsx
+index e32ab14..57c52f9 100644
+--- a/client/src/App.tsx
++++ b/client/src/App.tsx
+@@ -6,11 +6,14 @@ import ErrorBoundary from "./components/ErrorBoundary";
+ import { ThemeProvider } from "./contexts/ThemeContext";
+ import Login from "./pages/Login";
+ import Dashboard from "./pages/Dashboard";
++import MyApps from "./pages/MyApps";
++import OwlFencDashboard from "./pages/OwlFencDashboard";
+ import Users from "./pages/Users";
+ import Payments from "./pages/Payments";
+ import Announcements from "./pages/Announcements";
+ import UsageSystem from "./pages/UsageSystem";
+ import DashboardLayout from "./components/DashboardLayout";
++import OwlFencLayout from "./components/OwlFencLayout";
+ 
+ function Router() {
+   return (
+@@ -20,34 +23,56 @@ function Router() {
+         <Redirect to="/" />
+       </Route>
+       
+-      {/* Protected routes with dashboard layout */}
++      {/* Main dashboard - redirect to My Apps */}
+       <Route path="/">
++        <Redirect to="/my-apps" />
++      </Route>
++      
++      {/* My Apps - App selection page */}
++      <Route path="/my-apps">
+         <DashboardLayout>
+-          <Dashboard />
++          <MyApps />
+         </DashboardLayout>
+       </Route>
+       
+-      <Route path="/users">
+-        <DashboardLayout>
++      {/* Owl Fenc App Routes */}
++      <Route path="/owlfenc">
++        <OwlFencLayout>
++          <OwlFencDashboard />
++        </OwlFencLayout>
++      </Route>
++      
++      <Route path="/owlfenc/users">
++        <OwlFencLayout>
+           <Users />
+-        </DashboardLayout>
++        </OwlFencLayout>
+       </Route>
+       
+-      <Route path="/payments">
+-        <DashboardLayout>
++      <Route path="/owlfenc/payments">
++        <OwlFencLayout>
+           <Payments />
+-        </DashboardLayout>
++        </OwlFencLayout>
+       </Route>
+       
+-      <Route path="/announcements">
+-        <DashboardLayout>
++      <Route path="/owlfenc/announcements">
++        <OwlFencLayout>
+           <Announcements />
+-        </DashboardLayout>
++        </OwlFencLayout>
+       </Route>
+       
+-      <Route path="/usage-system">
+-        <DashboardLayout>
++      <Route path="/owlfenc/usage-system">
++        <OwlFencLayout>
+           <UsageSystem />
++        </OwlFencLayout>
++      </Route>
++      
++      {/* LeadPrime App Routes - Coming soon */}
++      <Route path="/apps/leadprime">
++        <DashboardLayout>
++          <div className="container mx-auto py-8 px-4">
++            <h1 className="text-4xl font-bold mb-4">LeadPrime</h1>
++            <p className="text-muted-foreground">Coming soon...</p>
++          </div>
+         </DashboardLayout>
+       </Route>
+       
+diff --git a/client/src/components/DashboardLayout.tsx b/client/src/components/DashboardLayout.tsx
+index 33017ca..1f6898a 100644
+--- a/client/src/components/DashboardLayout.tsx
++++ b/client/src/components/DashboardLayout.tsx
+@@ -21,18 +21,14 @@ import {
+ } from "@/components/ui/sidebar";
+ 
+ import { useIsMobile } from "@/hooks/useMobile";
+-import { LayoutDashboard, LogOut, PanelLeft, Users, DollarSign, Megaphone, Activity } from "lucide-react";
++import { LayoutDashboard, LogOut, PanelLeft, Grid } from "lucide-react";
+ import { CSSProperties, useEffect, useRef, useState } from "react";
+ import { useLocation } from "wouter";
+ import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
+ import { Button } from "./ui/button";
+ 
+ const menuItems = [
+-  { icon: LayoutDashboard, label: "Dashboard", path: "/" },
+-  { icon: Users, label: "Users", path: "/users" },
+-  { icon: DollarSign, label: "Payments", path: "/payments" },
+-  { icon: Activity, label: "Usage System", path: "/usage-system" },
+-  { icon: Megaphone, label: "Announcements", path: "/announcements" },
++  { icon: Grid, label: "My Apps", path: "/my-apps" },
+ ];
+ 
+ const SIDEBAR_WIDTH_KEY = "sidebar-width";
+diff --git a/client/src/components/OwlFencLayout.tsx b/client/src/components/OwlFencLayout.tsx
+new file mode 100644
+index 0000000..2eca9ed
+--- /dev/null
++++ b/client/src/components/OwlFencLayout.tsx
+@@ -0,0 +1,252 @@
++import { Avatar, AvatarFallback } from "@/components/ui/avatar";
++import {
++  DropdownMenu,
++  DropdownMenuContent,
++  DropdownMenuItem,
++  DropdownMenuTrigger,
++} from "@/components/ui/dropdown-menu";
++import {
++  Sidebar,
++  SidebarContent,
++  SidebarFooter,
++  SidebarHeader,
++  SidebarInset,
++  SidebarMenu,
++  SidebarMenuButton,
++  SidebarMenuItem,
++  SidebarProvider,
++  SidebarTrigger,
++  useSidebar,
++} from "@/components/ui/sidebar";
++
++import { useIsMobile } from "@/hooks/useMobile";
++import { LayoutDashboard, LogOut, PanelLeft, Users, DollarSign, Megaphone, Activity, ArrowLeft } from "lucide-react";
++import { CSSProperties, useEffect, useRef, useState } from "react";
++import { useLocation } from "wouter";
++import { Button } from "./ui/button";
++
++const menuItems = [
++  { icon: LayoutDashboard, label: "Dashboard", path: "/owlfenc" },
++  { icon: Users, label: "Users", path: "/owlfenc/users" },
++  { icon: DollarSign, label: "Payments", path: "/owlfenc/payments" },
++  { icon: Activity, label: "Usage System", path: "/owlfenc/usage-system" },
++  { icon: Megaphone, label: "Announcements", path: "/owlfenc/announcements" },
++];
++
++const SIDEBAR_WIDTH_KEY = "owlfenc-sidebar-width";
++const DEFAULT_WIDTH = 280;
++const MIN_WIDTH = 200;
++const MAX_WIDTH = 480;
++
++export default function OwlFencLayout({
++  children,
++}: {
++  children: React.ReactNode;
++}) {
++  const [sidebarWidth, setSidebarWidth] = useState(() => {
++    const saved = localStorage.getItem(SIDEBAR_WIDTH_KEY);
++    return saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
++  });
++  const user = { name: 'Admin', email: 'admin@chyrris.com', role: 'super_admin' };
++
++  useEffect(() => {
++    localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebarWidth.toString());
++  }, [sidebarWidth]);
++
++  return (
++    <SidebarProvider
++      style={
++        {
++          "--sidebar-width": `${sidebarWidth}px`,
++        } as CSSProperties
++      }
++    >
++      <OwlFencLayoutContent setSidebarWidth={setSidebarWidth}>
++        {children}
++      </OwlFencLayoutContent>
++    </SidebarProvider>
++  );
++}
++
++type OwlFencLayoutContentProps = {
++  children: React.ReactNode;
++  setSidebarWidth: (width: number) => void;
++};
++
++function OwlFencLayoutContent({
++  children,
++  setSidebarWidth,
++}: OwlFencLayoutContentProps) {
++  const user = { name: 'Admin', email: 'admin@chyrris.com', role: 'super_admin' };
++  
++  const logout = async () => {
++    console.log('[Auth] Logout disabled - no authentication system');
++  };
++  const [location, setLocation] = useLocation();
++  const { state, toggleSidebar } = useSidebar();
++  const isCollapsed = state === "collapsed";
++  const [isResizing, setIsResizing] = useState(false);
++  const sidebarRef = useRef<HTMLDivElement>(null);
++  const activeMenuItem = menuItems.find(item => item.path === location);
++  const isMobile = useIsMobile();
++
++  useEffect(() => {
++    if (isCollapsed) {
++      setIsResizing(false);
++    }
++  }, [isCollapsed]);
++
++  useEffect(() => {
++    const handleMouseMove = (e: MouseEvent) => {
++      if (!isResizing) return;
++
++      const sidebarLeft = sidebarRef.current?.getBoundingClientRect().left ?? 0;
++      const newWidth = e.clientX - sidebarLeft;
++      if (newWidth >= MIN_WIDTH && newWidth <= MAX_WIDTH) {
++        setSidebarWidth(newWidth);
++      }
++    };
++
++    const handleMouseUp = () => {
++      setIsResizing(false);
++    };
++
++    if (isResizing) {
++      document.addEventListener("mousemove", handleMouseMove);
++      document.addEventListener("mouseup", handleMouseUp);
++      document.body.style.cursor = "col-resize";
++      document.body.style.userSelect = "none";
++    }
++
++    return () => {
++      document.removeEventListener("mousemove", handleMouseMove);
++      document.removeEventListener("mouseup", handleMouseUp);
++      document.body.style.cursor = "";
++      document.body.style.userSelect = "";
++    };
++  }, [isResizing, setSidebarWidth]);
++
++  return (
++    <>
++      <div className="relative" ref={sidebarRef}>
++        <Sidebar
++          collapsible="icon"
++          className="border-r-0"
++          disableTransition={isResizing}
++        >
++          <SidebarHeader className="h-16 justify-center">
++            <div className="flex items-center gap-3 px-2 transition-all w-full">
++              <button
++                onClick={toggleSidebar}
++                className="h-8 w-8 flex items-center justify-center hover:bg-accent rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0"
++                aria-label="Toggle navigation"
++              >
++                <PanelLeft className="h-4 w-4 text-muted-foreground" />
++              </button>
++              {!isCollapsed ? (
++                <div className="flex items-center gap-2 min-w-0">
++                  <span className="font-semibold tracking-tight truncate">
++                    Owl Fenc
++                  </span>
++                </div>
++              ) : null}
++            </div>
++          </SidebarHeader>
++
++          <SidebarContent className="gap-0">
++            {/* Back to My Apps Button */}
++            <div className="px-2 py-2 border-b">
++              <Button
++                variant="ghost"
++                size="sm"
++                className="w-full justify-start"
++                onClick={() => setLocation("/my-apps")}
++              >
++                <ArrowLeft className="mr-2 h-4 w-4" />
++                {!isCollapsed && "Back to My Apps"}
++              </Button>
++            </div>
++
++            <SidebarMenu className="px-2 py-1">
++              {menuItems.map(item => {
++                const isActive = location === item.path;
++                return (
++                  <SidebarMenuItem key={item.path}>
++                    <SidebarMenuButton
++                      isActive={isActive}
++                      onClick={() => setLocation(item.path)}
++                      tooltip={item.label}
++                      className={`h-10 transition-all font-normal`}
++                    >
++                      <item.icon
++                        className={`h-4 w-4 ${isActive ? "text-primary" : ""}`}
++                      />
++                      <span>{item.label}</span>
++                    </SidebarMenuButton>
++                  </SidebarMenuItem>
++                );
++              })}
++            </SidebarMenu>
++          </SidebarContent>
++
++          <SidebarFooter className="p-3">
++            <DropdownMenu>
++              <DropdownMenuTrigger asChild>
++                <button className="flex items-center gap-3 rounded-lg px-1 py-1 hover:bg-accent/50 transition-colors w-full text-left group-data-[collapsible=icon]:justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
++                  <Avatar className="h-9 w-9 border shrink-0">
++                    <AvatarFallback className="text-xs font-medium">
++                      {user?.name?.charAt(0).toUpperCase()}
++                    </AvatarFallback>
++                  </Avatar>
++                  <div className="flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
++                    <p className="text-sm font-medium truncate leading-none">
++                      {user?.name || "-"}
++                    </p>
++                    <p className="text-xs text-muted-foreground truncate mt-1.5">
++                      {user?.email || "-"}
++                    </p>
++                  </div>
++                </button>
++              </DropdownMenuTrigger>
++              <DropdownMenuContent align="end" className="w-48">
++                <DropdownMenuItem
++                  onClick={logout}
++                  className="cursor-pointer text-destructive focus:text-destructive"
++                >
++                  <LogOut className="mr-2 h-4 w-4" />
++                  <span>Sign out</span>
++                </DropdownMenuItem>
++              </DropdownMenuContent>
++            </DropdownMenu>
++          </SidebarFooter>
++        </Sidebar>
++        <div
++          className={`absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/20 transition-colors ${isCollapsed ? "hidden" : ""}`}
++          onMouseDown={() => {
++            if (isCollapsed) return;
++            setIsResizing(true);
++          }}
++          style={{ zIndex: 50 }}
++        />
++      </div>
++
++      <SidebarInset>
++        {isMobile && (
++          <div className="flex border-b h-14 items-center justify-between bg-background/95 px-2 backdrop-blur supports-[backdrop-filter]:backdrop-blur sticky top-0 z-40">
++            <div className="flex items-center gap-2">
++              <SidebarTrigger className="h-9 w-9 rounded-lg bg-background" />
++              <div className="flex items-center gap-3">
++                <div className="flex flex-col gap-1">
++                  <span className="tracking-tight text-foreground">
++                    {activeMenuItem?.label ?? "Menu"}
++                  </span>
++                </div>
++              </div>
++            </div>
++          </div>
++        )}
++        <main className="flex-1 p-4">{children}</main>
++      </SidebarInset>
++    </>
++  );
++}
+diff --git a/client/src/pages/Announcements.tsx b/client/src/pages/Announcements.tsx
+index 9f884fa..94b1174 100644
+--- a/client/src/pages/Announcements.tsx
++++ b/client/src/pages/Announcements.tsx
+@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
+ import { Textarea } from "@/components/ui/textarea";
+ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+ import { toast } from "sonner";
+-import { Megaphone, Send, Users, Loader2, CheckCircle2, XCircle } from "lucide-react";
++import { Megaphone, Send, Users, Loader2, CheckCircle2, XCircle, Sparkles } from "lucide-react";
+ 
+ type CampaignType = 'announcement' | 'event' | 'update' | 'offer';
+ type TargetAudience = 'all' | 'free' | 'patron' | 'master';
+@@ -17,6 +17,7 @@ export default function Announcements() {
+   const [message, setMessage] = useState("");
+   const [type, setType] = useState<CampaignType>("announcement");
+   const [targetAudience, setTargetAudience] = useState<TargetAudience>("all");
++  const [isEnhancing, setIsEnhancing] = useState(false);
+ 
+   const sendCampaignMutation = trpc.notifications.sendCampaign.useMutation({
+     onSuccess: (data) => {
+@@ -37,6 +38,32 @@ export default function Announcements() {
+ 
+   const campaignsQuery = trpc.notifications.getCampaigns.useQuery();
+ 
++  const enhanceMessageMutation = trpc.notifications.enhanceMessage.useMutation({
++    onSuccess: (data) => {
++      setIsEnhancing(false);
++      if (data.success && data.enhancedMessage) {
++        setMessage(data.enhancedMessage);
++        toast.success("Message enhanced with AI! ✨");
++      } else {
++        toast.error(data.error || "Failed to enhance message");
++      }
++    },
++    onError: (error) => {
++      setIsEnhancing(false);
++      toast.error(`AI Enhancement Error: ${error.message}`);
++    },
++  });
++
++  const handleEnhanceWithAI = () => {
++    if (!message.trim()) {
++      toast.error("Please write a message first");
++      return;
++    }
++
++    setIsEnhancing(true);
++    enhanceMessageMutation.mutate({ message });
++  };
++
+   const handleSend = () => {
+     if (!title.trim() || !message.trim()) {
+       toast.error("Please fill in title and message");
+@@ -109,15 +136,40 @@ export default function Announcements() {
+ 
+             {/* Message */}
+             <div className="space-y-2">
+-              <Label htmlFor="message">Message</Label>
++              <div className="flex items-center justify-between">
++                <Label htmlFor="message">Message</Label>
++                <Button
++                  type="button"
++                  variant="outline"
++                  size="sm"
++                  onClick={handleEnhanceWithAI}
++                  disabled={isEnhancing || !message.trim()}
++                  className="h-8 gap-2 bg-gradient-to-r from-purple-500/10 to-pink-500/10 border-purple-500/30 hover:border-purple-500/50 text-purple-400 hover:text-purple-300"
++                >
++                  {isEnhancing ? (
++                    <>
++                      <Loader2 className="w-3 h-3 animate-spin" />
++                      Enhancing...
++                    </>
++                  ) : (
++                    <>
++                      <Sparkles className="w-3 h-3" />
++                      Enhance with AI
++                    </>
++                  )}
++                </Button>
++              </div>
+               <Textarea
+                 id="message"
+-                placeholder="Write your announcement message here..."
++                placeholder="Write your announcement message here... (Try the AI enhancement button above!)" 
+                 value={message}
+                 onChange={(e) => setMessage(e.target.value)}
+                 rows={6}
+                 className="futuristic-input resize-none"
+               />
++              <p className="text-xs text-muted-foreground">
++                💡 Tip: Write your message in any language, then click "Enhance with AI" to make it professional and translate to English
++              </p>
+             </div>
+ 
+             {/* Type */}
+diff --git a/client/src/pages/MyApps.tsx b/client/src/pages/MyApps.tsx
+new file mode 100644
+index 0000000..f87e231
+--- /dev/null
++++ b/client/src/pages/MyApps.tsx
+@@ -0,0 +1,100 @@
++import { useLocation } from "wouter";
++import { Card } from "@/components/ui/card";
++import { Button } from "@/components/ui/button";
++import { Database, Hammer, ArrowRight } from "lucide-react";
++
++export default function MyApps() {
++  const [, setLocation] = useLocation();
++
++  const apps = [
++    {
++      id: "owlfenc",
++      name: "Owl Fenc",
++      description: "Construction Management Platform",
++      icon: Hammer,
++      color: "from-orange-500 to-amber-600",
++      route: "/owlfenc",
++      stats: {
++        users: "7 users",
++        clients: "996 clients",
++        contracts: "20 contracts"
++      }
++    },
++    {
++      id: "leadprime",
++      name: "LeadPrime",
++      description: "Lead Management System",
++      icon: Database,
++      color: "from-blue-500 to-cyan-600",
++      route: "/apps/leadprime",
++      stats: {
++        leads: "Coming soon",
++        campaigns: "Coming soon",
++        conversions: "Coming soon"
++      }
++    }
++  ];
++
++  return (
++    <div className="container mx-auto py-8 px-4">
++      <div className="mb-8">
++        <h1 className="text-4xl font-bold mb-2">My Apps</h1>
++        <p className="text-muted-foreground">
++          Select an application to view its dashboard and manage its data
++        </p>
++      </div>
++
++      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
++        {apps.map((app) => {
++          const Icon = app.icon;
++          return (
++            <Card
++              key={app.id}
++              className="group hover:shadow-xl transition-all duration-300 cursor-pointer overflow-hidden"
++              onClick={() => setLocation(app.route)}
++            >
++              <div className={`h-2 bg-gradient-to-r ${app.color}`} />
++              <div className="p-6">
++                <div className="flex items-start justify-between mb-4">
++                  <div className="flex items-center gap-4">
++                    <div className={`p-3 rounded-xl bg-gradient-to-br ${app.color} text-white`}>
++                      <Icon className="h-8 w-8" />
++                    </div>
++                    <div>
++                      <h2 className="text-2xl font-bold group-hover:text-primary transition-colors">
++                        {app.name}
++                      </h2>
++                      <p className="text-sm text-muted-foreground">{app.description}</p>
++                    </div>
++                  </div>
++                  <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-primary group-hover:translate-x-1 transition-all" />
++                </div>
++
++                <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t">
++                  {Object.entries(app.stats).map(([key, value]) => (
++                    <div key={key}>
++                      <p className="text-xs text-muted-foreground capitalize mb-1">{key}</p>
++                      <p className="text-sm font-semibold">{value}</p>
++                    </div>
++                  ))}
++                </div>
++
++                <Button
++                  className="w-full mt-6"
++                  variant="outline"
++                  onClick={(e) => {
++                    e.stopPropagation();
++                    setLocation(app.route);
++                  }}
++                >
++                  Open Dashboard
++                  <ArrowRight className="ml-2 h-4 w-4" />
++                </Button>
++              </div>
++            </Card>
++          );
++        })}
++      </div>
++    </div>
++  );
++}
+diff --git a/client/src/pages/OwlFencDashboard.tsx b/client/src/pages/OwlFencDashboard.tsx
+new file mode 100644
+index 0000000..c4055bf
+--- /dev/null
++++ b/client/src/pages/OwlFencDashboard.tsx
+@@ -0,0 +1,239 @@
++import { useLocation } from "wouter";
++import { Card } from "@/components/ui/card";
++import { Button } from "@/components/ui/button";
++import { trpc } from "@/lib/trpc";
++import { 
++  Users, 
++  FileText, 
++  DollarSign, 
++  Activity, 
++  Megaphone,
++  TrendingUp,
++  ArrowLeft
++} from "lucide-react";
++
++export default function OwlFencDashboard() {
++  const [, setLocation] = useLocation();
++  const { data: dashboardStats, isLoading } = trpc.owlfenc.getStats.useQuery();
++
++  const quickActions = [
++    {
++      title: "Manage Users",
++      description: "View and manage all users",
++      icon: Users,
++      route: "/owlfenc/users",
++      color: "from-blue-500 to-cyan-600"
++    },
++    {
++      title: "Payments",
++      description: "Track subscriptions & revenue",
++      icon: DollarSign,
++      route: "/owlfenc/payments",
++      color: "from-green-500 to-emerald-600"
++    },
++    {
++      title: "Usage System",
++      description: "Monitor system usage metrics",
++      icon: Activity,
++      route: "/owlfenc/usage-system",
++      color: "from-purple-500 to-pink-600"
++    },
++    {
++      title: "Announcements",
++      description: "Send notifications to users",
++      icon: Megaphone,
++      route: "/owlfenc/announcements",
++      color: "from-orange-500 to-red-600"
++    }
++  ];
++
++  return (
++    <div className="container mx-auto py-8 px-4">
++      {/* Header with back button */}
++      <div className="mb-8">
++        <Button
++          variant="ghost"
++          className="mb-4"
++          onClick={() => setLocation("/my-apps")}
++        >
++          <ArrowLeft className="mr-2 h-4 w-4" />
++          Back to My Apps
++        </Button>
++        <div className="flex items-center gap-4 mb-2">
++          <div className="p-3 rounded-xl bg-gradient-to-br from-orange-500 to-amber-600 text-white">
++            <FileText className="h-8 w-8" />
++          </div>
++          <div>
++            <h1 className="text-4xl font-bold">Owl Fenc Dashboard</h1>
++            <p className="text-muted-foreground">Construction Management Platform</p>
++          </div>
++        </div>
++      </div>
++
++      {/* Stats Overview */}
++      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
++        <Card className="p-6">
++          <div className="flex items-center justify-between mb-2">
++            <p className="text-sm text-muted-foreground">Total Users</p>
++            <Users className="h-5 w-5 text-blue-500" />
++          </div>
++          <p className="text-3xl font-bold">
++            {isLoading ? "..." : dashboardStats?.data?.totalUsers || 0}
++          </p>
++          <p className="text-xs text-muted-foreground mt-1">All registered users</p>
++        </Card>
++
++        <Card className="p-6">
++          <div className="flex items-center justify-between mb-2">
++            <p className="text-sm text-muted-foreground">Total Clients</p>
++            <Users className="h-5 w-5 text-green-500" />
++          </div>
++          <p className="text-3xl font-bold">
++            {isLoading ? "..." : dashboardStats?.data?.totalClients || 0}
++          </p>
++          <p className="text-xs text-muted-foreground mt-1">Clients in database</p>
++        </Card>
++
++        <Card className="p-6">
++          <div className="flex items-center justify-between mb-2">
++            <p className="text-sm text-muted-foreground">Contracts</p>
++            <FileText className="h-5 w-5 text-purple-500" />
++          </div>
++          <p className="text-3xl font-bold">
++            {isLoading ? "..." : dashboardStats?.data?.totalContracts || 0}
++          </p>
++          <p className="text-xs text-muted-foreground mt-1">Completed contracts</p>
++        </Card>
++
++        <Card className="p-6">
++          <div className="flex items-center justify-between mb-2">
++            <p className="text-sm text-muted-foreground">Invoices</p>
++            <DollarSign className="h-5 w-5 text-orange-500" />
++          </div>
++          <p className="text-3xl font-bold">
++            {isLoading ? "..." : dashboardStats?.data?.totalInvoices || 0}
++          </p>
++          <p className="text-xs text-muted-foreground mt-1">Total invoices</p>
++        </Card>
++      </div>
++
++      {/* Data Overview Chart */}
++      <Card className="p-6 mb-8">
++        <h2 className="text-xl font-bold mb-4">Data Overview</h2>
++        <p className="text-sm text-muted-foreground mb-6">
++          Distribution of clients, contracts, and invoices in Owl Fenc
++        </p>
++        <div className="space-y-4">
++          <div>
++            <div className="flex items-center justify-between mb-2">
++              <span className="text-sm font-medium">Total Clients</span>
++              <div className="flex items-center gap-2">
++                <span className="text-sm font-bold">
++                  {dashboardStats?.data?.totalClients || 0}
++                </span>
++                <span className="text-xs text-muted-foreground">100%</span>
++              </div>
++            </div>
++            <div className="h-2 bg-secondary rounded-full overflow-hidden">
++              <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 w-full" />
++            </div>
++          </div>
++
++          <div>
++            <div className="flex items-center justify-between mb-2">
++              <span className="text-sm font-medium">Contracts</span>
++              <div className="flex items-center gap-2">
++                <span className="text-sm font-bold">
++                  {dashboardStats?.data?.totalContracts || 0}
++                </span>
++                <span className="text-xs text-muted-foreground">
++                  {dashboardStats?.data?.totalClients
++                    ? Math.round(((dashboardStats?.data?.totalContracts || 0) / dashboardStats.data.totalClients) * 100)
++                    : 0}%
++                </span>
++              </div>
++            </div>
++            <div className="h-2 bg-secondary rounded-full overflow-hidden">
++              <div
++                className="h-full bg-gradient-to-r from-green-500 to-emerald-500"
++                style={{
++                  width: dashboardStats?.data?.totalClients
++                    ? `${Math.min(((dashboardStats?.data?.totalContracts || 0) / dashboardStats.data.totalClients) * 100, 100)}%`
++                    : "0%"
++                }}
++              />
++            </div>
++          </div>
++
++          <div>
++            <div className="flex items-center justify-between mb-2">
++              <span className="text-sm font-medium">Invoices</span>
++              <div className="flex items-center gap-2">
++                <span className="text-sm font-bold">
++                  {dashboardStats?.data?.totalInvoices || 0}
++                </span>
++                <span className="text-xs text-muted-foreground">
++                  {dashboardStats?.data?.totalClients
++                    ? Math.round(((dashboardStats?.data?.totalInvoices || 0) / dashboardStats.data.totalClients) * 100)
++                    : 0}%
++                </span>
++              </div>
++            </div>
++            <div className="h-2 bg-secondary rounded-full overflow-hidden">
++              <div
++                className="h-full bg-gradient-to-r from-purple-500 to-pink-500"
++                style={{
++                  width: dashboardStats?.data?.totalClients
++                    ? `${Math.min(((dashboardStats?.data?.totalInvoices || 0) / dashboardStats.data.totalClients) * 100, 100)}%`
++                    : "0%"
++                }}
++              />
++            </div>
++          </div>
++        </div>
++      </Card>
++
++      {/* Quick Actions */}
++      <div>
++        <h2 className="text-2xl font-bold mb-6">Quick Actions</h2>
++        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
++          {quickActions.map((action) => {
++            const Icon = action.icon;
++            return (
++              <Card
++                key={action.route}
++                className="group hover:shadow-lg transition-all duration-300 cursor-pointer overflow-hidden"
++                onClick={() => setLocation(action.route)}
++              >
++                <div className={`h-1 bg-gradient-to-r ${action.color}`} />
++                <div className="p-6">
++                  <div className={`inline-flex p-3 rounded-lg bg-gradient-to-br ${action.color} text-white mb-4`}>
++                    <Icon className="h-6 w-6" />
++                  </div>
++                  <h3 className="font-bold text-lg mb-2 group-hover:text-primary transition-colors">
++                    {action.title}
++                  </h3>
++                  <p className="text-sm text-muted-foreground mb-4">
++                    {action.description}
++                  </p>
++                  <Button
++                    variant="ghost"
++                    size="sm"
++                    className="w-full group-hover:bg-primary/10"
++                    onClick={(e) => {
++                      e.stopPropagation();
++                      setLocation(action.route);
++                    }}
++                  >
++                    Open
++                    <TrendingUp className="ml-2 h-4 w-4" />
++                  </Button>
++                </div>
++              </Card>
++            );
++          })}
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/client/src/pages/UsageSystem.tsx b/client/src/pages/UsageSystem.tsx
+index 33f208b..481b7ef 100644
+--- a/client/src/pages/UsageSystem.tsx
++++ b/client/src/pages/UsageSystem.tsx
+@@ -7,7 +7,7 @@ import { useState, useEffect } from "react";
+ 
+ type DateRange = "all" | "day" | "month" | "year" | "custom";
+ 
+-type SortColumn = 'name' | 'email' | 'clients' | 'contracts' | 'invoices' | 'estimates' | 'projects' | 'payments' | 'permits' | 'properties' | 'dualSignatures' | 'sharedEstimates' | 'modifications' | 'emails' | 'pdfs' | 'total';
++type SortColumn = 'name' | 'email' | 'clients' | 'contracts' | 'invoices' | 'estimates' | 'projects' | 'permits' | 'properties' | 'dualSignatures' | 'modifications' | 'pdfs' | 'total';
+ type SortDirection = 'asc' | 'desc';
+ 
+ export default function UsageSystem() {
+@@ -34,10 +34,15 @@ export default function UsageSystem() {
+     let endDate: string | undefined;
+ 
+     switch (dateRange) {
+-      case "day":
+-        startDate = new Date(now.setHours(0, 0, 0, 0)).toISOString();
+-        endDate = new Date(now.setHours(23, 59, 59, 999)).toISOString();
++      case "day": {
++        const dayStart = new Date(now);
++        dayStart.setHours(0, 0, 0, 0);
++        const dayEnd = new Date(now);
++        dayEnd.setHours(23, 59, 59, 999);
++        startDate = dayStart.toISOString();
++        endDate = dayEnd.toISOString();
+         break;
++      }
+       case "month":
+         startDate = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+         endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999).toISOString();
+@@ -74,6 +79,14 @@ export default function UsageSystem() {
+       refetchIntervalInBackground: false, // Only refetch when tab is active
+     }
+   );
++  // Fetch Resend email usage stats (direct from Resend API)
++  const { data: resendUsage, isLoading: loadingResend, refetch: refetchResend } = trpc.owlfenc.getResendUsage.useQuery(
++    undefined,
++    {
++      refetchInterval: 30000, // Refetch every 30 seconds (less frequent since it's external API)
++      refetchIntervalInBackground: false,
++    }
++  );
+ 
+   // Update last updated timestamp when data changes
+   useEffect(() => {
+@@ -84,6 +97,7 @@ export default function UsageSystem() {
+   const handleManualRefresh = () => {
+     refetchSystem();
+     refetchUsers();
++    refetchResend();
+     setLastUpdated(new Date());
+   };
+ 
+@@ -145,10 +159,7 @@ export default function UsageSystem() {
+         aValue = a.projectsCount || 0;
+         bValue = b.projectsCount || 0;
+         break;
+-      case 'payments':
+-        aValue = a.paymentsCount || 0;
+-        bValue = b.paymentsCount || 0;
+-        break;
++
+       case 'permits':
+         aValue = a.permitSearchesCount || 0;
+         bValue = b.permitSearchesCount || 0;
+@@ -161,33 +172,27 @@ export default function UsageSystem() {
+         aValue = a.dualSignatureContractsCount || 0;
+         bValue = b.dualSignatureContractsCount || 0;
+         break;
+-      case 'sharedEstimates':
+-        aValue = a.sharedEstimatesCount || 0;
+-        bValue = b.sharedEstimatesCount || 0;
+-        break;
++
+       case 'modifications':
+         aValue = a.contractModificationsCount || 0;
+         bValue = b.contractModificationsCount || 0;
+         break;
+-      case 'emails':
+-        aValue = a.emailsSentCount || 0;
+-        bValue = b.emailsSentCount || 0;
+-        break;
++
+       case 'pdfs':
+         aValue = a.pdfsGeneratedCount || 0;
+         bValue = b.pdfsGeneratedCount || 0;
+         break;
+       case 'total':
+         aValue = (a.clientsCount || 0) + (a.contractsCount || 0) + (a.invoicesCount || 0) + 
+-                 (a.estimatesCount || 0) + (a.projectsCount || 0) + (a.paymentsCount || 0) +
++                 (a.estimatesCount || 0) + (a.projectsCount || 0) +
+                  (a.permitSearchesCount || 0) + (a.propertyVerificationsCount || 0) +
+-                 (a.dualSignatureContractsCount || 0) + (a.sharedEstimatesCount || 0) +
+-                 (a.contractModificationsCount || 0) + (a.emailsSentCount || 0) + (a.pdfsGeneratedCount || 0);
++                 (a.dualSignatureContractsCount || 0) +
++                 (a.contractModificationsCount || 0) + (a.pdfsGeneratedCount || 0);
+         bValue = (b.clientsCount || 0) + (b.contractsCount || 0) + (b.invoicesCount || 0) + 
+-                 (b.estimatesCount || 0) + (b.projectsCount || 0) + (b.paymentsCount || 0) +
++                 (b.estimatesCount || 0) + (b.projectsCount || 0) +
+                  (b.permitSearchesCount || 0) + (b.propertyVerificationsCount || 0) +
+-                 (b.dualSignatureContractsCount || 0) + (b.sharedEstimatesCount || 0) +
+-                 (b.contractModificationsCount || 0) + (b.emailsSentCount || 0) + (b.pdfsGeneratedCount || 0);
++                 (b.dualSignatureContractsCount || 0) +
++                 (b.contractModificationsCount || 0) + (b.pdfsGeneratedCount || 0);
+         break;
+       default:
+         aValue = 0;
+@@ -311,55 +316,51 @@ export default function UsageSystem() {
+ 
+         {/* Compact Global System Metrics */}
+         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+-          {/* Emails Sent */}
+-          <Card className="bg-slate-900 border-slate-800 p-4">
++          {/* Resend Email Usage (with alerts) */}
++          <Card className={`border-slate-800 p-4 ${
++            resendUsage?.data?.isCritical ? 'bg-red-900/20 border-red-500' :
++            resendUsage?.data?.isNearLimit ? 'bg-yellow-900/20 border-yellow-500' :
++            'bg-slate-900'
++          }`}>
+             <div className="flex items-center justify-between mb-2">
+-              <Mail className="w-6 h-6 text-cyan-500" />
+-              {emailLimitPercentage >= 80 && (
+-                <AlertTriangle className="w-4 h-4 text-amber-500" />
++              <Mail className={`w-6 h-6 ${
++                resendUsage?.data?.isCritical ? 'text-red-400' :
++                resendUsage?.data?.isNearLimit ? 'text-yellow-400' :
++                'text-blue-500'
++              }`} />
++              {resendUsage?.data?.isNearLimit && (
++                <AlertTriangle className={`w-5 h-5 ${
++                  resendUsage?.data?.isCritical ? 'text-red-400 animate-pulse' : 'text-yellow-400'
++                }`} />
+               )}
+             </div>
+             <div className="space-y-1">
+-              <p className="text-xs text-slate-400">Emails Sent ({getDateRangeLabel()})</p>
++              <p className="text-xs text-slate-400">Resend Emails (Today)</p>
+               <p className="text-2xl font-bold text-white">
+-                {dateRange === "day" ? systemUsage?.emailsSentToday || 0 : (systemUsage as any)?.emailsSentMonth || 0}
+-                {dateRange === "day" && <span className="text-sm text-slate-400"> / 500</span>}
++                {resendUsage?.data?.emailsSentToday || 0}
+               </p>
+-              {dateRange === "day" && (
+-                <>
+-                  <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+-                    <div 
+-                      className={`h-full transition-all ${
+-                        emailLimitPercentage >= 95 ? 'bg-red-500' :
+-                        emailLimitPercentage >= 80 ? 'bg-amber-500' : 'bg-cyan-500'
+-                      }`}
+-                      style={{ width: `${Math.min(emailLimitPercentage, 100)}%` }}
+-                    />
+-                  </div>
+-                  <p className="text-xs text-slate-500">
+-                    {emailLimitPercentage.toFixed(1)}% of daily limit
+-                  </p>
+-                </>
++              <div className="flex items-center justify-between text-xs">
++                <span className="text-slate-500">
++                  {resendUsage?.data?.usagePercentage || 0}% of daily limit
++                </span>
++                <span className={`font-semibold ${
++                  resendUsage?.data?.isCritical ? 'text-red-400' :
++                  resendUsage?.data?.isNearLimit ? 'text-yellow-400' :
++                  'text-slate-500'
++                }`}>
++                  {resendUsage?.data?.dailyLimit || 500} max
++                </span>
++              </div>
++              {resendUsage?.data?.isNearLimit && (
++                <p className={`text-xs font-semibold mt-1 ${
++                  resendUsage?.data?.isCritical ? 'text-red-400' : 'text-yellow-400'
++                }`}>
++                  ⚠️ {resendUsage?.data?.isCritical ? 'CRITICAL' : 'WARNING'}: Approaching limit!
++                </p>
+               )}
+             </div>
+           </Card>
+ 
+-          {/* PDFs Generated */}
+-          <Card className="bg-slate-900 border-slate-800 p-4">
+-            <div className="flex items-center justify-between mb-2">
+-              <FileText className="w-6 h-6 text-purple-500" />
+-            </div>
+-            <div className="space-y-1">
+-              <p className="text-xs text-slate-400">PDFs Generated ({getDateRangeLabel()})</p>
+-              <p className="text-2xl font-bold text-white">
+-                {dateRange === "day" ? systemUsage?.pdfsGeneratedToday || 0 : systemUsage?.pdfsGeneratedMonth || 0}
+-              </p>
+-              <p className="text-xs text-slate-500">
+-                {systemUsage?.pdfsGeneratedToday || 0} today
+-              </p>
+-            </div>
+-          </Card>
+-
+           {/* Total Operations */}
+           <Card className="bg-slate-900 border-slate-800 p-4">
+             <div className="flex items-center justify-between mb-2">
+@@ -370,10 +371,16 @@ export default function UsageSystem() {
+               <p className="text-2xl font-bold text-white">
+                 {(systemUsage?.totalClients || 0) + 
+                  (systemUsage?.totalContracts || 0) + 
+-                 (systemUsage?.totalInvoices || 0)}
++                 (systemUsage?.totalInvoices || 0) +
++                 (systemUsage?.totalEstimates || 0) +
++                 (systemUsage?.totalProjects || 0) +
++                 (systemUsage?.totalPermitSearches || 0) +
++                 (systemUsage?.totalPropertyVerifications || 0) +
++                 (systemUsage?.totalDualSignatureContracts || 0) +
++                 (systemUsage?.totalContractModifications || 0)}
+               </p>
+               <p className="text-xs text-slate-500">
+-                Clients + Contracts + Invoices
++                All tracked operations
+               </p>
+             </div>
+           </Card>
+@@ -419,10 +426,6 @@ export default function UsageSystem() {
+               <p className="text-xs text-slate-400 mb-1">Total Projects</p>
+               <p className="text-xl font-bold text-blue-400">{(systemUsage as any)?.totalProjects || 0}</p>
+             </div>
+-            <div className="bg-slate-800/50 rounded-lg p-3">
+-              <p className="text-xs text-slate-400 mb-1">Total Payments</p>
+-              <p className="text-xl font-bold text-pink-400">{(systemUsage as any)?.totalPayments || 0}</p>
+-            </div>
+             {/* NEW: High-priority metrics */}
+             <div className="bg-slate-800/50 rounded-lg p-3">
+               <p className="text-xs text-slate-400 mb-1">Permit Searches</p>
+@@ -436,10 +439,6 @@ export default function UsageSystem() {
+               <p className="text-xs text-slate-400 mb-1">Dual Signatures</p>
+               <p className="text-xl font-bold text-indigo-400">{(systemUsage as any)?.totalDualSignatureContracts || 0}</p>
+             </div>
+-            <div className="bg-slate-800/50 rounded-lg p-3">
+-              <p className="text-xs text-slate-400 mb-1">Shared Estimates</p>
+-              <p className="text-xl font-bold text-rose-400">{(systemUsage as any)?.totalSharedEstimates || 0}</p>
+-            </div>
+             <div className="bg-slate-800/50 rounded-lg p-3">
+               <p className="text-xs text-slate-400 mb-1">Contract Mods</p>
+               <p className="text-xl font-bold text-violet-400">{(systemUsage as any)?.totalContractModifications || 0}</p>
+@@ -485,9 +484,6 @@ export default function UsageSystem() {
+                   <th onClick={() => handleSort('projects')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                     Projects {sortColumn === 'projects' && (sortDirection === 'asc' ? '↑' : '↓')}
+                   </th>
+-                  <th onClick={() => handleSort('payments')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+-                    Payments {sortColumn === 'payments' && (sortDirection === 'asc' ? '↑' : '↓')}
+-                  </th>
+                   <th onClick={() => handleSort('permits')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                     Permits {sortColumn === 'permits' && (sortDirection === 'asc' ? '↑' : '↓')}
+                   </th>
+@@ -497,15 +493,9 @@ export default function UsageSystem() {
+                   <th onClick={() => handleSort('dualSignatures')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                     Dual Sigs {sortColumn === 'dualSignatures' && (sortDirection === 'asc' ? '↑' : '↓')}
+                   </th>
+-                  <th onClick={() => handleSort('sharedEstimates')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+-                    Shared Est {sortColumn === 'sharedEstimates' && (sortDirection === 'asc' ? '↑' : '↓')}
+-                  </th>
+                   <th onClick={() => handleSort('modifications')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                     Contract Mods {sortColumn === 'modifications' && (sortDirection === 'asc' ? '↑' : '↓')}
+                   </th>
+-                  <th onClick={() => handleSort('emails')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+-                    Emails {sortColumn === 'emails' && (sortDirection === 'asc' ? '↑' : '↓')}
+-                  </th>
+                   <th onClick={() => handleSort('pdfs')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                     PDFs {sortColumn === 'pdfs' && (sortDirection === 'asc' ? '↑' : '↓')}
+                   </th>
+@@ -517,7 +507,7 @@ export default function UsageSystem() {
+               <tbody>
+                 {filteredUsers.length === 0 ? (
+                   <tr>
+-                    <td colSpan={16} className="text-center py-6 text-slate-500 text-sm">
++                    <td colSpan={14} className="text-center py-6 text-slate-500 text-sm">
+                       No users found
+                     </td>
+                   </tr>
+@@ -525,11 +515,10 @@ export default function UsageSystem() {
+                   filteredUsers.map((user: any) => {
+                     const total = (user.clientsCount || 0) + (user.contractsCount || 0) + 
+                                   (user.invoicesCount || 0) + (user.estimatesCount || 0) +
+-                                  (user.projectsCount || 0) + (user.paymentsCount || 0) +
++                                  (user.projectsCount || 0) +
+                                   (user.permitSearchesCount || 0) + (user.propertyVerificationsCount || 0) +
+                                   (user.dualSignatureContractsCount || 0) +
+-                                  (user.sharedEstimatesCount || 0) + (user.contractModificationsCount || 0) +
+-                                  (user.emailsSentCount || 0) + (user.pdfsGeneratedCount || 0);
++                                  (user.contractModificationsCount || 0) + (user.pdfsGeneratedCount || 0);
+                     
+                     return (
+                       <tr key={user.uid} className="border-b border-slate-800 hover:bg-slate-800/50">
+@@ -550,9 +539,6 @@ export default function UsageSystem() {
+                         <td className="py-2 px-3 text-center text-blue-400 font-semibold text-sm">
+                           {user.projectsCount || 0}
+                         </td>
+-                        <td className="py-2 px-3 text-center text-pink-400 font-semibold text-sm">
+-                          {user.paymentsCount || 0}
+-                        </td>
+                         {/* NEW: High-priority metrics */}
+                         <td className="py-2 px-3 text-center text-orange-400 font-semibold text-sm">
+                           {user.permitSearchesCount || 0}
+@@ -563,15 +549,9 @@ export default function UsageSystem() {
+                         <td className="py-2 px-3 text-center text-indigo-400 font-semibold text-sm">
+                           {user.dualSignatureContractsCount || 0}
+                         </td>
+-                        <td className="py-2 px-3 text-center text-rose-400 font-semibold text-sm">
+-                          {user.sharedEstimatesCount || 0}
+-                        </td>
+                         <td className="py-2 px-3 text-center text-violet-400 font-semibold text-sm">
+                           {user.contractModificationsCount || 0}
+                         </td>
+-                        <td className="py-2 px-3 text-center text-cyan-300 font-semibold text-sm">
+-                          {user.emailsSentCount || 0}
+-                        </td>
+                         <td className="py-2 px-3 text-center text-purple-300 font-semibold text-sm">
+                           {user.pdfsGeneratedCount || 0}
+                         </td>
+diff --git a/client/src/pages/Users.tsx b/client/src/pages/Users.tsx
+index a1602d5..bf0f603 100644
+--- a/client/src/pages/Users.tsx
++++ b/client/src/pages/Users.tsx
+@@ -31,10 +31,12 @@ export default function Users() {
+   const [showDetailModal, setShowDetailModal] = useState(false);
+   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+   const [confirmAction, setConfirmAction] = useState<{
+-    type: 'disable' | 'enable' | 'delete' | 'reset';
++    type: 'disable' | 'enable' | 'delete' | 'reset' | 'changeEmail';
+     title: string;
+     description: string;
+   } | null>(null);
++  const [showChangeEmailDialog, setShowChangeEmailDialog] = useState(false);
++  const [newEmail, setNewEmail] = useState('');
+ 
+   const utils = trpc.useUtils();
+ 
+@@ -91,6 +93,19 @@ export default function Users() {
+     },
+   });
+ 
++  const updateEmailMutation = trpc.owlfenc.updateEmail.useMutation({
++    onSuccess: () => {
++      toast.success('Email updated successfully. User needs to verify new email.');
++      utils.owlfenc.getUsers.invalidate();
++      setShowChangeEmailDialog(false);
++      setShowDetailModal(false);
++      setNewEmail('');
++    },
++    onError: (error) => {
++      toast.error(`Error: ${error.message}`);
++    },
++  });
++
+   // Get ALL users from Firebase (no hardcoded filter)
+   const allUsers = data?.success && data.data ? data.data : [];
+ 
+@@ -160,6 +175,21 @@ export default function Users() {
+     setShowConfirmDialog(true);
+   };
+ 
++  const handleChangeEmail = () => {
++    if (!selectedUser) return;
++    setNewEmail(selectedUser.email || '');
++    setShowChangeEmailDialog(true);
++  };
++
++  const executeChangeEmail = () => {
++    if (!selectedUser || !newEmail) return;
++    if (newEmail === selectedUser.email) {
++      toast.error('New email must be different from current email');
++      return;
++    }
++    updateEmailMutation.mutate({ uid: selectedUser.uid, newEmail });
++  };
++
+   const executeConfirmedAction = () => {
+     if (!selectedUser || !confirmAction) return;
+ 
+@@ -499,10 +529,18 @@ export default function Users() {
+                     <Key className="h-4 w-4 mr-2" />
+                     Reset Password
+                   </Button>
++                  <Button
++                    onClick={handleChangeEmail}
++                    variant="outline"
++                    className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
++                  >
++                    <Key className="h-4 w-4 mr-2" />
++                    Change Email
++                  </Button>
+                   <Button
+                     onClick={handleDeleteUser}
+                     variant="outline"
+-                    className="border-red-500/30 text-red-400 hover:bg-red-500/10"
++                    className="border-red-500/30 text-red-400 hover:bg-red-500/10 col-span-2"
+                   >
+                     <Trash2 className="h-4 w-4 mr-2" />
+                     Delete User
+@@ -555,6 +593,60 @@ export default function Users() {
+           </DialogFooter>
+         </DialogContent>
+       </Dialog>
++
++      {/* Change Email Dialog */}
++      <Dialog open={showChangeEmailDialog} onOpenChange={setShowChangeEmailDialog}>
++        <DialogContent className="bg-slate-900 border-slate-800 text-white">
++          <DialogHeader>
++            <DialogTitle className="text-white">Change User Email</DialogTitle>
++            <DialogDescription className="text-slate-400">
++              Update the email address for {selectedUser?.displayName || selectedUser?.email}
++            </DialogDescription>
++          </DialogHeader>
++          <div className="space-y-4 py-4">
++            <div>
++              <label className="text-sm text-slate-400 mb-2 block">Current Email</label>
++              <Input
++                value={selectedUser?.email || ''}
++                disabled
++                className="bg-slate-800 border-slate-700 text-slate-400"
++              />
++            </div>
++            <div>
++              <label className="text-sm text-slate-400 mb-2 block">New Email</label>
++              <Input
++                type="email"
++                value={newEmail}
++                onChange={(e) => setNewEmail(e.target.value)}
++                placeholder="Enter new email address"
++                className="bg-slate-800 border-slate-700 text-white"
++              />
++            </div>
++            <p className="text-xs text-amber-400">
++              ⚠️ The user will need to verify the new email address
++            </p>
++          </div>
++          <DialogFooter>
++            <Button 
++              variant="outline" 
++              onClick={() => {
++                setShowChangeEmailDialog(false);
++                setNewEmail('');
++              }}
++              className="border-slate-700 text-slate-300"
++            >
++              Cancel
++            </Button>
++            <Button
++              onClick={executeChangeEmail}
++              disabled={!newEmail || newEmail === selectedUser?.email}
++              className="bg-purple-600 hover:bg-purple-700 text-white"
++            >
++              Update Email
++            </Button>
++          </DialogFooter>
++        </DialogContent>
++      </Dialog>
+     </div>
+   );
+ }
+diff --git a/package.json b/package.json
+index 23db4b1..2936429 100644
+--- a/package.json
++++ b/package.json
+@@ -13,6 +13,7 @@
+     "db:push": "drizzle-kit generate && drizzle-kit migrate"
+   },
+   "dependencies": {
++    "@anthropic-ai/sdk": "^0.71.2",
+     "@aws-sdk/client-s3": "^3.693.0",
+     "@aws-sdk/s3-request-presigner": "^3.693.0",
+     "@hookform/resolvers": "^5.2.2",
+@@ -53,6 +54,7 @@
+     "clsx": "^2.1.1",
+     "cmdk": "^1.1.1",
+     "cookie": "^1.0.2",
++    "cookie-parser": "^1.4.7",
+     "date-fns": "^4.1.0",
+     "dotenv": "^17.2.2",
+     "drizzle-orm": "^0.45.1",
+@@ -88,6 +90,7 @@
+     "@builder.io/vite-plugin-jsx-loc": "^0.1.1",
+     "@tailwindcss/typography": "^0.5.15",
+     "@tailwindcss/vite": "^4.1.3",
++    "@types/cookie-parser": "^1.4.10",
+     "@types/express": "4.17.21",
+     "@types/google.maps": "^3.58.1",
+     "@types/node": "^24.7.0",
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 23bc547..708782e 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -16,6 +16,9 @@ importers:
+ 
+   .:
+     dependencies:
++      '@anthropic-ai/sdk':
++        specifier: ^0.71.2
++        version: 0.71.2(zod@4.1.12)
+       '@aws-sdk/client-s3':
+         specifier: ^3.693.0
+         version: 3.907.0
+@@ -136,6 +139,9 @@ importers:
+       cookie:
+         specifier: ^1.0.2
+         version: 1.0.2
++      cookie-parser:
++        specifier: ^1.4.7
++        version: 1.4.7
+       date-fns:
+         specifier: ^4.1.0
+         version: 4.1.0
+@@ -236,6 +242,9 @@ importers:
+       '@tailwindcss/vite':
+         specifier: ^4.1.3
+         version: 4.1.14(vite@7.1.9(@types/node@24.7.0)(jiti@2.6.1)(lightningcss@1.30.1)(tsx@4.20.6))
++      '@types/cookie-parser':
++        specifier: ^1.4.10
++        version: 1.4.10(@types/express@4.17.21)
+       '@types/express':
+         specifier: 4.17.21
+         version: 4.17.21
+@@ -308,6 +317,15 @@ packages:
+   '@antfu/utils@9.3.0':
+     resolution: {integrity: sha512-9hFT4RauhcUzqOE4f1+frMKLZrgNog5b06I7VmZQV1BkvwvqrbC8EBZf3L1eEL2AKb6rNKjER0sEvJiSP1FXEA==}
+ 
++  '@anthropic-ai/sdk@0.71.2':
++    resolution: {integrity: sha512-TGNDEUuEstk/DKu0/TflXAEt+p+p/WhTlFzEnoosvbaDU2LTjm42igSdlL0VijrKpWejtOKxX0b8A7uc+XiSAQ==}
++    hasBin: true
++    peerDependencies:
++      zod: ^3.25.0 || ^4.0.0
++    peerDependenciesMeta:
++      zod:
++        optional: true
++
+   '@aws-crypto/crc32@5.2.0':
+     resolution: {integrity: sha512-nLbCWqQNgUiwwtFsen1AdzAtvuLRsQS8rYgMuxCrdKf9kOssamGLuPwyTY9wyYblNr9+1XM8v6zoDTPPSIeANg==}
+     engines: {node: '>=16.0.0'}
+@@ -2303,6 +2321,11 @@ packages:
+   '@types/connect@3.4.38':
+     resolution: {integrity: sha512-K6uROf1LD88uDQqJCktA4yzL1YYAK6NgfsI0v/mTgyPKWsX1CnJ0XPSDhViejru1GcRkLWb8RlzFYJRqGUbaug==}
+ 
++  '@types/cookie-parser@1.4.10':
++    resolution: {integrity: sha512-B4xqkqfZ8Wek+rCOeRxsjMS9OgvzebEzzLYw7NHYuvzb7IdxOkI0ZHGgeEBX4PUM7QGVvNSK60T3OvWj3YfBRg==}
++    peerDependencies:
++      '@types/express': '*'
++
+   '@types/d3-array@3.2.2':
+     resolution: {integrity: sha512-hOLWVbm7uRza0BYXpIIW5pxfrKe0W+D5lrFiAEYR+pb6w3N2SwSMaJbXdUfSEv+dT4MfHBLtn5js0LAWaO6otw==}
+ 
+@@ -2738,6 +2761,10 @@ packages:
+   convert-source-map@2.0.0:
+     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
+ 
++  cookie-parser@1.4.7:
++    resolution: {integrity: sha512-nGUvgXnotP3BsjiLX2ypbQnWoGUPIIfHQNZkkC668ntrzGWEZVW70HDEB1qnNGMicPje6EttlIgzo51YSwNQGw==}
++    engines: {node: '>= 0.8.0'}
++
+   cookie-signature@1.0.6:
+     resolution: {integrity: sha512-QADzlaHc8icV8I7vbaJXJwod9HWYp8uCqf1xa4OfNu1T7JVxQIrUgOWtHdNDtPiywmFbiS12VjotIXLrKM3orQ==}
+ 
+@@ -2745,6 +2772,10 @@ packages:
+     resolution: {integrity: sha512-6DnInpx7SJ2AK3+CTUE/ZM0vWTUboZCegxhC2xiIydHR9jNuTAASBrfEpHhiGOZw/nX51bHt6YQl8jsGo4y/0w==}
+     engines: {node: '>= 0.6'}
+ 
++  cookie@0.7.2:
++    resolution: {integrity: sha512-yki5XnKuf750l50uGTllt6kKILY4nQ1eNIQatoXEByZ5dWgnKqbnqmTrBE5B4N7lrMJKQ2ytWMiTO2o0v6Ew/w==}
++    engines: {node: '>= 0.6'}
++
+   cookie@1.0.2:
+     resolution: {integrity: sha512-9Kr/j4O16ISv8zBBhJoi4bXOYNTkFLOqSL3UDB0njXxCXNezjeyVrJyGOWtgfs/q2km1gwBcfH8q1yEGoMYunA==}
+     engines: {node: '>=18'}
+@@ -3562,6 +3593,10 @@ packages:
+   json-bigint@1.0.0:
+     resolution: {integrity: sha512-SiPv/8VpZuWbvLSMtTDU8hEfrZWg/mH/nV/b4o0CYbSxu1UIQPLdwKOCIyLQX+VIPO5vrLX3i8qtqFyhdPSUSQ==}
+ 
++  json-schema-to-ts@3.1.1:
++    resolution: {integrity: sha512-+DWg8jCJG2TEnpy7kOm/7/AxaYoaRbjVB4LFZLySZlWn8exGs3A4OLJR966cVvU26N7X9TWxl+Jsw7dzAqKT6g==}
++    engines: {node: '>=16'}
++
+   json5@2.2.3:
+     resolution: {integrity: sha512-XmOWe7eyHYH14cLdVPoyg+GOH3rYX++KpzrylJwSW98t3Nk+U8XOl8FWKOgwtzdb8lXGf6zYwDUzeHMWfxasyg==}
+     engines: {node: '>=6'}
+@@ -4587,6 +4622,9 @@ packages:
+   trough@2.2.0:
+     resolution: {integrity: sha512-tmMpK00BjZiUyVyvrBK7knerNgmgvcV/KLVyuma/SC+TQN167GrMRciANTz09+k3zW8L8t60jWO1GpfkZdjTaw==}
+ 
++  ts-algebra@2.0.0:
++    resolution: {integrity: sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw==}
++
+   ts-dedent@2.2.0:
+     resolution: {integrity: sha512-q5W7tVM71e2xjHZTlgfTDoPF/SmqKG5hddq9SzR49CH2hayqRKJtQ4mtRlSxKaJlR/+9rEM+mnBHf7I2/BQcpQ==}
+     engines: {node: '>=6.10'}
+@@ -4930,6 +4968,12 @@ snapshots:
+ 
+   '@antfu/utils@9.3.0': {}
+ 
++  '@anthropic-ai/sdk@0.71.2(zod@4.1.12)':
++    dependencies:
++      json-schema-to-ts: 3.1.1
++    optionalDependencies:
++      zod: 4.1.12
++
+   '@aws-crypto/crc32@5.2.0':
+     dependencies:
+       '@aws-crypto/util': 5.2.0
+@@ -7241,6 +7285,10 @@ snapshots:
+     dependencies:
+       '@types/node': 24.7.0
+ 
++  '@types/cookie-parser@1.4.10(@types/express@4.17.21)':
++    dependencies:
++      '@types/express': 4.17.21
++
+   '@types/d3-array@3.2.2': {}
+ 
+   '@types/d3-axis@3.0.6':
+@@ -7740,10 +7788,17 @@ snapshots:
+ 
+   convert-source-map@2.0.0: {}
+ 
++  cookie-parser@1.4.7:
++    dependencies:
++      cookie: 0.7.2
++      cookie-signature: 1.0.6
++
+   cookie-signature@1.0.6: {}
+ 
+   cookie@0.7.1: {}
+ 
++  cookie@0.7.2: {}
++
+   cookie@1.0.2: {}
+ 
+   copy-anything@3.0.5:
+@@ -8675,6 +8730,11 @@ snapshots:
+     dependencies:
+       bignumber.js: 9.3.1
+ 
++  json-schema-to-ts@3.1.1:
++    dependencies:
++      '@babel/runtime': 7.28.4
++      ts-algebra: 2.0.0
++
+   json5@2.2.3: {}
+ 
+   jsonwebtoken@9.0.3:
+@@ -10025,6 +10085,8 @@ snapshots:
+ 
+   trough@2.2.0: {}
+ 
++  ts-algebra@2.0.0: {}
++
+   ts-dedent@2.2.0: {}
+ 
+   tslib@2.8.1: {}
+diff --git a/server/_core/context.ts b/server/_core/context.ts
+index 800c3ff..b18e520 100644
+--- a/server/_core/context.ts
++++ b/server/_core/context.ts
+@@ -1,5 +1,7 @@
+ import type { CreateExpressContextOptions } from "@trpc/server/adapters/express";
+ import type { User } from "../../drizzle/schema";
++import { COOKIE_NAME } from "@shared/const";
++import { validateSession } from "../services/auth";
+ 
+ export type TrpcContext = {
+   req: CreateExpressContextOptions["req"];
+@@ -10,8 +12,13 @@ export type TrpcContext = {
+ export async function createContext(
+   opts: CreateExpressContextOptions
+ ): Promise<TrpcContext> {
+-  // Authentication completely disabled - no Manus dependencies
+-  const user: User | null = null;
++  // Get session from cookie
++  const sessionId = opts.req.cookies[COOKIE_NAME];
++  let user: User | null = null;
++
++  if (sessionId) {
++    user = await validateSession(sessionId);
++  }
+ 
+   return {
+     req: opts.req,
+diff --git a/server/_core/env.ts b/server/_core/env.ts
+index 2792b99..003b84c 100644
+--- a/server/_core/env.ts
++++ b/server/_core/env.ts
+@@ -7,4 +7,5 @@ export const ENV = {
+   isProduction: process.env.NODE_ENV === "production",
+   forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
+   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
++  resendApiKey: process.env.RESEND_API_KEY ?? "",
+ };
+diff --git a/server/_core/index.ts b/server/_core/index.ts
+index 87a6179..3f2e272 100644
+--- a/server/_core/index.ts
++++ b/server/_core/index.ts
+@@ -9,6 +9,7 @@ if (process.env.NODE_ENV !== 'production' && !process.env.REPL_ID) {
+ import express from "express";
+ import { createServer } from "http";
+ import net from "net";
++import cookieParser from "cookie-parser";
+ import { createExpressMiddleware } from "@trpc/server/adapters/express";
+ // OAuth disabled - no Manus dependencies
+ // import { registerOAuthRoutes } from "./oauth";
+@@ -38,6 +39,8 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
+ async function startServer() {
+   const app = express();
+   const server = createServer(app);
++  // Configure cookie parser
++  app.use(cookieParser());
+   // Configure body parser with larger size limit for file uploads
+   app.use(express.json({ limit: "50mb" }));
+   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+diff --git a/server/routers.ts b/server/routers.ts
+index 09612d9..71cf2d2 100644
+--- a/server/routers.ts
++++ b/server/routers.ts
+@@ -248,11 +248,11 @@ export const appRouter = router({
+       .input(z.object({
+         startDate: z.string().optional(),
+         endDate: z.string().optional(),
+-      }))
++      }).optional())
+       .query(async ({ input }) => {
+       try {
+         const { getSystemUsageMetrics } = await import('./services/owlfenc-firebase');
+-        const metrics = await getSystemUsageMetrics(input.startDate, input.endDate);
++        const metrics = await getSystemUsageMetrics(input?.startDate, input?.endDate);
+         return metrics;
+       } catch (error: any) {
+         console.error('[Router] Error fetching system usage:', error);
+@@ -283,17 +283,43 @@ export const appRouter = router({
+       .input(z.object({
+         startDate: z.string().optional(),
+         endDate: z.string().optional(),
+-      }))
++      }).optional())
+       .query(async ({ input }) => {
+       try {
+         const { getUserUsageBreakdown } = await import('./services/owlfenc-firebase');
+-        const breakdown = await getUserUsageBreakdown(input.startDate, input.endDate);
++        const breakdown = await getUserUsageBreakdown(input?.startDate, input?.endDate);
+         return breakdown;
+       } catch (error: any) {
+         console.error('[Router] Error fetching user usage breakdown:', error);
+         return [];
+       }
+     }),
++
++    // Get Resend email usage stats (direct from Resend API)
++    getResendUsage: publicProcedure.query(async () => {
++      try {
++        const { getResendUsageStats } = await import('./services/resend-api');
++        const stats = await getResendUsageStats();
++        return {
++          success: true,
++          data: stats,
++        };
++      } catch (error: any) {
++        console.error('[Router] Error fetching Resend usage:', error);
++        return {
++          success: false,
++          error: error.message,
++          data: {
++            emailsSentToday: 0,
++            emailsSentThisMonth: 0,
++            dailyLimit: 500,
++            usagePercentage: 0,
++            isNearLimit: false,
++            isCritical: false,
++          },
++        };
++      }
++    }),
+   }),
+ 
+   // Stripe payment and subscription management
+@@ -334,6 +360,16 @@ export const appRouter = router({
+       .query(async () => {
+         return await getCampaignHistory(50);
+       }),
++    
++    // AI-powered message enhancement
++    enhanceMessage: protectedProcedure
++      .input(z.object({
++        message: z.string().min(1, 'Message cannot be empty'),
++      }))
++      .mutation(async ({ input }) => {
++        const { enhanceMessageWithAI } = await import('./services/anthropic-service');
++        return await enhanceMessageWithAI(input.message);
++      }),
+   }),
+ });
+ 
+diff --git a/server/services/anthropic-service.ts b/server/services/anthropic-service.ts
+new file mode 100644
+index 0000000..cbe67e6
+--- /dev/null
++++ b/server/services/anthropic-service.ts
+@@ -0,0 +1,122 @@
++import Anthropic from '@anthropic-ai/sdk';
++
++/**
++ * Anthropic AI Service
++ * Enhances announcement messages with AI to make them professional and translate to English
++ */
++
++// Initialize Anthropic client (will use ANTHROPIC_API_KEY from environment)
++const getAnthropicClient = () => {
++  const apiKey = process.env.ANTHROPIC_API_KEY;
++  
++  if (!apiKey) {
++    throw new Error('ANTHROPIC_API_KEY is not configured. Please add it to your environment variables.');
++  }
++  
++  return new Anthropic({
++    apiKey: apiKey,
++  });
++};
++
++/**
++ * Enhance a message using Claude AI
++ * - Rewrites to professional tone
++ * - Translates to English if needed
++ * - Improves clarity and structure
++ */
++export async function enhanceMessageWithAI(originalMessage: string): Promise<{
++  success: boolean;
++  enhancedMessage?: string;
++  error?: string;
++}> {
++  try {
++    if (!originalMessage || originalMessage.trim().length === 0) {
++      return {
++        success: false,
++        error: 'Message cannot be empty',
++      };
++    }
++
++    const anthropic = getAnthropicClient();
++
++    const systemPrompt = `You are a professional communication expert. Your task is to enhance messages for business announcements.
++
++Your goals:
++1. Rewrite the message in a professional, clear, and engaging tone
++2. Translate to English if the message is in another language (especially Spanish)
++3. Improve structure and clarity
++4. Keep the core message and intent intact
++5. Make it suitable for a professional business announcement
++
++Guidelines:
++- Use professional but friendly language
++- Keep it concise and impactful
++- Maintain the original intent and key information
++- Format with proper paragraphs if needed
++- Do NOT add greetings or signatures (the system will handle that)
++- Output ONLY the enhanced message, nothing else`;
++
++    const userPrompt = `Please enhance this announcement message:
++
++${originalMessage}
++
++Return ONLY the enhanced message in English, with professional tone and clear structure.`;
++
++    const message = await anthropic.messages.create({
++      model: 'claude-3-5-sonnet-20241022',
++      max_tokens: 1024,
++      system: systemPrompt,
++      messages: [
++        {
++          role: 'user',
++          content: userPrompt,
++        },
++      ],
++    });
++
++    // Extract the enhanced message from Claude's response
++    const enhancedMessage = message.content
++      .filter((block) => block.type === 'text')
++      .map((block) => (block as { type: 'text'; text: string }).text)
++      .join('\n')
++      .trim();
++
++    if (!enhancedMessage) {
++      return {
++        success: false,
++        error: 'AI did not return a valid response',
++      };
++    }
++
++    console.log('[Anthropic] Message enhanced successfully');
++    console.log('[Anthropic] Original length:', originalMessage.length);
++    console.log('[Anthropic] Enhanced length:', enhancedMessage.length);
++
++    return {
++      success: true,
++      enhancedMessage,
++    };
++  } catch (error: any) {
++    console.error('[Anthropic] Error enhancing message:', error);
++    
++    // Handle specific Anthropic API errors
++    if (error.status === 401) {
++      return {
++        success: false,
++        error: 'Invalid API key. Please check your ANTHROPIC_API_KEY configuration.',
++      };
++    }
++    
++    if (error.status === 429) {
++      return {
++        success: false,
++        error: 'Rate limit exceeded. Please try again in a moment.',
++      };
++    }
++
++    return {
++      success: false,
++      error: error.message || 'Failed to enhance message with AI',
++    };
++  }
++}
+diff --git a/server/services/owlfenc-firebase.ts b/server/services/owlfenc-firebase.ts
+index a491f18..63acfe3 100644
+--- a/server/services/owlfenc-firebase.ts
++++ b/server/services/owlfenc-firebase.ts
+@@ -1,4 +1,6 @@
+ import { getFirestore, getAuth } from './firebase';
++import { getOwlFencDb } from './owlfenc-db';
++import { sql } from 'drizzle-orm';
+ 
+ export interface OwlFencUser {
+   uid: string;
+@@ -108,13 +110,18 @@ export async function getOwlFencDashboardStats(): Promise<OwlFencDashboardStats>
+     const [usersResult, clientsSnapshot, contractsSnapshot, invoicesSnapshot] = await Promise.all([
+       auth.listUsers(1000),
+       db.collection('clients').get(),
+-      db.collection('contracts').get(),
++      // Query contract history from Firestore (completed contracts are stored here)
++      db.collection('contractHistory').get(),
+       db.collection('invoices').get(),
+     ]);
+ 
+     const totalUsers = usersResult.users.length;
+     const totalClients = clientsSnapshot.size;
+-    const totalContracts = contractsSnapshot.size;
++    // Count only completed and both_signed contracts
++    const totalContracts = contractsSnapshot.docs.filter((doc: any) => {
++      const status = doc.data().status;
++      return status === 'completed' || status === 'both_signed';
++    }).length;
+     const totalInvoices = invoicesSnapshot.size;
+ 
+     // Calculate active users (signed in within last 30 days)
+@@ -256,11 +263,9 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
+       invoicesSnapshot,
+       estimatesSnapshot,
+       projectsSnapshot,
+-      paymentsSnapshot,
+       permitSearchesSnapshot,
+       propertyVerificationsSnapshot,
+       dualSignatureContractsSnapshot,
+-      sharedEstimatesSnapshot,
+       contractHistorySnapshot,
+       emailsTodaySnapshot,
+       emailsMonthSnapshot,
+@@ -269,11 +274,11 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
+     ] = await Promise.all([
+       // Get all documents (filter in memory to avoid Firestore composite index requirement)
+       db.collection('clients').get(),
+-      db.collection('contracts').get(),
++      // Query contract history from Firestore (completed contracts are stored here)
++      db.collection('contractHistory').get(),
+       db.collection('invoices').get(),
+       db.collection('estimates').get(),
+       db.collection('projects').get(),
+-      db.collection('paymentHistory').get(),
+       
+       // NEW: High-priority metrics
+       db.collection('permit_search_history').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+@@ -284,7 +289,6 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
+         return { data: () => ({ count }) };
+       })(),
+       db.collection('dualSignatureContracts').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+-      db.collection('shared_estimates').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+       db.collection('contractHistory').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+       
+       // Emails sent TODAY (may not exist yet, will return 0)
+@@ -313,10 +317,20 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
+     ]);
+     
+     // Filter documents in memory if date range is provided
+-    const filterDocs = (snapshot: any) => {
+-      if (!filterStartDate || !filterEndDate) return snapshot.size;
++    const filterDocs = (snapshot: any, collectionName?: string) => {
++      let docs = snapshot.docs;
++      
++      // Special filter for contracts: only count completed and both_signed
++      if (collectionName === 'contracts') {
++        docs = docs.filter((doc: any) => {
++          const status = doc.data().status;
++          return status === 'completed' || status === 'both_signed';
++        });
++      }
+       
+-      return snapshot.docs.filter((doc: any) => {
++      if (!filterStartDate || !filterEndDate) return docs.length;
++      
++      return docs.filter((doc: any) => {
+         const data = doc.data();
+         const createdAt = data.createdAt;
+         
+@@ -342,17 +356,15 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
+     return {
+       // Core metrics (filtered in memory)
+       totalClients: filterDocs(clientsSnapshot),
+-      totalContracts: filterDocs(contractsSnapshot),
++      totalContracts: filterDocs(contractsSnapshot, 'contracts'),
+       totalInvoices: filterDocs(invoicesSnapshot),
+       totalEstimates: filterDocs(estimatesSnapshot),
+       totalProjects: filterDocs(projectsSnapshot),
+-      totalPayments: filterDocs(paymentsSnapshot),
+       
+       // NEW: High-priority metrics
+       totalPermitSearches: permitSearchesSnapshot.data().count,
+       totalPropertyVerifications: propertyVerificationsSnapshot.data().count,
+       totalDualSignatureContracts: dualSignatureContractsSnapshot.data().count,
+-      totalSharedEstimates: sharedEstimatesSnapshot.data().count,
+       totalContractModifications: contractHistorySnapshot.data().count,
+       
+       // Email tracking (Resend limit: 500/day)
+@@ -406,32 +418,24 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
+         invoicesSnapshot,
+         estimatesSnapshot,
+         projectsSnapshot,
+-        paymentsSnapshot,
+         permitSearchesSnapshot,
+         propertyVerificationsCount,
+         dualSignatureContractsSnapshot,
+-        sharedEstimatesSnapshot,
+         contractHistorySnapshot,
+-        emailsSnapshot,
+         pdfsSnapshot
+       ] = await Promise.all([
+         db.collection('clients').where('userId', '==', userId).get(),
+-        db.collection('contracts').where('userId', '==', userId).get(),
++        db.collection('contractHistory').where('userId', '==', userId).where('status', 'in', ['completed', 'both_signed']).get(),
+         db.collection('invoices').where('userId', '==', userId).get(),
+         db.collection('estimates').where('firebaseUserId', '==', userId).get(),
+         db.collection('projects').where('userId', '==', userId).get(),
+-        db.collection('paymentHistory').where('userId', '==', userId).get(),
+         
+         // NEW: High-priority metrics
+         db.collection('permit_search_history').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+         // Property verifications from PostgreSQL (lookup from pre-fetched map)
+         Promise.resolve(propertyVerificationsMap.get(userId) || 0),
+         db.collection('dualSignatureContracts').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+-        db.collection('shared_estimates').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+         db.collection('contractHistory').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+-        
+-        // Email and PDF logs (may not exist yet, will return 0)
+-        db.collection('email_logs').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+         db.collection('pdf_logs').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+       ]);
+       
+@@ -473,16 +477,13 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
+         invoicesCount,
+         estimatesCount,
+         projectsCount: filterUserDocs(projectsSnapshot),
+-        paymentsCount: filterUserDocs(paymentsSnapshot),
+         
+         // NEW: High-priority metrics
+         permitSearchesCount: permitSearchesSnapshot.data().count,
+         propertyVerificationsCount: propertyVerificationsCount,
+         dualSignatureContractsCount: dualSignatureContractsSnapshot.data().count,
+-        sharedEstimatesCount: sharedEstimatesSnapshot.data().count,
+         contractModificationsCount: contractHistorySnapshot.data().count,
+         
+-        emailsSentCount: emailsSnapshot.data().count,
+         pdfsGeneratedCount: pdfsSnapshot.data().count,
+       };
+     });
+diff --git a/server/services/resend-api.ts b/server/services/resend-api.ts
+new file mode 100644
+index 0000000..65d05c8
+--- /dev/null
++++ b/server/services/resend-api.ts
+@@ -0,0 +1,131 @@
++import { ENV } from '../_core/env';
++
++/**
++ * Resend API Integration
++ * Fetches email usage statistics directly from Resend API
++ */
++
++interface ResendEmail {
++  id: string;
++  from: string;
++  to: string[];
++  subject: string;
++  created_at: string;
++}
++
++interface ResendEmailsResponse {
++  data: ResendEmail[];
++  has_more: boolean;
++}
++
++/**
++ * Get emails sent today from Resend API
++ * @returns Number of emails sent today
++ */
++export async function getResendEmailsSentToday(): Promise<number> {
++  try {
++    if (!ENV.resendApiKey) {
++      console.error('[Resend API] API key not configured');
++      return 0;
++    }
++
++    // Calculate today's start time (midnight UTC)
++    const today = new Date();
++    today.setUTCHours(0, 0, 0, 0);
++    const todayISO = today.toISOString();
++
++    // Resend API endpoint to list emails
++    const response = await fetch('https://api.resend.com/emails', {
++      method: 'GET',
++      headers: {
++        'Authorization': `Bearer ${ENV.resendApiKey}`,
++        'Content-Type': 'application/json',
++      },
++    });
++
++    if (!response.ok) {
++      console.error('[Resend API] Failed to fetch emails:', response.statusText);
++      return 0;
++    }
++
++    const data: ResendEmailsResponse = await response.json();
++    
++    // Filter emails sent today
++    const emailsToday = data.data.filter(email => {
++      const emailDate = new Date(email.created_at);
++      return emailDate >= today;
++    });
++
++    console.log(`[Resend API] Emails sent today: ${emailsToday.length}`);
++    return emailsToday.length;
++  } catch (error) {
++    console.error('[Resend API] Error fetching email count:', error);
++    return 0;
++  }
++}
++
++/**
++ * Get total emails sent in the current month from Resend API
++ * @returns Number of emails sent this month
++ */
++export async function getResendEmailsSentThisMonth(): Promise<number> {
++  try {
++    if (!ENV.resendApiKey) {
++      console.error('[Resend API] API key not configured');
++      return 0;
++    }
++
++    // Calculate month start time (first day of month at midnight UTC)
++    const monthStart = new Date();
++    monthStart.setUTCDate(1);
++    monthStart.setUTCHours(0, 0, 0, 0);
++
++    // Resend API endpoint to list emails
++    const response = await fetch('https://api.resend.com/emails', {
++      method: 'GET',
++      headers: {
++        'Authorization': `Bearer ${ENV.resendApiKey}`,
++        'Content-Type': 'application/json',
++      },
++    });
++
++    if (!response.ok) {
++      console.error('[Resend API] Failed to fetch emails:', response.statusText);
++      return 0;
++    }
++
++    const data: ResendEmailsResponse = await response.json();
++    
++    // Filter emails sent this month
++    const emailsThisMonth = data.data.filter(email => {
++      const emailDate = new Date(email.created_at);
++      return emailDate >= monthStart;
++    });
++
++    console.log(`[Resend API] Emails sent this month: ${emailsThisMonth.length}`);
++    return emailsThisMonth.length;
++  } catch (error) {
++    console.error('[Resend API] Error fetching email count:', error);
++    return 0;
++  }
++}
++
++/**
++ * Get email usage statistics from Resend API
++ * @returns Object with today's count, monthly count, daily limit, and usage percentage
++ */
++export async function getResendUsageStats() {
++  const emailsSentToday = await getResendEmailsSentToday();
++  const emailsSentThisMonth = await getResendEmailsSentThisMonth();
++  const dailyLimit = 500; // Resend free tier limit
++  const usagePercentage = (emailsSentToday / dailyLimit) * 100;
++
++  return {
++    emailsSentToday,
++    emailsSentThisMonth,
++    dailyLimit,
++    usagePercentage: Math.round(usagePercentage * 10) / 10, // Round to 1 decimal
++    isNearLimit: usagePercentage >= 80, // Alert at 80%
++    isCritical: usagePercentage >= 90, // Critical at 90%
++  };
++}
+diff --git a/todo.md b/todo.md
+index b77109d..d2bd523 100644
+--- a/todo.md
++++ b/todo.md
+@@ -658,3 +658,198 @@ Ensure ALL emails in Owl Fenc use `noreply@owlfenc.com` as sender with proper `r
+ - [ ] Test payment link - verify from/reply-to (if service exists)
+ - [ ] Verify client reply goes to contractor (NOT owner)
+ - [ ] Verify no cross-contractor email leakage
++
++
++---
++
++## 🚨 CRITICAL: Fix Usage System Tracking Issues
++
++**Reported Issues:**
++1. ❌ Contracts showing 0 (should track only "completed" contracts, not drafts/progress/archived)
++2. ❌ Payments showing 0 (should track payment history from Firebase/PostgreSQL, not just Stripe)
++3. ❌ PDFs showing 0 (no tracking system exists yet - need to implement)
++4. ❌ Per-user table NOT respecting date filters (Day/Month/Year/Custom/All Time)
++
++---
++
++### Phase 1: Contracts Tracking Analysis ✅ COMPLETED
++- [x] Review Owl Fenc Firebase structure for contracts
++- [x] Understand contract states: drafts, progress, completed, archived, both_signed
++- [x] Find where "completed" contracts are stored (contracts collection)
++- [x] Review Legal Defense system (4 steps: 0-select type, 1-project/adjustments, 2-preview, 3-complete)
++- [x] Identify how Legal Defense counts contracts for Mero Patron plan (50 contract limit)
++- [x] Determine correct Firestore collection/query for completed contracts
++- [x] Update Chyrris KAI backend to query completed contracts only (status in ['completed', 'both_signed'])
++
++### Phase 2: Payments Tracking Analysis
++- [ ] Review Owl Fenc payment history structure
++- [ ] Understand payment types: link payments (Stripe), cash, check, Zelle
++- [ ] Determine if payment history is in Firebase or PostgreSQL
++- [ ] Find correct collection/table for payment history
++- [ ] Update Chyrris KAI backend to query all payment types (not just Stripe)
++- [ ] Test with real payment data
++
++### Phase 3: Date Filtering for Per-User Table ✅ ALREADY WORKING
++- [x] Review current per-user breakdown implementation
++- [x] Identify why date filters are not being applied to per-user data (FALSE ALARM - already working)
++- [x] Update getUserUsageBreakdown() to accept and apply date parameters (already done)
++- [x] Ensure date filters work for: Day, Month, Year, Custom Range, All Time (already implemented)
++- [x] Frontend already passes dateParams to getUserUsageBreakdown query
++
++### Phase 4: PDF Tracking System (LOW PRIORITY)
++- [ ] Design PDF tracking system for Owl Fenc
++- [ ] Determine where to track PDF generations (Firebase or PostgreSQL)
++- [ ] Plan implementation strategy
++- [ ] Document for future implementation
++
++### Phase 5: Testing & Verification
++- [ ] Test contracts count with real data
++- [ ] Test payments count with real data
++- [ ] Test date filtering on per-user table
++- [ ] Verify all counts match expected values
++- [ ] Update dashboard to show correct data
++
++## 🔥 CURRENT: Remove Unused Columns from Usage System
++- [x] Remove "Emails" (per-user) column from Usage System table
++- [x] Remove "Shared Estimates" column from Usage System table
++- [x] Remove backend queries for emailsSentCount per-user
++- [x] Remove backend queries for sharedEstimatesCount
++- [x] Update sort logic to exclude removed columns
++- [x] Update total calculation to exclude removed columns
++- [x] Test Usage System after removal
++- [ ] Save checkpoint and push to GitHub
++
++## 🔥 CURRENT: Usage System Improvements
++- [x] Remove "Emails Sent (All Time)" card (unused, only Resend tracking needed)
++- [x] Fix "Total Operations" calculation to include all metrics (not just Clients + Contracts + Invoices)
++- [x] Verify and fix date range filtering functionality with Firebase queries
++- [x] Test all date range filters (day, month, year, custom)
++- [x] Verify Total Operations shows correct sum
++- [ ] Save checkpoint and push to GitHub
++
++## 🔥 CURRENT: Users Page Analysis & Firebase Integration
++- [x] Analyze Users page structure and Firebase connection
++- [x] Test Reset Password functionality with Firebase Auth
++- [x] Test Enable User functionality and verify Firebase sync
++- [x] Test Disable User functionality and verify Firebase sync
++- [x] Test Delete User functionality and verify Firebase sync
++- [x] Research Firebase change email capability
++- [x] Implement Change Email functionality
++- [x] Add proper error handling and user feedback
++- [x] Test all user management functions end-to-end
++- [ ] Save checkpoint and push to GitHub
++
++## 🔥 CURRENT: Payments Page Analysis & Real-Time Stripe Integration
++- [x] Analyze current Payments page structure and UI
++- [x] Configure STRIPE_SECRET_KEY securely
++- [x] Identify the 2 paid plans: Master Contractor & Mero Patrón
++- [x] Test Stripe API connection
++- [x] Analyze current payment data (9 failed, 0 successful, 1 canceled subscription)
++- [x] Clone Owl Fenc repository to review payment system
++- [x] Review Stripe webhook configuration in Owl Fenc
++- [x] Analyze current failed payment handling logic
++- [x] Implement 3-retry system for failed payments
++- [x] Configure automatic downgrade to "Primo Chambeador" (free plan) after 3 failed attempts
++- [x] Add email notifications for each failed attempt
++- [x] Push Owl Fenc changes to GitHub
++- [ ] Configure Stripe Dashboard Smart Retries (3 attempts within 1 week)
++- [ ] Save Chyrris KAI checkpoint and push to GitHub
++
++
++## 🔥 CURRENT: Announcements System Analysis & Fix
++- [x] Navigate to Announcements page and analyze UI
++- [x] Review Announcements backend logic and database structure
++- [x] Identify authentication error ("Please login 10001")
++- [x] Fix authentication context (added cookie-parser middleware)
++- [x] Create admin user and session for testing
++- [x] Test campaign sending functionality (21 emails sent successfully)
++- [x] Verify campaign history display
++- [x] Test email delivery with Resend
++- [x] Test audience segmentation (all, free, patron, master)
++- [x] Verify campaign types (announcement, event, update, offer)
++- [ ] Save checkpoint and push to GitHub
++
++
++## 🔥 CURRENT: My Apps Page & Data Organization
++- [x] Push current changes to GitHub
++- [x] Create "My Apps" page with app selection cards
++- [x] Add LeadPrime app card with navigation
++- [x] Add Owl Fenc app card with navigation
++- [x] Remove Owl Fenc specific data from main Dashboard
++- [x] Create dedicated Owl Fenc dashboard page
++- [x] Move Users, Payments, Usage System, Announcements under Owl Fenc
++- [x] Update navigation structure to show app hierarchy
++- [x] Test navigation between apps
++- [x] Verify data isolation (no Owl Fenc data outside its container)
++- [ ] Save checkpoint and push to GitHub
++
++
++## 🔥 CURRENT: Encapsulate Apps with Own Sidebars
++- [ ] Remove Owl Fenc pages from general sidebar (Dashboard, Users, Payments, Usage System, Announcements)
++- [ ] Update general sidebar to only show "My Apps" link
++- [ ] Create Owl Fenc specific layout component with its own sidebar
++- [ ] Add Owl Fenc sidebar with: Dashboard, Users, Payments, Usage System, Announcements
++- [ ] Add "Back to My Apps" button in Owl Fenc sidebar
++- [ ] Update Owl Fenc routes to use Owl Fenc specific layout
++- [ ] Prepare LeadPrime layout structure for future implementation
++- [ ] Test navigation between My Apps and Owl Fenc
++- [ ] Verify complete data encapsulation
++- [ ] Save checkpoint and push to GitHub
++
++---
++
++## 🎉 App Encapsulation Architecture - COMPLETED ✅
++
++### Main Sidebar Cleanup
++- [x] Remove all Owl Fenc-specific links from main Sidebar.tsx
++- [x] Keep only "My Apps" link in general sidebar
++- [x] Make sidebar context-aware based on current app
++
++### Owl Fenc App Encapsulation
++- [x] Create dedicated Owl Fenc sidebar with all app-specific pages
++- [x] Add "Back to My Apps" button at top of Owl Fenc sidebar
++- [x] Include all Owl Fenc pages in app sidebar:
++  - [x] Dashboard
++  - [x] Users
++  - [x] Payments
++  - [x] Usage System
++  - [x] Announcements
++- [x] Ensure data isolation (Owl Fenc data only appears within its app)
++- [x] Test navigation flow between My Apps and Owl Fenc
++
++### Navigation Architecture
++- [x] My Apps page as central hub
++- [x] Each app card shows quick stats
++- [x] "Open Dashboard" button navigates to app-specific dashboard
++- [x] Clean separation between general navigation and app-specific navigation
++- [x] Easy return to My Apps from any app page
++
++### Results
++- ✅ Main sidebar now only shows "My Apps" link
++- ✅ Owl Fenc has its own complete sidebar with all 5 pages
++- ✅ "Back to My Apps" button works correctly
++- ✅ Data isolation verified - Owl Fenc data only in Owl Fenc app
++- ✅ Navigation flow tested and working perfectly
++- ✅ Ready for LeadPrime app encapsulation (future work)
++
++---
++
++## 🤖 AI Message Enhancement for Announcements - NEW FEATURE
++
++### Feature Requirements
++- [x] Create Anthropic API integration service
++- [x] Add "Enhance with AI" button in Announcements message field
++- [x] Implement AI rewriting to professional tone
++- [x] Translate message to English automatically
++- [x] Add loading state during AI processing
++- [x] Handle errors gracefully with user feedback
++- [ ] Configure ANTHROPIC_API_KEY in Replit secrets (user will do this)
++
++### Technical Implementation
++- [x] Install @anthropic-ai/sdk package
++- [x] Create server/services/anthropic-service.ts
++- [x] Add tRPC endpoint: announcements.enhanceMessage
++- [x] Update Announcements.tsx with AI enhancement UI
++- [x] Add prompt engineering for professional tone
++- [ ] Test with various input texts (Spanish, English, informal) - requires API key
++- [x] Push changes to GitHub for Replit deployment

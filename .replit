@@ -1,17 +1,40 @@
-run = "pnpm run dev"
-entrypoint = "server/_core/index.ts"
 modules = ["nodejs-20"]
 
-hidden = [".config", "tsconfig.json", "tsconfig.node.json", "vite.config.ts", ".gitignore"]
+[workflows]
+runButton = "Project"
 
-[nix]
-channel = "stable-24_05"
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
 
-[deployment]
-run = ["sh", "-c", "pnpm run dev"]
-deploymentTarget = "cloudrun"
-build = ["sh", "-c", "pnpm install && pnpm db:push"]
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm run dev"
+waitForPort = 3000
+
+[workflows.workflow.metadata]
+outputType = "webview"
 
 [[ports]]
 localPort = 3000
 externalPort = 80
+
+[agent]
+expertMode = true
+
+[deployment]
+build = ["sh", "-c", "pnpm install && pnpm db:push"]
+run = ["sh", "-c", "pnpm run dev"]
+deploymentTarget = "autoscale"
+
+[nix]
+packages = ["azure-functions-core-tools"]
