@@ -107,3 +107,6 @@ temp/
 *.sqlite3
 firebase-service-account.json
 owl-fenc-firebase-adminsdk-*.json
+
+# Replit-specific auto-generated files
+replit.nix

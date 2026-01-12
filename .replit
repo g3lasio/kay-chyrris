@@ -41,5 +41,4 @@ run = ["node", "dist/index.js"]
 deploymentTarget = "autoscale"
 ignorePorts = false
 
-[nix]
-packages = ["azure-functions-core-tools"]
+
