@@ -32,7 +32,7 @@ externalPort = 80
 expertMode = true
 
 [deployment]
-build = ["sh", "-c", "bash scripts/build-production.sh"]
+build = ["sh", "-c", "pnpm install --frozen-lockfile && pnpm run build"]
 run = ["sh", "-c", "NODE_ENV=production node dist/index.js"]
 deploymentTarget = "autoscale"
 ignorePorts = false
