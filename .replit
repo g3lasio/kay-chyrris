@@ -21,7 +21,7 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "pnpm dev"
+args = "pnpm start"
 waitForPort = 5000
 
 [[ports]]
@@ -36,9 +36,10 @@ externalPort = 80
 expertMode = true
 
 [deployment]
-build = ["pnpm", "run", "build"]
+build = ["sh", "-c", "pnpm install && pnpm run build"]
 run = ["node", "dist/index.js"]
 deploymentTarget = "autoscale"
+ignorePorts = false
 
 [nix]
 packages = ["azure-functions-core-tools"]
