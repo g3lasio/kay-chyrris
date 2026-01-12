@@ -33,7 +33,7 @@ expertMode = true
 
 [deployment]
 build = ["sh", "-c", "pnpm install && pnpm run build"]
-run = ["node", "dist/index.js"]
+run = ["sh", "-c", "pnpm start"]
 deploymentTarget = "autoscale"
 ignorePorts = false
 
