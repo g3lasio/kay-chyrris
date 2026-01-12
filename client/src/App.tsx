@@ -4,6 +4,7 @@ import NotFound from "@/pages/NotFound";
 import { Route, Switch, Redirect } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { ProtectedRoute } from "./components/ProtectedRoute";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import MyApps from "./pages/MyApps";
@@ -18,9 +19,9 @@ import OwlFencLayout from "./components/OwlFencLayout";
 function Router() {
   return (
     <Switch>
-      {/* Redirect login to dashboard (auth disabled) */}
+      {/* Login page */}
       <Route path="/login">
-        <Redirect to="/" />
+        <Login />
       </Route>
       
       {/* Main dashboard - redirect to My Apps */}
@@ -30,50 +31,64 @@ function Router() {
       
       {/* My Apps - App selection page */}
       <Route path="/my-apps">
-        <DashboardLayout>
-          <MyApps />
-        </DashboardLayout>
+        <ProtectedRoute>
+          <DashboardLayout>
+            <MyApps />
+          </DashboardLayout>
+        </ProtectedRoute>
       </Route>
       
       {/* Owl Fenc App Routes */}
       <Route path="/owlfenc">
-        <OwlFencLayout>
-          <OwlFencDashboard />
-        </OwlFencLayout>
+        <ProtectedRoute>
+          <OwlFencLayout>
+            <OwlFencDashboard />
+          </OwlFencLayout>
+        </ProtectedRoute>
       </Route>
       
       <Route path="/owlfenc/users">
-        <OwlFencLayout>
-          <Users />
-        </OwlFencLayout>
+        <ProtectedRoute>
+          <OwlFencLayout>
+            <Users />
+          </OwlFencLayout>
+        </ProtectedRoute>
       </Route>
       
       <Route path="/owlfenc/payments">
-        <OwlFencLayout>
-          <Payments />
-        </OwlFencLayout>
+        <ProtectedRoute>
+          <OwlFencLayout>
+            <Payments />
+          </OwlFencLayout>
+        </ProtectedRoute>
       </Route>
       
       <Route path="/owlfenc/announcements">
-        <OwlFencLayout>
-          <Announcements />
-        </OwlFencLayout>
+        <ProtectedRoute>
+          <OwlFencLayout>
+            <Announcements />
+          </OwlFencLayout>
+        </ProtectedRoute>
       </Route>
       
       <Route path="/owlfenc/usage-system">
-        <OwlFencLayout>
-          <UsageSystem />
-        </OwlFencLayout>
+        <ProtectedRoute>
+          <OwlFencLayout>
+            <UsageSystem />
+          </OwlFencLayout>
+        </ProtectedRoute>
       </Route>
       
       {/* LeadPrime App Routes - Coming soon */}
       <Route path="/apps/leadprime">
-        <DashboardLayout>
-          <div className="container mx-auto py-8 px-4">
-            <h1 className="text-4xl font-bold mb-4">LeadPrime</h1>
-            <p className="text-muted-foreground">Coming soon...</p>
-          </div>
-        </DashboardLayout>
+        <ProtectedRoute>
+          <DashboardLayout>
+            <div className="container mx-auto py-8 px-4">
+              <h1 className="text-4xl font-bold mb-4">LeadPrime</h1>
+              <p className="text-muted-foreground">Coming soon...</p>
+            </div>
+          </DashboardLayout>
+        </ProtectedRoute>
       </Route>
       
       <Route path="/404" component={NotFound} />

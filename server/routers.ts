@@ -97,7 +97,7 @@ export const appRouter = router({
   // Owl Fenc specific routes
   owlfenc: router({
     // Get users list from Firebase
-    getUsers: publicProcedure.query(async () => {
+    getUsers: protectedProcedure.query(async () => {
       try {
         const { getOwlFencUsers: getFirebaseUsers } = await import('./services/owlfenc-firebase');
         const users = await getFirebaseUsers();
@@ -115,7 +115,7 @@ export const appRouter = router({
     }),
 
     // Get clients list from Firebase
-    getClients: publicProcedure.query(async () => {
+    getClients: protectedProcedure.query(async () => {
       try {
         const { getOwlFencClients } = await import('./services/owlfenc-firebase');
         const clients = await getOwlFencClients();
@@ -165,7 +165,7 @@ export const appRouter = router({
       }),
 
     // Get user subscription and usage
-    getUserSubscription: publicProcedure
+    getUserSubscription: protectedProcedure
       .input(z.object({ firebaseUid: z.string() }))
       .query(async ({ input }) => {
         try {
@@ -185,42 +185,42 @@ export const appRouter = router({
       }),
 
     // Firebase Admin Actions
-    disableUser: publicProcedure
+    disableUser: protectedProcedure
       .input(z.object({ uid: z.string() }))
       .mutation(async ({ input }) => {
         const { disableUser } = await import('./services/firebase-admin-actions');
         return await disableUser(input.uid);
       }),
 
-    enableUser: publicProcedure
+    enableUser: protectedProcedure
       .input(z.object({ uid: z.string() }))
       .mutation(async ({ input }) => {
         const { enableUser } = await import('./services/firebase-admin-actions');
         return await enableUser(input.uid);
       }),
 
-    deleteUser: publicProcedure
+    deleteUser: protectedProcedure
       .input(z.object({ uid: z.string() }))
       .mutation(async ({ input }) => {
         const { deleteUser } = await import('./services/firebase-admin-actions');
         return await deleteUser(input.uid);
       }),
 
-    sendPasswordReset: publicProcedure
+    sendPasswordReset: protectedProcedure
       .input(z.object({ email: z.string().email() }))
       .mutation(async ({ input }) => {
         const { sendPasswordResetEmail } = await import('./services/firebase-admin-actions');
         return await sendPasswordResetEmail(input.email);
       }),
 
-    updateEmail: publicProcedure
+    updateEmail: protectedProcedure
       .input(z.object({ uid: z.string(), newEmail: z.string().email() }))
       .mutation(async ({ input }) => {
         const { updateUserEmail } = await import('./services/firebase-admin-actions');
         return await updateUserEmail(input.uid, input.newEmail);
       }),
 
-    updatePhone: publicProcedure
+    updatePhone: protectedProcedure
       .input(z.object({ uid: z.string(), newPhone: z.string() }))
       .mutation(async ({ input }) => {
         const { updateUserPhone } = await import('./services/firebase-admin-actions');
@@ -228,7 +228,7 @@ export const appRouter = router({
       }),
 
     // Get revenue metrics (MRR, yearly revenue, growth)
-    getRevenueMetrics: publicProcedure.query(async () => {
+    getRevenueMetrics: protectedProcedure.query(async () => {
       try {
         const metrics = await revenueMetrics.getRevenueMetrics();
         return {
@@ -245,7 +245,7 @@ export const appRouter = router({
     }),
 
     // Get user growth metrics
-    getUserGrowthMetrics: publicProcedure.query(async () => {
+    getUserGrowthMetrics: protectedProcedure.query(async () => {
       try {
         const metrics = await revenueMetrics.getUserGrowthMetrics();
         return {
@@ -262,7 +262,7 @@ export const appRouter = router({
     }),
 
     // Get revenue history for charts (last 12 months)
-    getRevenueHistory: publicProcedure.query(async () => {
+    getRevenueHistory: protectedProcedure.query(async () => {
       try {
         const history = await revenueMetrics.getRevenueHistory();
         return {
@@ -279,7 +279,7 @@ export const appRouter = router({
     }),
 
     // Get user growth history for charts (last 12 months)
-    getUserGrowthHistory: publicProcedure.query(async () => {
+    getUserGrowthHistory: protectedProcedure.query(async () => {
       try {
         const history = await revenueMetrics.getUserGrowthHistory();
         return {
@@ -296,7 +296,7 @@ export const appRouter = router({
     }),
 
     // Get dashboard stats from Firebase (REAL DATA)
-    getStats: publicProcedure.query(async () => {
+    getStats: protectedProcedure.query(async () => {
       try {
         const { getOwlFencDashboardStats: getFirebaseStats } = await import('./services/owlfenc-firebase');
         const stats = await getFirebaseStats();
@@ -314,7 +314,7 @@ export const appRouter = router({
     }),
 
     // Get system-wide usage metrics
-    getSystemUsage: publicProcedure
+    getSystemUsage: protectedProcedure
       .input(z.object({
         startDate: z.string().optional(),
         endDate: z.string().optional(),
@@ -349,7 +349,7 @@ export const appRouter = router({
     }),
 
     // Get per-user usage breakdown
-    getUserUsageBreakdown: publicProcedure
+    getUserUsageBreakdown: protectedProcedure
       .input(z.object({
         startDate: z.string().optional(),
         endDate: z.string().optional(),
@@ -366,7 +366,7 @@ export const appRouter = router({
     }),
 
     // Get Resend email usage stats (direct from Resend API)
-    getResendUsage: publicProcedure.query(async () => {
+    getResendUsage: protectedProcedure.query(async () => {
       try {
         const { getResendUsageStats } = await import('./services/resend-api');
         const stats = await getResendUsageStats();
@@ -414,7 +414,7 @@ export const appRouter = router({
 
   // Mass notifications system
   notifications: router({
-    sendCampaign: publicProcedure
+    sendCampaign: protectedProcedure
       .input(z.object({
         title: z.string(),
         message: z.string(),
@@ -426,13 +426,13 @@ export const appRouter = router({
         return await createAndSendCampaign(input);
       }),
     
-    getCampaigns: publicProcedure
+    getCampaigns: protectedProcedure
       .query(async () => {
         return await getCampaignHistory(50);
       }),
     
     // AI-powered message enhancement
-    enhanceMessage: publicProcedure
+    enhanceMessage: protectedProcedure
       .input(z.object({
         message: z.string().min(1, 'Message cannot be empty'),
       }))
@@ -445,7 +445,7 @@ export const appRouter = router({
   // In-app push notifications
   pushNotifications: router({
     // Get all notifications for a user
-    getAll: publicProcedure
+    getAll: protectedProcedure
       .input(z.object({
         userId: z.string().optional(),
         applicationId: z.number(),
@@ -460,7 +460,7 @@ export const appRouter = router({
       }),
 
     // Get unread count
-    getUnreadCount: publicProcedure
+    getUnreadCount: protectedProcedure
       .input(z.object({
         userId: z.string(),
         applicationId: z.number(),
@@ -470,7 +470,7 @@ export const appRouter = router({
       }),
 
     // Mark as read
-    markAsRead: publicProcedure
+    markAsRead: protectedProcedure
       .input(z.object({
         notificationId: z.number(),
       }))
@@ -480,7 +480,7 @@ export const appRouter = router({
       }),
 
     // Mark all as read
-    markAllAsRead: publicProcedure
+    markAllAsRead: protectedProcedure
       .input(z.object({
         userId: z.string(),
         applicationId: z.number(),
@@ -491,7 +491,7 @@ export const appRouter = router({
       }),
 
     // Archive notification
-    archive: publicProcedure
+    archive: protectedProcedure
       .input(z.object({
         notificationId: z.number(),
       }))
@@ -501,7 +501,7 @@ export const appRouter = router({
       }),
 
     // Create notification (admin/system)
-    create: publicProcedure
+    create: protectedProcedure
       .input(z.object({
         applicationId: z.number(),
         userId: z.string().optional().nullable(),
@@ -521,7 +521,7 @@ export const appRouter = router({
       }),
 
     // Get user preferences
-    getPreferences: publicProcedure
+    getPreferences: protectedProcedure
       .input(z.object({
         userId: z.string(),
         applicationId: z.number(),
@@ -531,7 +531,7 @@ export const appRouter = router({
       }),
 
     // Update user preferences
-    updatePreferences: publicProcedure
+    updatePreferences: protectedProcedure
       .input(z.object({
         userId: z.string(),
         applicationId: z.number(),
