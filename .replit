@@ -32,8 +32,8 @@ externalPort = 80
 expertMode = true
 
 [deployment]
-build = ["sh", "-c", "pnpm install && pnpm run build"]
-run = ["sh", "-c", "pnpm start"]
+build = ["sh", "-c", "bash scripts/build-production.sh"]
+run = ["sh", "-c", "NODE_ENV=production node dist/index.js"]
 deploymentTarget = "autoscale"
 ignorePorts = false
 
