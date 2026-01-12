@@ -1,4 +1,5 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, decimal, boolean, json, index, time } from "drizzle-orm/mysql-core";
+import { integer, pgEnum, pgTable, text, timestamp, varchar, decimal, boolean, json, index, time } from "drizzle-orm/pg-core";
+import { serial } from "drizzle-orm/pg-core";
 
 /**
  * CHYRRIS KAI - Multi-Application Admin Control Platform
@@ -6,22 +7,36 @@ import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, decimal, boolean,
  */
 
 // ================================================
+// ENUMS
+// ================================================
+
+export const roleEnum = pgEnum("role", ["super_admin", "admin", "viewer"]);
+export const applicationStatusEnum = pgEnum("application_status", ["active", "inactive", "maintenance"]);
+export const campaignStatusEnum = pgEnum("campaign_status", ["draft", "scheduled", "sending", "sent", "failed"]);
+export const recipientStatusEnum = pgEnum("recipient_status", ["pending", "sent", "failed", "bounced"]);
+export const priorityEnum = pgEnum("priority", ["low", "medium", "high", "critical"]);
+export const feedbackStatusEnum = pgEnum("feedback_status", ["pending", "reviewing", "planned", "in_progress", "completed", "rejected"]);
+export const severityEnum = pgEnum("severity", ["info", "warning", "error", "critical"]);
+export const healthStatusEnum = pgEnum("health_status", ["healthy", "degraded", "down"]);
+export const notificationPriorityEnum = pgEnum("notification_priority", ["info", "warning", "important", "critical"]);
+
+// ================================================
 // ADMIN USERS & AUTHENTICATION
 // ================================================
 
-export const adminUsers = mysqlTable("admin_users", {
-  id: int("id").autoincrement().primaryKey(),
+export const adminUsers = pgTable("admin_users", {
+  id: serial("id").primaryKey(),
   email: varchar("email", { length: 255 }).notNull().unique(),
   name: varchar("name", { length: 255 }),
-  role: mysqlEnum("role", ["super_admin", "admin", "viewer"]).default("admin").notNull(),
+  role: roleEnum("role").default("admin").notNull(),
   isActive: boolean("is_active").default(true).notNull(),
   lastLoginAt: timestamp("last_login_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const otpCodes = mysqlTable("otp_codes", {
-  id: int("id").autoincrement().primaryKey(),
+export const otpCodes = pgTable("otp_codes", {
+  id: serial("id").primaryKey(),
   email: varchar("email", { length: 255 }).notNull(),
   code: varchar("code", { length: 6 }).notNull(),
   expiresAt: timestamp("expires_at").notNull(),
@@ -29,9 +44,9 @@ export const otpCodes = mysqlTable("otp_codes", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-export const adminSessions = mysqlTable("admin_sessions", {
+export const adminSessions = pgTable("admin_sessions", {
   id: varchar("id", { length: 255 }).primaryKey(),
-  adminUserId: int("admin_user_id").notNull().references(() => adminUsers.id, { onDelete: "cascade" }),
+  adminUserId: integer("admin_user_id").notNull().references(() => adminUsers.id, { onDelete: "cascade" }),
   ipAddress: varchar("ip_address", { length: 45 }),
   userAgent: text("user_agent"),
   expiresAt: timestamp("expires_at").notNull(),
@@ -42,27 +57,27 @@ export const adminSessions = mysqlTable("admin_sessions", {
 // APPLICATIONS REGISTRY
 // ================================================
 
-export const applications = mysqlTable("applications", {
-  id: int("id").autoincrement().primaryKey(),
+export const applications = pgTable("applications", {
+  id: serial("id").primaryKey(),
   name: varchar("name", { length: 100 }).notNull(),
   slug: varchar("slug", { length: 50 }).notNull().unique(),
   description: text("description"),
   databaseUrl: text("database_url").notNull(),
   databaseType: varchar("database_type", { length: 50 }).default("postgresql").notNull(),
-  status: mysqlEnum("status", ["active", "inactive", "maintenance"]).default("active").notNull(),
+  status: applicationStatusEnum("status").default("active").notNull(),
   iconUrl: text("icon_url"),
   color: varchar("color", { length: 7 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 // ================================================
 // NOTIFICATION CAMPAIGNS
 // ================================================
 
-export const notificationCampaigns = mysqlTable("notification_campaigns", {
-  id: int("id").autoincrement().primaryKey(),
-  applicationId: int("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
+export const notificationCampaigns = pgTable("notification_campaigns", {
+  id: serial("id").primaryKey(),
+  applicationId: integer("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
   name: varchar("name", { length: 255 }).notNull(),
   subject: varchar("subject", { length: 255 }).notNull(),
   message: text("message").notNull(),
@@ -71,23 +86,23 @@ export const notificationCampaigns = mysqlTable("notification_campaigns", {
     status?: string[];
     customFilter?: Record<string, any>;
   }>(),
-  status: mysqlEnum("status", ["draft", "scheduled", "sending", "sent", "failed"]).default("draft").notNull(),
+  status: campaignStatusEnum("status").default("draft").notNull(),
   scheduledAt: timestamp("scheduled_at"),
   sentAt: timestamp("sent_at"),
-  totalRecipients: int("total_recipients").default(0).notNull(),
-  successfulSends: int("successful_sends").default(0).notNull(),
-  failedSends: int("failed_sends").default(0).notNull(),
-  createdBy: int("created_by").notNull().references(() => adminUsers.id),
+  totalRecipients: integer("total_recipients").default(0).notNull(),
+  successfulSends: integer("successful_sends").default(0).notNull(),
+  failedSends: integer("failed_sends").default(0).notNull(),
+  createdBy: integer("created_by").notNull().references(() => adminUsers.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const campaignRecipients = mysqlTable("campaign_recipients", {
-  id: int("id").autoincrement().primaryKey(),
-  campaignId: int("campaign_id").notNull().references(() => notificationCampaigns.id, { onDelete: "cascade" }),
+export const campaignRecipients = pgTable("campaign_recipients", {
+  id: serial("id").primaryKey(),
+  campaignId: integer("campaign_id").notNull().references(() => notificationCampaigns.id, { onDelete: "cascade" }),
   userEmail: varchar("user_email", { length: 255 }).notNull(),
   userId: varchar("user_id", { length: 100 }),
-  status: mysqlEnum("status", ["pending", "sent", "failed", "bounced"]).default("pending").notNull(),
+  status: recipientStatusEnum("status").default("pending").notNull(),
   errorMessage: text("error_message"),
   sentAt: timestamp("sent_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -97,48 +112,48 @@ export const campaignRecipients = mysqlTable("campaign_recipients", {
 // USER FEEDBACK SYSTEM
 // ================================================
 
-export const userFeedback = mysqlTable("user_feedback", {
-  id: int("id").autoincrement().primaryKey(),
-  applicationId: int("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
+export const userFeedback = pgTable("user_feedback", {
+  id: serial("id").primaryKey(),
+  applicationId: integer("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
   userEmail: varchar("user_email", { length: 255 }),
   userId: varchar("user_id", { length: 100 }),
   title: varchar("title", { length: 255 }).notNull(),
   description: text("description").notNull(),
   category: varchar("category", { length: 100 }),
-  priority: mysqlEnum("priority", ["low", "medium", "high", "critical"]).default("medium").notNull(),
-  status: mysqlEnum("status", ["pending", "reviewing", "planned", "in_progress", "completed", "rejected"]).default("pending").notNull(),
-  votes: int("votes").default(0).notNull(),
+  priority: priorityEnum("priority").default("medium").notNull(),
+  status: feedbackStatusEnum("status").default("pending").notNull(),
+  votes: integer("votes").default(0).notNull(),
   adminNotes: text("admin_notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 // ================================================
 // SYSTEM MONITORING
 // ================================================
 
-export const errorLogs = mysqlTable("error_logs", {
-  id: int("id").autoincrement().primaryKey(),
-  applicationId: int("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
+export const errorLogs = pgTable("error_logs", {
+  id: serial("id").primaryKey(),
+  applicationId: integer("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
   errorType: varchar("error_type", { length: 100 }).notNull(),
   errorMessage: text("error_message").notNull(),
   stackTrace: text("stack_trace"),
   userId: varchar("user_id", { length: 100 }),
   requestUrl: text("request_url"),
   requestMethod: varchar("request_method", { length: 10 }),
-  severity: mysqlEnum("severity", ["info", "warning", "error", "critical"]).default("error").notNull(),
+  severity: severityEnum("severity").default("error").notNull(),
   resolved: boolean("resolved").default(false).notNull(),
   resolvedAt: timestamp("resolved_at"),
-  resolvedBy: int("resolved_by").references(() => adminUsers.id),
+  resolvedBy: integer("resolved_by").references(() => adminUsers.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-export const healthChecks = mysqlTable("health_checks", {
-  id: int("id").autoincrement().primaryKey(),
-  applicationId: int("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
+export const healthChecks = pgTable("health_checks", {
+  id: serial("id").primaryKey(),
+  applicationId: integer("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
   checkType: varchar("check_type", { length: 100 }).notNull(),
-  status: mysqlEnum("status", ["healthy", "degraded", "down"]).notNull(),
-  responseTimeMs: int("response_time_ms"),
+  status: healthStatusEnum("status").notNull(),
+  responseTimeMs: integer("response_time_ms"),
   errorMessage: text("error_message"),
   checkedAt: timestamp("checked_at").defaultNow().notNull(),
 });
@@ -147,9 +162,9 @@ export const healthChecks = mysqlTable("health_checks", {
 // ADMIN ACTIVITY LOG
 // ================================================
 
-export const adminActivityLog = mysqlTable("admin_activity_log", {
-  id: int("id").autoincrement().primaryKey(),
-  adminUserId: int("admin_user_id").references(() => adminUsers.id, { onDelete: "set null" }),
+export const adminActivityLog = pgTable("admin_activity_log", {
+  id: serial("id").primaryKey(),
+  adminUserId: integer("admin_user_id").references(() => adminUsers.id, { onDelete: "set null" }),
   action: varchar("action", { length: 255 }).notNull(),
   resourceType: varchar("resource_type", { length: 100 }),
   resourceId: varchar("resource_id", { length: 100 }),
@@ -162,9 +177,9 @@ export const adminActivityLog = mysqlTable("admin_activity_log", {
 // STRIPE INTEGRATION CACHE
 // ================================================
 
-export const stripeCustomersCache = mysqlTable("stripe_customers_cache", {
-  id: int("id").autoincrement().primaryKey(),
-  applicationId: int("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
+export const stripeCustomersCache = pgTable("stripe_customers_cache", {
+  id: serial("id").primaryKey(),
+  applicationId: integer("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
   stripeCustomerId: varchar("stripe_customer_id", { length: 255 }).notNull().unique(),
   userId: varchar("user_id", { length: 100 }),
   email: varchar("email", { length: 255 }),
@@ -181,14 +196,14 @@ export const stripeCustomersCache = mysqlTable("stripe_customers_cache", {
 // ANALYTICS SNAPSHOTS
 // ================================================
 
-export const dailyMetrics = mysqlTable("daily_metrics", {
-  id: int("id").autoincrement().primaryKey(),
-  applicationId: int("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
+export const dailyMetrics = pgTable("daily_metrics", {
+  id: serial("id").primaryKey(),
+  applicationId: integer("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
   metricDate: timestamp("metric_date").notNull(),
-  totalUsers: int("total_users").default(0).notNull(),
-  activeUsers: int("active_users").default(0).notNull(),
-  newUsers: int("new_users").default(0).notNull(),
-  churnedUsers: int("churned_users").default(0).notNull(),
+  totalUsers: integer("total_users").default(0).notNull(),
+  activeUsers: integer("active_users").default(0).notNull(),
+  newUsers: integer("new_users").default(0).notNull(),
+  churnedUsers: integer("churned_users").default(0).notNull(),
   totalRevenue: decimal("total_revenue", { precision: 10, scale: 2 }).default("0.00").notNull(),
   mrr: decimal("mrr", { precision: 10, scale: 2 }).default("0.00").notNull(),
   usersByPlan: json("users_by_plan").$type<Record<string, number>>(),
@@ -199,13 +214,13 @@ export const dailyMetrics = mysqlTable("daily_metrics", {
 // IN-APP PUSH NOTIFICATIONS
 // ================================================
 
-export const inAppNotifications = mysqlTable("in_app_notifications", {
-  id: int("id").autoincrement().primaryKey(),
-  applicationId: int("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
+export const inAppNotifications = pgTable("in_app_notifications", {
+  id: serial("id").primaryKey(),
+  applicationId: integer("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
   userId: varchar("user_id", { length: 100 }), // Null = broadcast to all
   title: varchar("title", { length: 255 }).notNull(),
   message: text("message").notNull(),
-  priority: mysqlEnum("priority", ["info", "warning", "important", "critical"]).default("info").notNull(),
+  priority: notificationPriorityEnum("priority").default("info").notNull(),
   category: varchar("category", { length: 50 }), // 'payment', 'contract', 'user', 'system', 'lead', etc.
   actionUrl: text("action_url"),
   actionLabel: varchar("action_label", { length: 50 }),
@@ -221,16 +236,16 @@ export const inAppNotifications = mysqlTable("in_app_notifications", {
   appPriorityIdx: index("idx_app_priority").on(table.applicationId, table.priority, table.createdAt),
 }));
 
-export const notificationPreferences = mysqlTable("notification_preferences", {
-  id: int("id").autoincrement().primaryKey(),
+export const notificationPreferences = pgTable("notification_preferences", {
+  id: serial("id").primaryKey(),
   userId: varchar("user_id", { length: 100 }).notNull().unique(),
-  applicationId: int("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
+  applicationId: integer("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
   enabled: boolean("enabled").default(true).notNull(),
-  minPriority: mysqlEnum("min_priority", ["info", "warning", "important", "critical"]).default("info"),
+  minPriority: notificationPriorityEnum("min_priority").default("info"),
   categoriesEnabled: json("categories_enabled").$type<string[]>(),
   quietHoursStart: time("quiet_hours_start"),
   quietHoursEnd: time("quiet_hours_end"),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 // ================================================

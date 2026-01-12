@@ -44,10 +44,10 @@ export async function createAndSendCampaign(input: CreateCampaignInput): Promise
       status: 'sending',
       createdBy: 1, // TODO: Get from context
       createdAt: new Date(),
-    }).$returningId();
+    }).returning();
 
-    const campaignId = result[0]?.id;
-    const campaign = { id: campaignId };
+    const campaign = result[0];
+    const campaignId = campaign?.id;
 
     if (!campaign) {
       return { success: false, error: 'Failed to create campaign' };

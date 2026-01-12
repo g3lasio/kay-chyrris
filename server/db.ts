@@ -1,18 +1,26 @@
 import { eq } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { InsertAdminUser, adminUsers } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
+import { Pool } from "pg";
+
 let _db: ReturnType<typeof drizzle> | null = null;
+let _pool: Pool | null = null;
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      _pool = new Pool({
+        connectionString: process.env.DATABASE_URL,
+        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
+      });
+      _db = drizzle(_pool);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
+      _pool = null;
     }
   }
   return _db;
@@ -65,7 +73,8 @@ export async function upsertAdminUser(user: InsertAdminUser): Promise<void> {
       updateSet.lastLoginAt = new Date();
     }
 
-    await db.insert(adminUsers).values(values).onDuplicateKeyUpdate({
+    await db.insert(adminUsers).values(values).onConflictDoUpdate({
+      target: adminUsers.email,
       set: updateSet,
     });
   } catch (error) {

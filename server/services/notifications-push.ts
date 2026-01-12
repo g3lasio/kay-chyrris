@@ -57,7 +57,7 @@ export async function createNotification(input: CreateNotificationInput) {
     archived: false,
   };
   
-  const [notification] = await db.insert(inAppNotifications).values(values);
+  const [notification] = await db.insert(inAppNotifications).values(values).returning();
 
   console.log(`[Notifications] Created ${input.priority} notification: "${input.title}" for app ${input.applicationId}`);
   
@@ -248,7 +248,7 @@ export async function getUserPreferences(userId: string, applicationId: number) 
     categoriesEnabled: ['payment', 'contract', 'user', 'system', 'lead', 'contact', 'pipeline'],
   };
   
-  const [prefs] = await db.insert(notificationPreferences).values(values);
+  const [prefs] = await db.insert(notificationPreferences).values(values).returning();
 
   return prefs;
 }
