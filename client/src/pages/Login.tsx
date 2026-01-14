@@ -31,10 +31,15 @@ export default function Login() {
       const result = await sendOTPMutation.mutateAsync({ email });
       
       if (result.success) {
-        toast.success('Check your email for the login code');
+        toast.success(result.message || `Login code sent to ${email}`);
         setStep('otp');
       } else {
-        toast.error(result.error || 'Failed to send code');
+        // Show specific error message from backend
+        if (result.error === 'Email not registered') {
+          toast.error(result.message || 'This email is not registered. Please contact an administrator.');
+        } else {
+          toast.error(result.message || result.error || 'Failed to send code');
+        }
       }
     } catch (error: any) {
       toast.error(error.message || 'Something went wrong');

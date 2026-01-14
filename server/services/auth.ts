@@ -24,12 +24,26 @@ function generateOTP(): string {
 /**
  * Send OTP code via email
  */
-export async function sendOTP(email: string): Promise<{ success: boolean; error?: string }> {
+export async function sendOTP(email: string): Promise<{ success: boolean; error?: string; message?: string }> {
   try {
     const db = await getDb();
     if (!db) {
       return { success: false, error: 'Database not available' };
     }
+
+    // Check if email is registered
+    const user = await db.select().from(adminUsers).where(eq(adminUsers.email, email)).limit(1);
+    
+    if (!user || user.length === 0) {
+      console.log(`[Auth] Email not registered: ${email}`);
+      return { 
+        success: false, 
+        error: 'Email not registered',
+        message: 'This email is not registered in the system. Please contact an administrator.'
+      };
+    }
+
+    console.log(`[Auth] Email verified: ${email}`);
 
     // Generate OTP
     const code = generateOTP();
@@ -72,7 +86,10 @@ export async function sendOTP(email: string): Promise<{ success: boolean; error?
       });
 
       console.log(`[Auth] OTP email sent successfully to ${email}`);
-      return { success: true };
+      return { 
+        success: true,
+        message: `Login code sent successfully to ${email}. Please check your email.`
+      };
     } catch (emailError: any) {
       console.error('[Auth] Failed to send OTP email to', email);
       console.error('[Auth] Error details:', emailError.message);
