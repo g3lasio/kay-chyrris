@@ -13,10 +13,11 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const DATABASE_URL = process.env.DATABASE_URL;
+const AUTH_DATABASE_URL = process.env.AUTH_DATABASE_URL;
 
-if (!DATABASE_URL) {
-  console.error('❌ DATABASE_URL environment variable is not set');
+if (!AUTH_DATABASE_URL) {
+  console.error('❌ AUTH_DATABASE_URL environment variable is not set');
+  console.error('Please add AUTH_DATABASE_URL to your Replit Secrets');
   process.exit(1);
 }
 
@@ -25,7 +26,7 @@ console.log('========================\n');
 
 async function setupDatabase() {
   const pool = new Pool({
-    connectionString: DATABASE_URL,
+    connectionString: AUTH_DATABASE_URL,
     ssl: {
       rejectUnauthorized: false,
     },

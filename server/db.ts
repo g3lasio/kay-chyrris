@@ -9,13 +9,14 @@ let _db: ReturnType<typeof drizzle> | null = null;
 let _pool: Pool | null = null;
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
+// Uses AUTH_DATABASE_URL for authentication tables (OTP, sessions, admin users)
 export async function getDb() {
-  if (!_db && process.env.DATABASE_URL) {
+  if (!_db && process.env.AUTH_DATABASE_URL) {
     try {
       // Neon requires SSL. We need to configure it properly.
       // If DATABASE_URL already includes sslmode=require, pg will handle it.
       // Otherwise, we explicitly set SSL options.
-      const connectionString = process.env.DATABASE_URL;
+      const connectionString = process.env.AUTH_DATABASE_URL;
       
       // Check if URL already has SSL mode configured
       const hasSSLMode = connectionString.includes('sslmode=');
@@ -45,7 +46,7 @@ export async function getDb() {
       console.log("[Database] Connected successfully to PostgreSQL");
     } catch (error) {
       console.error("[Database] Failed to connect:", error);
-      console.error("[Database] DATABASE_URL format:", process.env.DATABASE_URL?.substring(0, 30) + '...');
+      console.error("[Database] AUTH_DATABASE_URL format:", process.env.AUTH_DATABASE_URL?.substring(0, 30) + '...');
       _db = null;
       _pool = null;
     }
