@@ -12,11 +12,19 @@ let _pool: Pool | null = null;
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
+      // Neon requires SSL. We force it to be enabled with rejectUnauthorized: false
+      // to avoid SSL handshake errors in both production and development environments.
+      const sslConfig = {
+        rejectUnauthorized: false,
+      };
+
       _pool = new Pool({
         connectionString: process.env.DATABASE_URL,
-        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
+        ssl: sslConfig,
       });
+      
       _db = drizzle(_pool);
+      console.log("[Database] Connected successfully with SSL");
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
