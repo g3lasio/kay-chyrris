@@ -12,21 +12,40 @@ let _pool: Pool | null = null;
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      // Neon requires SSL. We force it to be enabled with rejectUnauthorized: false
-      // to avoid SSL handshake errors in both production and development environments.
-      const sslConfig = {
-        rejectUnauthorized: false,
+      // Neon requires SSL. We need to configure it properly.
+      // If DATABASE_URL already includes sslmode=require, pg will handle it.
+      // Otherwise, we explicitly set SSL options.
+      const connectionString = process.env.DATABASE_URL;
+      
+      // Check if URL already has SSL mode configured
+      const hasSSLMode = connectionString.includes('sslmode=');
+      
+      const poolConfig: any = {
+        connectionString,
+        max: 10, // Maximum number of clients in the pool
+        idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
+        connectionTimeoutMillis: 10000, // Return an error after 10 seconds if connection could not be established
       };
 
-      _pool = new Pool({
-        connectionString: process.env.DATABASE_URL,
-        ssl: sslConfig,
-      });
+      // Only set SSL config if not already in connection string
+      if (!hasSSLMode) {
+        poolConfig.ssl = {
+          rejectUnauthorized: false,
+        };
+      }
+
+      _pool = new Pool(poolConfig);
+      
+      // Test the connection
+      const client = await _pool.connect();
+      await client.query('SELECT NOW()');
+      client.release();
       
       _db = drizzle(_pool);
-      console.log("[Database] Connected successfully with SSL");
+      console.log("[Database] Connected successfully to PostgreSQL");
     } catch (error) {
-      console.warn("[Database] Failed to connect:", error);
+      console.error("[Database] Failed to connect:", error);
+      console.error("[Database] DATABASE_URL format:", process.env.DATABASE_URL?.substring(0, 30) + '...');
       _db = null;
       _pool = null;
     }
