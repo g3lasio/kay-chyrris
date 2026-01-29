@@ -3,9 +3,9 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
 
-// ⚠️ TEMPORARY AUTH BYPASS
-// Set DISABLE_AUTH=true in environment to bypass authentication
-const AUTH_BYPASS_ENABLED = process.env.DISABLE_AUTH === 'true';
+// ⚠️ TEMPORARY AUTH BYPASS - ALWAYS ENABLED
+// To re-enable authentication, change this to false
+const AUTH_BYPASS_ENABLED = true; // Set to false to require login
 
 if (AUTH_BYPASS_ENABLED) {
   console.warn('🚨 ========================================');

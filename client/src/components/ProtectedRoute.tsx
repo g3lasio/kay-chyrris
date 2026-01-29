@@ -2,10 +2,9 @@ import { useEffect } from 'react';
 import { useLocation } from 'wouter';
 import { trpc } from '@/lib/trpc';
 
-// ⚠️ TEMPORARY AUTH BYPASS
-// Set VITE_DISABLE_AUTH=true in .env to bypass authentication
-// Remove or set to false to re-enable authentication
-const AUTH_BYPASS_ENABLED = import.meta.env.VITE_DISABLE_AUTH === 'true';
+// ⚠️ TEMPORARY AUTH BYPASS - ALWAYS ENABLED
+// To re-enable authentication, change this to false
+const AUTH_BYPASS_ENABLED = true; // Set to false to require login
 
 export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   // 🚨 AUTH BYPASS: Skip authentication if enabled
