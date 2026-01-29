@@ -27,6 +27,7 @@ import { toast } from 'sonner';
 
 export default function Users() {
   const [search, setSearch] = useState('');
+  const [planFilter, setPlanFilter] = useState<string>('all');
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
@@ -109,13 +110,26 @@ export default function Users() {
   // Get ALL users from Firebase (no hardcoded filter)
   const allUsers = data?.success && data.data ? data.data : [];
 
-  // Client-side search filtering only
-  const filteredUsers = search
-    ? allUsers.filter((user: any) => 
-        user.email?.toLowerCase().includes(search.toLowerCase()) ||
-        user.displayName?.toLowerCase().includes(search.toLowerCase())
-      )
-    : allUsers;
+  // Calculate plan statistics
+  const planStats = {
+    total: allUsers.length,
+    free: allUsers.filter((u: any) => u.planName === 'Primo Chambeador').length,
+    patron: allUsers.filter((u: any) => u.planName === 'Mero Patrón').length,
+    master: allUsers.filter((u: any) => u.planName === 'Master Contractor').length,
+  };
+
+  // Client-side search and plan filtering
+  const filteredUsers = allUsers.filter((user: any) => {
+    // Search filter
+    const matchesSearch = !search || 
+      user.email?.toLowerCase().includes(search.toLowerCase()) ||
+      user.displayName?.toLowerCase().includes(search.toLowerCase());
+    
+    // Plan filter
+    const matchesPlan = planFilter === 'all' || user.planName === planFilter;
+    
+    return matchesSearch && matchesPlan;
+  });
 
   const handleSearch = (value: string) => {
     setSearch(value);
@@ -239,12 +253,49 @@ export default function Users() {
         </p>
       </div>
 
-      {/* Search */}
+      {/* Plan Statistics */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card className="bg-slate-900/50 border-slate-800">
+          <CardHeader className="pb-3">
+            <CardDescription className="text-slate-400">Total Users</CardDescription>
+            <CardTitle className="text-3xl text-white">{planStats.total}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card className="bg-slate-900/50 border-slate-800">
+          <CardHeader className="pb-3">
+            <CardDescription className="text-slate-400">Primo Chambeador</CardDescription>
+            <CardTitle className="text-3xl text-blue-400">{planStats.free}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-slate-500">Free Plan</p>
+          </CardContent>
+        </Card>
+        <Card className="bg-slate-900/50 border-slate-800">
+          <CardHeader className="pb-3">
+            <CardDescription className="text-slate-400">Mero Patrón</CardDescription>
+            <CardTitle className="text-3xl text-purple-400">{planStats.patron}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-slate-500">$49.99/month</p>
+          </CardContent>
+        </Card>
+        <Card className="bg-slate-900/50 border-slate-800">
+          <CardHeader className="pb-3">
+            <CardDescription className="text-slate-400">Master Contractor</CardDescription>
+            <CardTitle className="text-3xl text-amber-400">{planStats.master}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-slate-500">$99.99/month</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Search and Filter */}
       <Card className="bg-slate-900/50 border-slate-800">
         <CardHeader>
-          <CardTitle className="text-white">Search Users</CardTitle>
+          <CardTitle className="text-white">Search & Filter Users</CardTitle>
           <CardDescription className="text-slate-400">
-            Search by name or email address
+            Search by name or email, and filter by subscription plan
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -258,7 +309,21 @@ export default function Users() {
                 className="pl-10 bg-slate-800/50 border-slate-700 text-white"
               />
             </div>
-            <Button variant="outline" onClick={() => handleSearch('')} className="border-slate-700 text-slate-300">
+            <select
+              value={planFilter}
+              onChange={(e) => setPlanFilter(e.target.value)}
+              className="px-4 py-2 bg-slate-800/50 border border-slate-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
+            >
+              <option value="all">All Plans</option>
+              <option value="Primo Chambeador">Primo Chambeador (Free)</option>
+              <option value="Mero Patrón">Mero Patrón ($49.99)</option>
+              <option value="Master Contractor">Master Contractor ($99.99)</option>
+            </select>
+            <Button 
+              variant="outline" 
+              onClick={() => { handleSearch(''); setPlanFilter('all'); }} 
+              className="border-slate-700 text-slate-300"
+            >
               Clear
             </Button>
           </div>
@@ -284,6 +349,7 @@ export default function Users() {
                 <TableRow className="border-slate-800 hover:bg-slate-800/50">
                   <TableHead className="text-slate-300">Name</TableHead>
                   <TableHead className="text-slate-300">Email</TableHead>
+                  <TableHead className="text-slate-300">Plan</TableHead>
                   <TableHead className="text-slate-300">Status</TableHead>
                   <TableHead className="text-slate-300">Login Method</TableHead>
                   <TableHead className="text-slate-300">Joined</TableHead>
@@ -297,6 +363,7 @@ export default function Users() {
                     <TableRow key={i} className="border-slate-800">
                       <TableCell><Skeleton className="h-4 w-32 bg-slate-800" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-48 bg-slate-800" /></TableCell>
+                      <TableCell><Skeleton className="h-5 w-28 bg-slate-800" /></TableCell>
                       <TableCell><Skeleton className="h-5 w-16 bg-slate-800" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-20 bg-slate-800" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-24 bg-slate-800" /></TableCell>
@@ -306,7 +373,7 @@ export default function Users() {
                   ))
                 ) : filteredUsers.length === 0 ? (
                   <TableRow className="border-slate-800">
-                    <TableCell colSpan={7} className="text-center py-8 text-slate-400">
+                    <TableCell colSpan={8} className="text-center py-8 text-slate-400">
                       No users found
                     </TableCell>
                   </TableRow>
@@ -317,6 +384,9 @@ export default function Users() {
                         {user.displayName || 'N/A'}
                       </TableCell>
                       <TableCell className="text-slate-300">{user.email || 'N/A'}</TableCell>
+                      <TableCell>
+                        {getPlanBadge(user.planName || 'Primo Chambeador')}
+                      </TableCell>
                       <TableCell>
                         {getStatusBadge(user.disabled)}
                       </TableCell>

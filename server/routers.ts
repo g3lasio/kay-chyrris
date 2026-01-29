@@ -96,17 +96,17 @@ export const appRouter = router({
 
   // Owl Fenc specific routes
   owlfenc: router({
-    // Get users list from Firebase
+    // Get users list from Firebase with subscription plans
     getUsers: protectedProcedure.query(async () => {
       try {
-        const { getOwlFencUsers: getFirebaseUsers } = await import('./services/owlfenc-firebase');
-        const users = await getFirebaseUsers();
+        const { getOwlFencUsersWithPlans } = await import('./services/owlfenc-firebase');
+        const users = await getOwlFencUsersWithPlans();
         return {
           success: true,
           data: users,
         };
       } catch (error: any) {
-        console.error('[Router] Error fetching Firebase users:', error);
+        console.error('[Router] Error fetching Firebase users with plans:', error);
         return {
           success: false,
           error: error.message,

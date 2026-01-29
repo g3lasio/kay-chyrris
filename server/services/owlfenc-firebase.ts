@@ -12,6 +12,13 @@ export interface OwlFencUser {
   disabled: boolean;
 }
 
+export interface OwlFencUserWithPlan extends OwlFencUser {
+  planName: string;
+  planCode: string | null;
+  planPrice: number;
+  subscriptionStatus: string | null;
+}
+
 export interface OwlFencClient {
   id: string;
   name: string;
@@ -498,3 +505,97 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
   }
 }
 
+
+/**
+ * Get all users from Firebase Authentication with their subscription plans from PostgreSQL
+ * Merges Firebase Auth data with PostgreSQL subscription data
+ */
+export async function getOwlFencUsersWithPlans(): Promise<OwlFencUserWithPlan[]> {
+  try {
+    // Step 1: Get all users from Firebase Authentication
+    const firebaseUsers = await getOwlFencUsers();
+    console.log(`[Firebase] Retrieved ${firebaseUsers.length} users from Firebase Auth`);
+
+    // Step 2: Get all users with subscriptions from PostgreSQL
+    const db = getOwlFencDb();
+    if (!db) {
+      console.warn('[Firebase] PostgreSQL not available, returning users with default free plan');
+      return firebaseUsers.map(user => ({
+        ...user,
+        planName: 'Primo Chambeador',
+        planCode: 'free',
+        planPrice: 0,
+        subscriptionStatus: null,
+      }));
+    }
+
+    // Query PostgreSQL for all users with their subscription info
+    const pgUsersResult = await db.execute(sql`
+      SELECT 
+        u.firebase_uid as "firebaseUid",
+        sp.name as "planName",
+        sp.code as "planCode",
+        sp.price as "planPrice",
+        us.status as "subscriptionStatus"
+      FROM users u
+      LEFT JOIN user_subscriptions us ON u.id = us.user_id AND us.status = 'active'
+      LEFT JOIN subscription_plans sp ON us.plan_id = sp.id
+      WHERE u.firebase_uid IS NOT NULL
+    `);
+
+    // Create a map of firebase_uid -> subscription data
+    const subscriptionMap = new Map<string, {
+      planName: string;
+      planCode: string | null;
+      planPrice: number;
+      subscriptionStatus: string | null;
+    }>();
+
+    for (const row of pgUsersResult.rows) {
+      const firebaseUid = row.firebaseUid as string;
+      subscriptionMap.set(firebaseUid, {
+        planName: (row.planName as string) || 'Primo Chambeador',
+        planCode: (row.planCode as string) || 'free',
+        planPrice: row.planPrice ? Number(row.planPrice) : 0,
+        subscriptionStatus: (row.subscriptionStatus as string) || null,
+      });
+    }
+
+    console.log(`[Firebase] Found ${subscriptionMap.size} users in PostgreSQL with subscription data`);
+
+    // Step 3: Merge Firebase users with PostgreSQL subscription data
+    const usersWithPlans: OwlFencUserWithPlan[] = firebaseUsers.map(user => {
+      const subscription = subscriptionMap.get(user.uid);
+      
+      if (subscription) {
+        return {
+          ...user,
+          ...subscription,
+        };
+      } else {
+        // User not in PostgreSQL or no active subscription - default to free plan
+        return {
+          ...user,
+          planName: 'Primo Chambeador',
+          planCode: 'free',
+          planPrice: 0,
+          subscriptionStatus: null,
+        };
+      }
+    });
+
+    console.log(`[Firebase] Successfully merged ${usersWithPlans.length} users with plan data`);
+    return usersWithPlans;
+  } catch (error) {
+    console.error('[Firebase] Error fetching users with plans:', error);
+    // Fallback: return basic users with free plan
+    const firebaseUsers = await getOwlFencUsers();
+    return firebaseUsers.map(user => ({
+      ...user,
+      planName: 'Primo Chambeador',
+      planCode: 'free',
+      planPrice: 0,
+      subscriptionStatus: null,
+    }));
+  }
+}
