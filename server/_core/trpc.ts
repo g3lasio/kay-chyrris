@@ -3,6 +3,17 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
 
+// ⚠️ TEMPORARY AUTH BYPASS
+// Set DISABLE_AUTH=true in environment to bypass authentication
+const AUTH_BYPASS_ENABLED = process.env.DISABLE_AUTH === 'true';
+
+if (AUTH_BYPASS_ENABLED) {
+  console.warn('🚨 ========================================');
+  console.warn('🚨 AUTH BYPASS IS ENABLED ON SERVER!');
+  console.warn('🚨 This should ONLY be used in development!');
+  console.warn('🚨 ========================================');
+}
+
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
 });
@@ -12,6 +23,28 @@ export const publicProcedure = t.procedure;
 
 const requireUser = t.middleware(async opts => {
   const { ctx, next } = opts;
+
+  // 🚨 AUTH BYPASS: Skip authentication if enabled
+  if (AUTH_BYPASS_ENABLED) {
+    // Create a mock admin user for bypass mode
+    const mockUser = {
+      id: 1,
+      email: 'dev@bypass.local',
+      name: 'Dev User (Bypass Mode)',
+      role: 'super_admin' as const,
+      isActive: true,
+      lastLoginAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    return next({
+      ctx: {
+        ...ctx,
+        user: mockUser,
+      },
+    });
+  }
 
   if (!ctx.user) {
     throw new TRPCError({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
