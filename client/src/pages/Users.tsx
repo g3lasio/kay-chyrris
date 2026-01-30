@@ -113,9 +113,10 @@ export default function Users() {
   // Calculate plan statistics
   const planStats = {
     total: allUsers.length,
-    free: allUsers.filter((u: any) => u.planName === 'Primo Chambeador').length,
-    patron: allUsers.filter((u: any) => u.planName === 'Mero Patrón').length,
-    master: allUsers.filter((u: any) => u.planName === 'Master Contractor').length,
+    freeTrial: allUsers.filter((u: any) => u.planName === 'Free Trial').length,
+    primoChambeador: allUsers.filter((u: any) => u.planName === 'Primo Chambeador').length,
+    meroPatron: allUsers.filter((u: any) => u.planName === 'Mero Patrón').length,
+    masterContractor: allUsers.filter((u: any) => u.planName === 'Master Contractor').length,
   };
 
   // Client-side search and plan filtering
@@ -254,7 +255,7 @@ export default function Users() {
       </div>
 
       {/* Plan Statistics */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <Card className="bg-slate-900/50 border-slate-800">
           <CardHeader className="pb-3">
             <CardDescription className="text-slate-400">Total Users</CardDescription>
@@ -263,8 +264,17 @@ export default function Users() {
         </Card>
         <Card className="bg-slate-900/50 border-slate-800">
           <CardHeader className="pb-3">
+            <CardDescription className="text-slate-400">Free Trial</CardDescription>
+            <CardTitle className="text-3xl text-slate-400">{planStats.freeTrial}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-slate-500">14 days</p>
+          </CardContent>
+        </Card>
+        <Card className="bg-slate-900/50 border-slate-800">
+          <CardHeader className="pb-3">
             <CardDescription className="text-slate-400">Primo Chambeador</CardDescription>
-            <CardTitle className="text-3xl text-blue-400">{planStats.free}</CardTitle>
+            <CardTitle className="text-3xl text-blue-400">{planStats.primoChambeador}</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-xs text-slate-500">Free Plan</p>
@@ -273,7 +283,7 @@ export default function Users() {
         <Card className="bg-slate-900/50 border-slate-800">
           <CardHeader className="pb-3">
             <CardDescription className="text-slate-400">Mero Patrón</CardDescription>
-            <CardTitle className="text-3xl text-purple-400">{planStats.patron}</CardTitle>
+            <CardTitle className="text-3xl text-purple-400">{planStats.meroPatron}</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-xs text-slate-500">$49.99/month</p>
@@ -282,7 +292,7 @@ export default function Users() {
         <Card className="bg-slate-900/50 border-slate-800">
           <CardHeader className="pb-3">
             <CardDescription className="text-slate-400">Master Contractor</CardDescription>
-            <CardTitle className="text-3xl text-amber-400">{planStats.master}</CardTitle>
+            <CardTitle className="text-3xl text-amber-400">{planStats.masterContractor}</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-xs text-slate-500">$99.99/month</p>
@@ -315,6 +325,7 @@ export default function Users() {
               className="px-4 py-2 bg-slate-800/50 border border-slate-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
             >
               <option value="all">All Plans</option>
+              <option value="Free Trial">Free Trial (14 days)</option>
               <option value="Primo Chambeador">Primo Chambeador (Free)</option>
               <option value="Mero Patrón">Mero Patrón ($49.99)</option>
               <option value="Master Contractor">Master Contractor ($99.99)</option>
