@@ -417,6 +417,42 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
       console.error('[Usage] Error fetching invoice breakdown from PostgreSQL:', err);
     }
     
+    // DIAGNOSTIC: First, check total docs in each collection (only for first request)
+    const diagnosticCollections = ['clients', 'contracts', 'estimates', 'dualSignatureContracts'];
+    for (const collName of diagnosticCollections) {
+      try {
+        const snap = await db.collection(collName).limit(3).get();
+        console.log(`[Usage-Diag] Collection '${collName}': ${snap.size} docs (limited to 3)`);
+        if (snap.size > 0) {
+          const firstDoc = snap.docs[0].data();
+          const fields = Object.keys(firstDoc);
+          console.log(`[Usage-Diag] Collection '${collName}' fields: ${fields.join(', ')}`);
+          console.log(`[Usage-Diag] Collection '${collName}' userId value: '${firstDoc.userId || firstDoc.firebaseUserId || firstDoc.user_id || 'NOT FOUND'}'`);
+        }
+      } catch (err: any) {
+        console.error(`[Usage-Diag] Error reading '${collName}': ${err.message}`);
+      }
+    }
+    
+    // DIAGNOSTIC: Check subcollection paths
+    const subCollections = ['searches/permits/history', 'searches/property/history'];
+    for (const collPath of subCollections) {
+      try {
+        const snap = await db.collection(collPath).limit(3).get();
+        console.log(`[Usage-Diag] Collection '${collPath}': ${snap.size} docs (limited to 3)`);
+        if (snap.size > 0) {
+          const firstDoc = snap.docs[0].data();
+          const fields = Object.keys(firstDoc);
+          console.log(`[Usage-Diag] Collection '${collPath}' fields: ${fields.join(', ')}`);
+        }
+      } catch (err: any) {
+        console.error(`[Usage-Diag] Error reading '${collPath}': ${err.message}`);
+      }
+    }
+    
+    // DIAGNOSTIC: Log first 3 user UIDs for reference
+    console.log(`[Usage-Diag] First 3 user UIDs: ${listUsersResult.users.slice(0, 3).map(u => u.uid).join(', ')}`);
+
     // For each user, count their documents across ALL collections
     const userUsagePromises = listUsersResult.users.map(async (userRecord) => {
       const userId = userRecord.uid;
@@ -424,32 +460,32 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
       // CORRECTED: Count documents from CORRECT collections with CORRECT field names
       const [
         clientsSnapshot,
-        contractsSnapshot,          // FIXED: was 'contractHistory', now 'contracts'
-        estimatesSnapshot,          // FIXED: was 'firebaseUserId', now 'userId'
-        permitSearchesSnapshot,     // FIXED: was 'permit_search_history', now 'searches/permits/history'
-        propertySearchesSnapshot,   // FIXED: was PostgreSQL, now Firestore
+        contractsSnapshot,
+        estimatesSnapshot,
+        permitSearchesSnapshot,
+        propertySearchesSnapshot,
         dualSignatureContractsSnapshot,
       ] = await Promise.all([
-        // Clients - Firestore 'clients' collection (CORRECT, no change needed)
+        // Clients - Firestore 'clients' collection
         db.collection('clients').where('userId', '==', userId).get(),
         
-        // Contracts - FIXED: Read from 'contracts' instead of 'contractHistory'
+        // Contracts - Read from 'contracts'
         db.collection('contracts').where('userId', '==', userId).get(),
         
-        // Estimates - FIXED: Field name is 'userId' not 'firebaseUserId'
+        // Estimates - Field name is 'userId'
         db.collection('estimates').where('userId', '==', userId).get(),
         
-        // Permit Searches - FIXED: Collection path is 'searches/permits/history'
+        // Permit Searches - Collection path is 'searches/permits/history'
         db.collection('searches/permits/history').where('userId', '==', userId).get()
-          .catch(() => ({ docs: [], size: 0 })),
+          .catch((err: any) => { console.error(`[Usage-Diag] Permit query error for ${userId}: ${err.message}`); return { docs: [], size: 0 }; }),
         
-        // Property Verifications - FIXED: Read from Firestore 'searches/property/history'
+        // Property Verifications - Firestore 'searches/property/history'
         db.collection('searches/property/history').where('userId', '==', userId).get()
-          .catch(() => ({ docs: [], size: 0 })),
+          .catch((err: any) => { console.error(`[Usage-Diag] Property query error for ${userId}: ${err.message}`); return { docs: [], size: 0 }; }),
         
-        // Dual Signature Contracts - CORRECT, no change needed
+        // Dual Signature Contracts
         db.collection('dualSignatureContracts').where('userId', '==', userId).get()
-          .catch(() => ({ docs: [], size: 0 })),
+          .catch((err: any) => { console.error(`[Usage-Diag] DualSig query error for ${userId}: ${err.message}`); return { docs: [], size: 0 }; }),
       ]);
       
       // Filter documents in memory if date range is provided
@@ -481,6 +517,12 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
       const contractsCount = filterUserDocs(contractsSnapshot);
       const estimatesCount = filterUserDocs(estimatesSnapshot);
       const invoicesCount = invoiceCountMap.get(userId) || 0;
+      
+      // DIAGNOSTIC: Log counts for users with any data
+      const totalForUser = clientsCount + contractsCount + estimatesCount + invoicesCount;
+      if (totalForUser > 0 || userRecord.email === 'owl@chyrris.com') {
+        console.log(`[Usage-Diag] User ${userRecord.email} (${userId}): clients=${clientsCount}, contracts=${contractsCount}, estimates=${estimatesCount}, invoices=${invoicesCount}, permits=${(permitSearchesSnapshot as any).size || 0}, properties=${(propertySearchesSnapshot as any).size || 0}, dualSigs=${(dualSignatureContractsSnapshot as any).size || 0}`);
+      }
       
       return {
         uid: userRecord.uid,
