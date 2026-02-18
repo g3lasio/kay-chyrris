@@ -106,7 +106,8 @@ export async function getOwlFencClients(): Promise<OwlFencClient[]> {
 }
 
 /**
- * Get dashboard statistics from Firebase
+ * Get dashboard statistics from Firebase + PostgreSQL
+ * CORRECTED: Uses correct collection paths matching Owl Fenc app
  */
 export async function getOwlFencDashboardStats(): Promise<OwlFencDashboardStats> {
   try {
@@ -114,22 +115,33 @@ export async function getOwlFencDashboardStats(): Promise<OwlFencDashboardStats>
     const auth = getAuth();
 
     // Get counts from different collections
-    const [usersResult, clientsSnapshot, contractsSnapshot, invoicesSnapshot] = await Promise.all([
+    // CORRECTED: Using 'contracts' instead of 'contractHistory'
+    // CORRECTED: Invoices come from PostgreSQL project_payments, not Firestore
+    const [usersResult, clientsSnapshot, contractsSnapshot, estimatesSnapshot] = await Promise.all([
       auth.listUsers(1000),
       db.collection('clients').get(),
-      // Query contract history from Firestore (completed contracts are stored here)
-      db.collection('contractHistory').get(),
-      db.collection('invoices').get(),
+      db.collection('contracts').get(),
+      db.collection('estimates').get(),
     ]);
+
+    // Get invoice count from PostgreSQL (project_payments with invoiceNumber)
+    let totalInvoices = 0;
+    try {
+      const pgDb = getOwlFencDb();
+      if (pgDb) {
+        const invoiceResult = await pgDb.execute(sql`
+          SELECT COUNT(*) as count FROM project_payments WHERE invoice_number IS NOT NULL
+        `);
+        totalInvoices = parseInt(String(invoiceResult.rows[0]?.count || '0'), 10);
+      }
+    } catch (err) {
+      console.error('[Firebase] Error fetching invoice count from PostgreSQL:', err);
+    }
 
     const totalUsers = usersResult.users.length;
     const totalClients = clientsSnapshot.size;
-    // Count only completed and both_signed contracts
-    const totalContracts = contractsSnapshot.docs.filter((doc: any) => {
-      const status = doc.data().status;
-      return status === 'completed' || status === 'both_signed';
-    }).length;
-    const totalInvoices = invoicesSnapshot.size;
+    // Count contracts (all statuses are valid - they represent created contracts)
+    const totalContracts = contractsSnapshot.size;
 
     // Calculate active users (signed in within last 30 days)
     const thirtyDaysAgo = new Date();
@@ -175,7 +187,7 @@ export async function getOwlFencDashboardStats(): Promise<OwlFencDashboardStats>
       totalUsers,
       totalClients,
       totalContracts,
-      totalProjects: 0, // TODO: Add projects collection if exists
+      totalProjects: estimatesSnapshot.size, // Projects = estimates in Owl Fenc
       totalInvoices,
       activeUsers,
       newUsersThisMonth,
@@ -240,6 +252,17 @@ export async function getOwlFencUserById(uid: string): Promise<OwlFencUser | nul
 
 /**
  * Get system-wide usage metrics
+ * CORRECTED: Uses correct Firestore collection paths matching Owl Fenc app
+ * 
+ * Data source mapping (verified against Owl Fenc codebase):
+ * - Clients: Firestore 'clients' collection
+ * - Contracts: Firestore 'contracts' collection (regular contracts)
+ * - Invoices: PostgreSQL 'project_payments' table (invoices = payment links with invoice numbers)
+ * - Estimates: Firestore 'estimates' collection
+ * - Permits: Firestore 'searches/permits/history' collection
+ * - Properties: Firestore 'searches/property/history' collection
+ * - Dual Signatures: Firestore 'dualSignatureContracts' collection
+ * 
  * @param startDate Optional start date for filtering (ISO string)
  * @param endDate Optional end date for filtering (ISO string)
  */
@@ -247,93 +270,47 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
   try {
     const db = getFirestore();
     
-    // Helper functions for date filtering
-    const getTodayStart = () => {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      return today;
-    };
-    
-    const getMonthStart = () => {
-      const now = new Date();
-      return new Date(now.getFullYear(), now.getMonth(), 1);
-    };
-    
     // Use custom date range if provided, otherwise use default (all time)
     const filterStartDate = startDate ? new Date(startDate) : null;
     const filterEndDate = endDate ? new Date(endDate) : null;
     
-    // Get total counts for all collections
+    // CORRECTED: Get total counts from CORRECT collections
     const [
       clientsSnapshot,
-      contractsSnapshot,
-      invoicesSnapshot,
+      contractsSnapshot,          // FIXED: was 'contractHistory', now 'contracts'
       estimatesSnapshot,
-      projectsSnapshot,
-      permitSearchesSnapshot,
-      propertyVerificationsSnapshot,
+      permitSearchesSnapshot,     // FIXED: was 'permit_search_history', now 'searches/permits/history'
+      propertySearchesSnapshot,   // FIXED: was PostgreSQL, now Firestore 'searches/property/history'
       dualSignatureContractsSnapshot,
-      contractHistorySnapshot,
-      emailsTodaySnapshot,
-      emailsMonthSnapshot,
-      pdfsTodaySnapshot,
-      pdfsMonthSnapshot
     ] = await Promise.all([
-      // Get all documents (filter in memory to avoid Firestore composite index requirement)
       db.collection('clients').get(),
-      // Query contract history from Firestore (completed contracts are stored here)
-      db.collection('contractHistory').get(),
-      db.collection('invoices').get(),
+      db.collection('contracts').get(),                      // FIXED
       db.collection('estimates').get(),
-      db.collection('projects').get(),
-      
-      // NEW: High-priority metrics
-      db.collection('permit_search_history').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
-      // Property verifications from PostgreSQL
-      (async () => {
-        const { getPropertyVerificationsCount } = await import('./owlfenc-subscriptions.js');
-        const count = await getPropertyVerificationsCount();
-        return { data: () => ({ count }) };
-      })(),
-      db.collection('dualSignatureContracts').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
-      db.collection('contractHistory').count().get().catch(() => ({ data: () => ({ count: 0 }) })),
-      
-      // Emails sent TODAY (may not exist yet, will return 0)
-      db.collection('email_logs')
-        .where('sentAt', '>=', getTodayStart())
-        .count().get()
-        .catch(() => ({ data: () => ({ count: 0 }) })),
-      
-      // Emails sent THIS MONTH
-      db.collection('email_logs')
-        .where('sentAt', '>=', getMonthStart())
-        .count().get()
-        .catch(() => ({ data: () => ({ count: 0 }) })),
-      
-      // PDFs generated TODAY
-      db.collection('pdf_logs')
-        .where('generatedAt', '>=', getTodayStart())
-        .count().get()
-        .catch(() => ({ data: () => ({ count: 0 }) })),
-      
-      // PDFs generated THIS MONTH
-      db.collection('pdf_logs')
-        .where('generatedAt', '>=', getMonthStart())
-        .count().get()
-        .catch(() => ({ data: () => ({ count: 0 }) })),
+      db.collection('searches/permits/history').get()        // FIXED
+        .catch(() => ({ docs: [], size: 0 })),
+      db.collection('searches/property/history').get()       // FIXED
+        .catch(() => ({ docs: [], size: 0 })),
+      db.collection('dualSignatureContracts').get()
+        .catch(() => ({ docs: [], size: 0 })),
     ]);
+
+    // Get invoice count from PostgreSQL (project_payments = invoices in Owl Fenc)
+    let totalInvoices = 0;
+    try {
+      const pgDb = getOwlFencDb();
+      if (pgDb) {
+        const invoiceResult = await pgDb.execute(sql`
+          SELECT COUNT(*) as count FROM project_payments WHERE invoice_number IS NOT NULL
+        `);
+        totalInvoices = parseInt(String(invoiceResult.rows[0]?.count || '0'), 10);
+      }
+    } catch (err) {
+      console.error('[Usage] Error fetching invoice count from PostgreSQL:', err);
+    }
     
     // Filter documents in memory if date range is provided
-    const filterDocs = (snapshot: any, collectionName?: string) => {
-      let docs = snapshot.docs;
-      
-      // Special filter for contracts: only count completed and both_signed
-      if (collectionName === 'contracts') {
-        docs = docs.filter((doc: any) => {
-          const status = doc.data().status;
-          return status === 'completed' || status === 'both_signed';
-        });
-      }
+    const filterDocs = (snapshot: any) => {
+      let docs = snapshot.docs || [];
       
       if (!filterStartDate || !filterEndDate) return docs.length;
       
@@ -357,32 +334,30 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
       }).length;
     };
     
-    const emailsSentToday = emailsTodaySnapshot.data().count;
-    const emailDailyLimit = 500; // Resend free tier limit
-    
     return {
       // Core metrics (filtered in memory)
       totalClients: filterDocs(clientsSnapshot),
-      totalContracts: filterDocs(contractsSnapshot, 'contracts'),
-      totalInvoices: filterDocs(invoicesSnapshot),
+      totalContracts: filterDocs(contractsSnapshot),
+      totalInvoices,  // From PostgreSQL - no date filtering needed for now
       totalEstimates: filterDocs(estimatesSnapshot),
-      totalProjects: filterDocs(projectsSnapshot),
+      totalProjects: filterDocs(estimatesSnapshot), // Projects = estimates in Owl Fenc
       
-      // NEW: High-priority metrics
-      totalPermitSearches: permitSearchesSnapshot.data().count,
-      totalPropertyVerifications: propertyVerificationsSnapshot.data().count,
-      totalDualSignatureContracts: dualSignatureContractsSnapshot.data().count,
-      totalContractModifications: contractHistorySnapshot.data().count,
+      // Search metrics
+      totalPermitSearches: filterDocs(permitSearchesSnapshot),
+      totalPropertyVerifications: filterDocs(propertySearchesSnapshot),
       
-      // Email tracking (Resend limit: 500/day)
-      emailsSentToday,
-      emailsSentMonth: emailsMonthSnapshot.data().count,
-      emailDailyLimit,
-      emailUsagePercentage: (emailsSentToday / emailDailyLimit) * 100,
+      // Contract metrics
+      totalDualSignatureContracts: filterDocs(dualSignatureContractsSnapshot),
+      totalContractModifications: 0, // Not tracked separately in Owl Fenc
       
-      // PDF tracking
-      pdfsGeneratedToday: pdfsTodaySnapshot.data().count,
-      pdfsGeneratedMonth: pdfsMonthSnapshot.data().count,
+      // Email/PDF tracking - NOT currently logged by Owl Fenc
+      // These will show 0 until Owl Fenc implements logging
+      emailsSentToday: 0,
+      emailsSentMonth: 0,
+      emailDailyLimit: 500,
+      emailUsagePercentage: 0,
+      pdfsGeneratedToday: 0,
+      pdfsGeneratedMonth: 0,
     };
   } catch (error) {
     console.error('[Firebase] Error fetching system usage metrics:', error);
@@ -392,6 +367,17 @@ export async function getSystemUsageMetrics(startDate?: string, endDate?: string
 
 /**
  * Get per-user usage breakdown
+ * CORRECTED: Uses correct Firestore collection paths matching Owl Fenc app
+ * 
+ * Data source mapping (verified against Owl Fenc codebase):
+ * - Clients: Firestore 'clients' where userId == Firebase UID
+ * - Contracts: Firestore 'contracts' where userId == Firebase UID
+ * - Invoices: PostgreSQL 'project_payments' joined via users.firebase_uid
+ * - Estimates: Firestore 'estimates' where userId == Firebase UID
+ * - Permits: Firestore 'searches/permits/history' where userId == Firebase UID
+ * - Properties: Firestore 'searches/property/history' where userId == Firebase UID
+ * - Dual Signatures: Firestore 'dualSignatureContracts' where userId == Firebase UID
+ * 
  * @param startDate Optional start date for filtering (ISO string)
  * @param endDate Optional end date for filtering (ISO string)
  */
@@ -407,48 +393,69 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
     const filterStartDate = startDate ? new Date(startDate) : null;
     const filterEndDate = endDate ? new Date(endDate) : null;
     
-    // Get property verifications breakdown ONCE (more efficient than per-user queries)
-    const { getPropertyVerificationsBreakdown } = await import('./owlfenc-subscriptions.js');
-    const propertyVerificationsBreakdown = await getPropertyVerificationsBreakdown();
-    const propertyVerificationsMap = new Map(
-      propertyVerificationsBreakdown.map(item => [item.firebaseUid, item.count])
-    );
+    // Get invoice counts per user from PostgreSQL (project_payments = invoices)
+    const invoiceCountMap = new Map<string, number>();
+    try {
+      const pgDb = getOwlFencDb();
+      if (pgDb) {
+        const invoiceResult = await pgDb.execute(sql`
+          SELECT u.firebase_uid as "firebaseUid", COUNT(pp.id) as count
+          FROM project_payments pp
+          JOIN users u ON pp.user_id = u.id
+          WHERE pp.invoice_number IS NOT NULL AND u.firebase_uid IS NOT NULL
+          GROUP BY u.firebase_uid
+        `);
+        for (const row of invoiceResult.rows) {
+          invoiceCountMap.set(
+            String(row.firebaseUid),
+            parseInt(String(row.count || '0'), 10)
+          );
+        }
+        console.log(`[Usage] Found invoice data for ${invoiceCountMap.size} users from PostgreSQL`);
+      }
+    } catch (err) {
+      console.error('[Usage] Error fetching invoice breakdown from PostgreSQL:', err);
+    }
     
     // For each user, count their documents across ALL collections
     const userUsagePromises = listUsersResult.users.map(async (userRecord) => {
       const userId = userRecord.uid;
       
-      // Count documents where userId field matches (or firebaseUserId for estimates)
+      // CORRECTED: Count documents from CORRECT collections with CORRECT field names
       const [
         clientsSnapshot,
-        contractsSnapshot,
-        invoicesSnapshot,
-        estimatesSnapshot,
-        projectsSnapshot,
-        permitSearchesSnapshot,
-        propertyVerificationsCount,
+        contractsSnapshot,          // FIXED: was 'contractHistory', now 'contracts'
+        estimatesSnapshot,          // FIXED: was 'firebaseUserId', now 'userId'
+        permitSearchesSnapshot,     // FIXED: was 'permit_search_history', now 'searches/permits/history'
+        propertySearchesSnapshot,   // FIXED: was PostgreSQL, now Firestore
         dualSignatureContractsSnapshot,
-        contractHistorySnapshot,
-        pdfsSnapshot
       ] = await Promise.all([
+        // Clients - Firestore 'clients' collection (CORRECT, no change needed)
         db.collection('clients').where('userId', '==', userId).get(),
-        db.collection('contractHistory').where('userId', '==', userId).where('status', 'in', ['completed', 'both_signed']).get(),
-        db.collection('invoices').where('userId', '==', userId).get(),
-        db.collection('estimates').where('firebaseUserId', '==', userId).get(),
-        db.collection('projects').where('userId', '==', userId).get(),
         
-        // NEW: High-priority metrics
-        db.collection('permit_search_history').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
-        // Property verifications from PostgreSQL (lookup from pre-fetched map)
-        Promise.resolve(propertyVerificationsMap.get(userId) || 0),
-        db.collection('dualSignatureContracts').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
-        db.collection('contractHistory').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
-        db.collection('pdf_logs').where('userId', '==', userId).count().get().catch(() => ({ data: () => ({ count: 0 }) })),
+        // Contracts - FIXED: Read from 'contracts' instead of 'contractHistory'
+        db.collection('contracts').where('userId', '==', userId).get(),
+        
+        // Estimates - FIXED: Field name is 'userId' not 'firebaseUserId'
+        db.collection('estimates').where('userId', '==', userId).get(),
+        
+        // Permit Searches - FIXED: Collection path is 'searches/permits/history'
+        db.collection('searches/permits/history').where('userId', '==', userId).get()
+          .catch(() => ({ docs: [], size: 0 })),
+        
+        // Property Verifications - FIXED: Read from Firestore 'searches/property/history'
+        db.collection('searches/property/history').where('userId', '==', userId).get()
+          .catch(() => ({ docs: [], size: 0 })),
+        
+        // Dual Signature Contracts - CORRECT, no change needed
+        db.collection('dualSignatureContracts').where('userId', '==', userId).get()
+          .catch(() => ({ docs: [], size: 0 })),
       ]);
       
       // Filter documents in memory if date range is provided
       const filterUserDocs = (snapshot: any) => {
-        if (!filterStartDate || !filterEndDate) return snapshot.size;
+        if (!snapshot || !snapshot.docs) return 0;
+        if (!filterStartDate || !filterEndDate) return snapshot.size || snapshot.docs.length;
         
         return snapshot.docs.filter((doc: any) => {
           const data = doc.data();
@@ -472,8 +479,8 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
       
       const clientsCount = filterUserDocs(clientsSnapshot);
       const contractsCount = filterUserDocs(contractsSnapshot);
-      const invoicesCount = filterUserDocs(invoicesSnapshot);
       const estimatesCount = filterUserDocs(estimatesSnapshot);
+      const invoicesCount = invoiceCountMap.get(userId) || 0;
       
       return {
         uid: userRecord.uid,
@@ -483,15 +490,18 @@ export async function getUserUsageBreakdown(startDate?: string, endDate?: string
         contractsCount,
         invoicesCount,
         estimatesCount,
-        projectsCount: filterUserDocs(projectsSnapshot),
+        projectsCount: estimatesCount, // Projects = estimates in Owl Fenc
         
-        // NEW: High-priority metrics
-        permitSearchesCount: permitSearchesSnapshot.data().count,
-        propertyVerificationsCount: propertyVerificationsCount,
-        dualSignatureContractsCount: dualSignatureContractsSnapshot.data().count,
-        contractModificationsCount: contractHistorySnapshot.data().count,
+        // Search metrics
+        permitSearchesCount: filterUserDocs(permitSearchesSnapshot),
+        propertyVerificationsCount: filterUserDocs(propertySearchesSnapshot),
         
-        pdfsGeneratedCount: pdfsSnapshot.data().count,
+        // Contract metrics
+        dualSignatureContractsCount: filterUserDocs(dualSignatureContractsSnapshot),
+        contractModificationsCount: 0, // Not tracked separately in Owl Fenc
+        
+        // PDF tracking - Not currently logged by Owl Fenc
+        pdfsGeneratedCount: 0,
       };
     });
     
