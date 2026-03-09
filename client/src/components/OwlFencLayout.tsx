@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/sidebar";
 
 import { useIsMobile } from "@/hooks/useMobile";
-import { LayoutDashboard, LogOut, PanelLeft, Users, DollarSign, Megaphone, Activity, ArrowLeft } from "lucide-react";
+import { LayoutDashboard, LogOut, PanelLeft, Users, DollarSign, Megaphone, Activity, ArrowLeft, Zap } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Button } from "./ui/button";
@@ -30,6 +30,7 @@ const menuItems = [
   { icon: Users, label: "Users", path: "/owlfenc/users" },
   { icon: DollarSign, label: "Payments", path: "/owlfenc/payments" },
   { icon: Activity, label: "Usage System", path: "/owlfenc/usage-system" },
+  { icon: Zap, label: "AI Credits", path: "/owlfenc/ai-credits" },
   { icon: Megaphone, label: "Announcements", path: "/owlfenc/announcements" },
 ];
 
