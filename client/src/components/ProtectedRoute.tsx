@@ -2,17 +2,8 @@ import { useEffect } from 'react';
 import { useLocation } from 'wouter';
 import { trpc } from '@/lib/trpc';
 
-// ⚠️ TEMPORARY AUTH BYPASS - ALWAYS ENABLED
-// To re-enable authentication, change this to false
-const AUTH_BYPASS_ENABLED = true; // Set to false to require login
-
+// ✅ Authentication is ENABLED — OTP-based login required
 export function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  // 🚨 AUTH BYPASS: Skip authentication if enabled
-  if (AUTH_BYPASS_ENABLED) {
-    console.warn('⚠️ Authentication bypass is ENABLED. This should only be used in development!');
-    return <>{children}</>;
-  }
-
   const [, setLocation] = useLocation();
   const { data: user, isLoading, error } = trpc.auth.me.useQuery();
 
