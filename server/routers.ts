@@ -365,6 +365,92 @@ export const appRouter = router({
       }
     }),
 
+    // ─── AI WALLET MANAGEMENT ────────────────────────────────────────────────
+
+    // Get all users with their current wallet balances (real-time from wallet_accounts)
+    getUserWalletBalances: protectedProcedure
+      .input(z.object({
+        planFilter: z.string().optional(),
+      }).optional())
+      .query(async ({ input }) => {
+        try {
+          const { getUserWalletBalances } = await import('./services/owlfenc-wallet');
+          const balances = await getUserWalletBalances(input?.planFilter);
+          return { success: true, data: balances };
+        } catch (error: any) {
+          console.error('[Router] Error fetching wallet balances:', error);
+          return { success: false, error: error.message, data: [] };
+        }
+      }),
+
+    // Grant credits to a list of users (admin action — writes directly to wallet_accounts + wallet_transactions)
+    grantCreditsToUsers: protectedProcedure
+      .input(z.object({
+        userIds: z.array(z.number()).min(1, 'Select at least one user'),
+        amount: z.number().min(1).max(10000),
+        description: z.string().min(3, 'Description is required'),
+        adminNote: z.string().optional(),
+        expiresAt: z.string().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        try {
+          const { grantCreditsToUsers } = await import('./services/owlfenc-wallet');
+          const adminEmail = (ctx.user as any)?.email ?? 'unknown-admin';
+          const result = await grantCreditsToUsers({
+            userIds: input.userIds,
+            amount: input.amount,
+            description: input.description,
+            adminNote: input.adminNote,
+            expiresAt: input.expiresAt ? new Date(input.expiresAt) : undefined,
+            adminEmail,
+          });
+          return result;
+        } catch (error: any) {
+          console.error('[Router] Error granting credits:', error);
+          throw new Error(`Failed to grant credits: ${error.message}`);
+        }
+      }),
+
+    // Get full history of admin grants from wallet_transactions
+    getAdminGrantHistory: protectedProcedure
+      .input(z.object({
+        limit: z.number().optional().default(200),
+      }).optional())
+      .query(async ({ input }) => {
+        try {
+          const { getAdminGrantHistory } = await import('./services/owlfenc-wallet');
+          const history = await getAdminGrantHistory(input?.limit ?? 200);
+          return { success: true, data: history };
+        } catch (error: any) {
+          console.error('[Router] Error fetching grant history:', error);
+          return { success: false, error: error.message, data: [] };
+        }
+      }),
+
+    // Get wallet stats: total credits in circulation, grants this month, consumption
+    getWalletStats: protectedProcedure.query(async () => {
+      try {
+        const { getWalletStats } = await import('./services/owlfenc-wallet');
+        const stats = await getWalletStats();
+        return { success: true, data: stats };
+      } catch (error: any) {
+        console.error('[Router] Error fetching wallet stats:', error);
+        return {
+          success: false,
+          error: error.message,
+          data: {
+            totalCreditsInCirculation: 0,
+            totalAdminGrantsThisMonth: 0,
+            totalCreditsConsumedThisMonth: 0,
+            usersWithWallet: 0,
+            usersWithZeroBalance: 0,
+          },
+        };
+      }
+    }),
+
+    // ─── END AI WALLET MANAGEMENT ────────────────────────────────────────────
+
     // Get Resend email usage stats (direct from Resend API)
     getResendUsage: protectedProcedure.query(async () => {
       try {

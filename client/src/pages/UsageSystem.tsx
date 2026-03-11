@@ -2,12 +2,12 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { trpc } from "@/lib/trpc";
-import { Activity, AlertTriangle, Calendar, FileText, Mail, Users, RefreshCw } from "lucide-react";
+import { Activity, AlertTriangle, Calendar, FileText, Mail, Users, RefreshCw, Zap } from "lucide-react";
 import { useState, useEffect } from "react";
 
 type DateRange = "all" | "day" | "month" | "year" | "custom";
 
-type SortColumn = 'name' | 'email' | 'clients' | 'contracts' | 'invoices' | 'estimates' | 'projects' | 'permits' | 'properties' | 'dualSignatures' | 'modifications' | 'pdfs' | 'total';
+type SortColumn = 'name' | 'email' | 'clients' | 'contracts' | 'invoices' | 'estimates' | 'projects' | 'permits' | 'properties' | 'dualSignatures' | 'modifications' | 'pdfs' | 'total' | 'credits';
 type SortDirection = 'asc' | 'desc';
 
 export default function UsageSystem() {
@@ -79,6 +79,20 @@ export default function UsageSystem() {
       refetchIntervalInBackground: false, // Only refetch when tab is active
     }
   );
+  // Fetch wallet balances for all users (real-time from wallet_accounts)
+  const { data: walletBalances, refetch: refetchWallet } = trpc.owlfenc.getUserWalletBalances.useQuery(
+    undefined,
+    {
+      refetchInterval: 5000,
+      refetchIntervalInBackground: false,
+    }
+  );
+
+  // Build a lookup map: userId -> creditBalance (keyed by firebaseUid for easy join)
+  const walletBalanceMap = new Map<string, number>(
+    (walletBalances?.data ?? []).map((w: any) => [w.firebaseUid, w.creditBalance])
+  );
+
   // Fetch Resend email usage stats (direct from Resend API)
   const { data: resendUsage, isLoading: loadingResend, refetch: refetchResend } = trpc.owlfenc.getResendUsage.useQuery(
     undefined,
@@ -98,6 +112,7 @@ export default function UsageSystem() {
     refetchSystem();
     refetchUsers();
     refetchResend();
+    refetchWallet();
     setLastUpdated(new Date());
   };
 
@@ -150,6 +165,10 @@ export default function UsageSystem() {
       case 'invoices':
         aValue = a.invoicesCount || 0;
         bValue = b.invoicesCount || 0;
+        break;
+      case 'credits':
+        aValue = walletBalanceMap.get(a.uid) ?? 0;
+        bValue = walletBalanceMap.get(b.uid) ?? 0;
         break;
       case 'estimates':
         aValue = a.estimatesCount || 0;
@@ -499,6 +518,12 @@ export default function UsageSystem() {
                   <th onClick={() => handleSort('pdfs')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
                     PDFs {sortColumn === 'pdfs' && (sortDirection === 'asc' ? '↑' : '↓')}
                   </th>
+                  <th onClick={() => handleSort('credits')} className="text-center py-2 px-3 text-xs font-semibold text-yellow-400 cursor-pointer hover:text-yellow-300 transition-colors whitespace-nowrap">
+                    <span className="flex items-center justify-center gap-1">
+                      <Zap className="w-3 h-3" />
+                      AI Credits {sortColumn === 'credits' && (sortDirection === 'asc' ? '↑' : '↓')}
+                    </span>
+                  </th>
                   <th onClick={() => handleSort('total')} className="text-center py-2 px-3 text-xs font-semibold text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
                     Total {sortColumn === 'total' && (sortDirection === 'asc' ? '↑' : '↓')}
                   </th>
@@ -507,7 +532,7 @@ export default function UsageSystem() {
               <tbody>
                 {filteredUsers.length === 0 ? (
                   <tr>
-                    <td colSpan={14} className="text-center py-6 text-slate-500 text-sm">
+                    <td colSpan={15} className="text-center py-6 text-slate-500 text-sm">
                       No users found
                     </td>
                   </tr>
@@ -554,6 +579,15 @@ export default function UsageSystem() {
                         </td>
                         <td className="py-2 px-3 text-center text-purple-300 font-semibold text-sm">
                           {user.pdfsGeneratedCount || 0}
+                        </td>
+                        <td className="py-2 px-3 text-center font-bold text-sm">
+                          {(() => {
+                            const credits = walletBalanceMap.get(user.uid) ?? null;
+                            if (credits === null) return <span className="text-slate-600 text-xs">—</span>;
+                            if (credits === 0) return <span className="text-red-400">{credits}</span>;
+                            if (credits < 20) return <span className="text-amber-400">{credits}</span>;
+                            return <span className="text-yellow-300">{credits.toLocaleString()}</span>;
+                          })()}
                         </td>
                         <td className="py-2 px-3 text-center text-white font-bold text-sm">
                           {total}
