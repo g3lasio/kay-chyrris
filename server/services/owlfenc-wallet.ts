@@ -7,7 +7,19 @@
  * - Execute admin credit grants (addCredits)
  *
  * Architecture: Direct DB connection via OWLFENC_DATABASE_URL
- * (no HTTP calls to owlfenc API — more secure, less latency)
+ *
+ * SCHEMA REFERENCE (server/migrations/001_wallet_schema.sql):
+ * wallet_accounts:
+ *   id, user_id, firebase_uid, balance_credits, total_credits_earned,
+ *   total_credits_spent, total_top_up_amount_cents, stripe_customer_id,
+ *   is_locked, locked_reason, created_at, updated_at
+ *
+ * wallet_transactions:
+ *   id, wallet_id (FK→wallet_accounts.id), user_id, firebase_uid,
+ *   type, direction, amount_credits, balance_after, feature_name,
+ *   resource_id, subscription_plan_id, stripe_payment_intent_id,
+ *   stripe_checkout_session_id, top_up_amount_cents, idempotency_key,
+ *   description, metadata, expires_at, created_at
  */
 
 import { getOwlFencDb } from './owlfenc-db';
@@ -51,6 +63,7 @@ export interface GrantResult {
 /**
  * Get all users with their wallet balances.
  * Returns real-time data from wallet_accounts joined with users and subscription_plans.
+ * Uses correct column names: balance_credits, total_credits_earned, total_credits_spent
  */
 export async function getUserWalletBalances(planFilter?: string): Promise<UserWalletBalance[]> {
   const db = getOwlFencDb();
@@ -61,17 +74,17 @@ export async function getUserWalletBalances(planFilter?: string): Promise<UserWa
   try {
     const result = await db.execute(sql`
       SELECT
-        u.id                                              AS "userId",
-        u.firebase_uid                                    AS "firebaseUid",
-        u.email                                           AS "email",
-        u.display_name                                    AS "displayName",
-        COALESCE(sp.name, 'Free')                         AS "planName",
-        COALESCE(us.plan_id, 5)                           AS "planId",
-        COALESCE(wa.balance, 0)                           AS "creditBalance",
-        COALESCE(wa.lifetime_credits_earned, 0)           AS "lifetimeCreditsEarned",
-        COALESCE(wa.lifetime_credits_spent, 0)            AS "lifetimeCreditsSpent",
-        wa.updated_at                                     AS "lastTransactionAt",
-        wa.created_at                                     AS "walletCreatedAt"
+        u.id                                                    AS "userId",
+        u.firebase_uid                                          AS "firebaseUid",
+        u.email                                                 AS "email",
+        u.display_name                                          AS "displayName",
+        COALESCE(sp.name, 'Free')                               AS "planName",
+        COALESCE(us.plan_id, 5)                                 AS "planId",
+        COALESCE(wa.balance_credits, 0)                         AS "creditBalance",
+        COALESCE(wa.total_credits_earned, 0)                    AS "lifetimeCreditsEarned",
+        COALESCE(wa.total_credits_spent, 0)                     AS "lifetimeCreditsSpent",
+        wa.updated_at                                           AS "lastTransactionAt",
+        wa.created_at                                           AS "walletCreatedAt"
       FROM users u
       LEFT JOIN user_subscriptions us
         ON u.id = us.user_id AND us.status = 'active'
@@ -82,7 +95,7 @@ export async function getUserWalletBalances(planFilter?: string): Promise<UserWa
       ${planFilter && planFilter !== 'all'
         ? sql`WHERE LOWER(COALESCE(sp.name, 'Free')) ILIKE ${'%' + planFilter + '%'}`
         : sql``}
-      ORDER BY COALESCE(wa.balance, 0) DESC, u.email ASC
+      ORDER BY COALESCE(wa.balance_credits, 0) DESC, u.email ASC
     `);
 
     return result.rows.map((row: any) => ({
@@ -106,8 +119,15 @@ export async function getUserWalletBalances(planFilter?: string): Promise<UserWa
 
 /**
  * Grant credits to a list of users.
- * Uses atomic SQL UPDATE to ensure balance integrity.
- * Records each grant in wallet_transactions with type 'admin_grant'.
+ * Uses the correct schema column names:
+ *   wallet_accounts: balance_credits, total_credits_earned, firebase_uid
+ *   wallet_transactions: amount_credits, balance_after, direction, wallet_id, firebase_uid
+ *
+ * Flow per user:
+ *   1. Get firebase_uid from users table (needed for wallet lookup)
+ *   2. Upsert wallet_accounts using firebase_uid (unique constraint)
+ *   3. Get wallet id + new balance
+ *   4. Insert wallet_transactions with all required NOT NULL columns
  */
 export async function grantCreditsToUsers(params: {
   userIds: number[];
@@ -128,43 +148,70 @@ export async function grantCreditsToUsers(params: {
 
   for (const userId of userIds) {
     try {
-      // 1. Upsert wallet_accounts — create if not exists, then add credits atomically
+      // 1. Get firebase_uid for this user (required for wallet_accounts unique constraint)
+      const userResult = await db.execute(sql`
+        SELECT firebase_uid FROM users WHERE id = ${userId} LIMIT 1
+      `);
+      if (!userResult.rows || userResult.rows.length === 0) {
+        throw new Error(`User ${userId} not found`);
+      }
+      const firebaseUid = userResult.rows[0].firebase_uid as string;
+
+      // 2. Upsert wallet_accounts — create if not exists, then add credits atomically
+      //    Uses correct columns: balance_credits, total_credits_earned, firebase_uid
       await db.execute(sql`
-        INSERT INTO wallet_accounts (user_id, balance, lifetime_credits_earned, lifetime_credits_spent, updated_at)
-        VALUES (${userId}, ${amount}, ${amount}, 0, NOW())
+        INSERT INTO wallet_accounts (user_id, firebase_uid, balance_credits, total_credits_earned, total_credits_spent, updated_at)
+        VALUES (${userId}, ${firebaseUid}, ${amount}, ${amount}, 0, NOW())
         ON CONFLICT (user_id) DO UPDATE
-          SET balance                  = wallet_accounts.balance + ${amount},
-              lifetime_credits_earned  = wallet_accounts.lifetime_credits_earned + ${amount},
-              updated_at               = NOW()
+          SET balance_credits       = wallet_accounts.balance_credits + ${amount},
+              total_credits_earned  = wallet_accounts.total_credits_earned + ${amount},
+              updated_at            = NOW()
       `);
 
-      // 2. Get the new balance for the transaction record
-      const balanceResult = await db.execute(sql`
-        SELECT balance FROM wallet_accounts WHERE user_id = ${userId}
+      // 3. Get wallet id and new balance for the transaction record
+      const walletResult = await db.execute(sql`
+        SELECT id, balance_credits FROM wallet_accounts WHERE user_id = ${userId} LIMIT 1
       `);
-      const balanceAfter = Number(balanceResult.rows[0]?.balance ?? 0);
+      const walletId = Number(walletResult.rows[0]?.id ?? 0);
+      const balanceAfter = Number(walletResult.rows[0]?.balance_credits ?? 0);
 
-      // 3. Insert transaction record in wallet_transactions
+      // 4. Build deterministic idempotency key to prevent double-grants
+      const descSlug = description.toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 30);
+      const idempotencyKey = `admin:${adminEmail}:${firebaseUid}:${amount}cr:${descSlug}`;
+
+      // 5. Insert transaction record with all required NOT NULL columns
+      //    type: 'admin_adjustment' (matches owlfenc schema enum)
+      //    direction: 'credit'
+      //    amount_credits: always positive (direction determines sign)
       await db.execute(sql`
         INSERT INTO wallet_transactions (
+          wallet_id,
           user_id,
+          firebase_uid,
           type,
-          amount,
+          direction,
+          amount_credits,
           balance_after,
           description,
-          admin_note,
+          metadata,
           expires_at,
+          idempotency_key,
           created_at
         ) VALUES (
+          ${walletId},
           ${userId},
-          'admin_grant',
+          ${firebaseUid},
+          'admin_adjustment',
+          'credit',
           ${amount},
           ${balanceAfter},
           ${description},
-          ${adminNote ?? `Admin grant by ${adminEmail}`},
+          ${JSON.stringify({ grantedBy: adminEmail, adminNote: adminNote ?? null })}::jsonb,
           ${expiresAt ?? null},
+          ${idempotencyKey},
           NOW()
         )
+        ON CONFLICT (idempotency_key) DO NOTHING
       `);
 
       usersGranted++;
@@ -184,7 +231,8 @@ export async function grantCreditsToUsers(params: {
 
 /**
  * Get the full history of admin grants from wallet_transactions.
- * Groups by description+date to show "batch" grants.
+ * Uses correct column: amount_credits (not amount), type = 'admin_adjustment'
+ * adminNote is stored in metadata JSONB field.
  */
 export async function getAdminGrantHistory(limit = 200): Promise<AdminGrantRecord[]> {
   const db = getOwlFencDb();
@@ -195,20 +243,21 @@ export async function getAdminGrantHistory(limit = 200): Promise<AdminGrantRecor
   try {
     const result = await db.execute(sql`
       SELECT
-        wt.id                   AS "id",
-        wt.user_id              AS "userId",
-        u.firebase_uid          AS "firebaseUid",
-        u.email                 AS "email",
-        u.display_name          AS "displayName",
-        wt.amount               AS "amount",
-        wt.description          AS "description",
-        wt.admin_note           AS "adminNote",
-        wt.expires_at           AS "expiresAt",
-        wt.created_at           AS "createdAt",
-        wt.balance_after        AS "balanceAfter"
+        wt.id                                   AS "id",
+        wt.user_id                              AS "userId",
+        wt.firebase_uid                         AS "firebaseUid",
+        u.email                                 AS "email",
+        u.display_name                          AS "displayName",
+        wt.amount_credits                       AS "amount",
+        wt.description                          AS "description",
+        wt.metadata->>'adminNote'               AS "adminNote",
+        wt.expires_at                           AS "expiresAt",
+        wt.created_at                           AS "createdAt",
+        wt.balance_after                        AS "balanceAfter"
       FROM wallet_transactions wt
       INNER JOIN users u ON wt.user_id = u.id
-      WHERE wt.type = 'admin_grant'
+      WHERE wt.type = 'admin_adjustment'
+        AND wt.direction = 'credit'
       ORDER BY wt.created_at DESC
       LIMIT ${limit}
     `);
@@ -234,6 +283,7 @@ export async function getAdminGrantHistory(limit = 200): Promise<AdminGrantRecor
 
 /**
  * Get aggregated stats for the grant history panel.
+ * Uses correct column names: balance_credits, amount_credits
  */
 export async function getWalletStats(): Promise<{
   totalCreditsInCirculation: number;
@@ -249,21 +299,25 @@ export async function getWalletStats(): Promise<{
 
   try {
     const [circulation, grants, consumed, walletUsers, zeroBalance] = await Promise.all([
-      db.execute(sql`SELECT COALESCE(SUM(balance), 0) AS total FROM wallet_accounts`),
+      // Total credits in circulation across all wallets
+      db.execute(sql`SELECT COALESCE(SUM(balance_credits), 0) AS total FROM wallet_accounts`),
+      // Admin grants this month (type = admin_adjustment, direction = credit)
       db.execute(sql`
-        SELECT COALESCE(SUM(amount), 0) AS total
+        SELECT COALESCE(SUM(amount_credits), 0) AS total
         FROM wallet_transactions
-        WHERE type = 'admin_grant'
+        WHERE type = 'admin_adjustment'
+          AND direction = 'credit'
           AND created_at >= DATE_TRUNC('month', CURRENT_TIMESTAMP)
       `),
+      // Credits consumed this month (direction = debit)
       db.execute(sql`
-        SELECT COALESCE(SUM(ABS(amount)), 0) AS total
+        SELECT COALESCE(SUM(amount_credits), 0) AS total
         FROM wallet_transactions
-        WHERE amount < 0
+        WHERE direction = 'debit'
           AND created_at >= DATE_TRUNC('month', CURRENT_TIMESTAMP)
       `),
       db.execute(sql`SELECT COUNT(*) AS count FROM wallet_accounts`),
-      db.execute(sql`SELECT COUNT(*) AS count FROM wallet_accounts WHERE balance <= 0`),
+      db.execute(sql`SELECT COUNT(*) AS count FROM wallet_accounts WHERE balance_credits <= 0`),
     ]);
 
     return {
