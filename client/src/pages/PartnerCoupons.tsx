@@ -11,10 +11,9 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tag, Plus, Trash2, CheckCircle2, XCircle, Users, Percent, Calendar, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
-import { useToast } from '@/hooks/use-toast';
+import { toast } from 'sonner';
 
 export default function PartnerCoupons() {
-  const { toast } = useToast();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [form, setForm] = useState({
     name: '',
@@ -31,22 +30,22 @@ export default function PartnerCoupons() {
   const { data: couponsData, isLoading, refetch } = trpc.stripe.getCoupons.useQuery();
   const createMutation = trpc.stripe.createCoupon.useMutation({
     onSuccess: () => {
-      toast({ title: 'Coupon created', description: `Partner code "${form.name}" is now active in Stripe.` });
+      toast.success(`Partner code "${form.name}" is now active in Stripe.`);
       setIsCreateOpen(false);
       setForm({ name: '', discountType: 'percent', percentOff: 15, amountOff: 0, duration: 'forever', durationInMonths: 3, maxRedemptions: '', redeemByDate: '', appliesTo: 'Master Contractor' });
       refetch();
     },
     onError: (err) => {
-      toast({ title: 'Error creating coupon', description: err.message, variant: 'destructive' });
+      toast.error(`Error creating coupon: ${err.message}`);
     },
   });
   const deactivateMutation = trpc.stripe.deactivateCoupon.useMutation({
     onSuccess: () => {
-      toast({ title: 'Coupon deactivated', description: 'The partner code has been removed from Stripe.' });
+      toast.success('The partner code has been removed from Stripe.');
       refetch();
     },
     onError: (err) => {
-      toast({ title: 'Error deactivating coupon', description: err.message, variant: 'destructive' });
+      toast.error(`Error deactivating coupon: ${err.message}`);
     },
   });
 
@@ -54,7 +53,7 @@ export default function PartnerCoupons() {
 
   const handleCreate = () => {
     if (!form.name.trim()) {
-      toast({ title: 'Name required', description: 'Please enter a partner code name.', variant: 'destructive' });
+      toast.error('Please enter a partner code name.');
       return;
     }
     const input: any = {
