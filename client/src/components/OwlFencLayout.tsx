@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/sidebar";
 
 import { useIsMobile } from "@/hooks/useMobile";
-import { LayoutDashboard, LogOut, PanelLeft, Users, DollarSign, Megaphone, Activity, ArrowLeft, Zap } from "lucide-react";
+import { LayoutDashboard, LogOut, PanelLeft, Users, DollarSign, Megaphone, Activity, ArrowLeft, Zap, Tag } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Button } from "./ui/button";
@@ -32,6 +32,7 @@ const menuItems = [
   { icon: Activity, label: "Usage System", path: "/owlfenc/usage-system" },
   { icon: Zap, label: "AI Credits", path: "/owlfenc/ai-credits" },
   { icon: Megaphone, label: "Announcements", path: "/owlfenc/announcements" },
+  { icon: Tag, label: "Partner Coupons", path: "/owlfenc/coupons" },
 ];
 
 const SIDEBAR_WIDTH_KEY = "owlfenc-sidebar-width";

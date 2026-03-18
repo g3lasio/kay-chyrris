@@ -496,6 +496,36 @@ export const appRouter = router({
       const mrr = await stripeService.calculateMRR();
       return { success: true, data: mrr };
     }),
+
+    // ─── Partner Coupon Management ───────────────────────────────────
+    getCoupons: protectedProcedure.query(async () => {
+      const coupons = await stripeService.getCoupons();
+      return { success: true, data: coupons };
+    }),
+
+    createCoupon: protectedProcedure
+      .input(z.object({
+        name: z.string().min(2, 'Name must be at least 2 characters'),
+        percentOff: z.number().min(1).max(100).optional(),
+        amountOff: z.number().min(1).optional(),
+        currency: z.string().optional(),
+        duration: z.enum(['forever', 'once', 'repeating']),
+        durationInMonths: z.number().min(1).optional(),
+        maxRedemptions: z.number().min(1).optional(),
+        redeemBy: z.number().optional(),
+        appliesTo: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const coupon = await stripeService.createCoupon(input);
+        return { success: true, data: coupon };
+      }),
+
+    deactivateCoupon: protectedProcedure
+      .input(z.object({ couponId: z.string() }))
+      .mutation(async ({ input }) => {
+        const result = await stripeService.deactivateCoupon(input.couponId);
+        return { success: result };
+      }),
   }),
 
   // Mass notifications system

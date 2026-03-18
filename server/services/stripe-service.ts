@@ -198,3 +198,110 @@ export async function getCustomerDetails(customerId: string) {
     return null;
   }
 }
+
+// ─── Partner Coupon Management ────────────────────────────────────────────────
+
+export interface PartnerCoupon {
+  id: string;
+  name: string;
+  percentOff: number | null;
+  amountOff: number | null;
+  currency: string | null;
+  duration: string;
+  durationInMonths: number | null;
+  timesRedeemed: number;
+  maxRedemptions: number | null;
+  valid: boolean;
+  created: Date;
+  redeemBy: Date | null;
+  appliesTo: string | null; // plan restriction label (e.g. 'Master Contractor')
+}
+
+export interface CreateCouponInput {
+  name: string;
+  percentOff?: number;
+  amountOff?: number;
+  currency?: string;
+  duration: 'forever' | 'once' | 'repeating';
+  durationInMonths?: number;
+  maxRedemptions?: number;
+  redeemBy?: number; // unix timestamp
+  appliesTo?: string; // metadata label
+}
+
+export async function getCoupons(): Promise<PartnerCoupon[]> {
+  if (!stripe) {
+    console.warn('[Stripe] Not initialized');
+    return [];
+  }
+  try {
+    const coupons = await stripe.coupons.list({ limit: 100 });
+    return coupons.data.map((c) => ({
+      id: c.id,
+      name: c.name || c.id,
+      percentOff: c.percent_off ?? null,
+      amountOff: c.amount_off ?? null,
+      currency: c.currency ?? null,
+      duration: c.duration,
+      durationInMonths: c.duration_in_months ?? null,
+      timesRedeemed: c.times_redeemed,
+      maxRedemptions: c.max_redemptions ?? null,
+      valid: c.valid,
+      created: new Date(c.created * 1000),
+      redeemBy: c.redeem_by ? new Date(c.redeem_by * 1000) : null,
+      appliesTo: (c.metadata as any)?.appliesTo ?? null,
+    }));
+  } catch (error) {
+    console.error('[Stripe] Error fetching coupons:', error);
+    return [];
+  }
+}
+
+export async function createCoupon(input: CreateCouponInput): Promise<PartnerCoupon> {
+  if (!stripe) throw new Error('Stripe not initialized');
+
+  const params: any = {
+    name: input.name,
+    duration: input.duration,
+    metadata: { appliesTo: input.appliesTo || 'Master Contractor' },
+  };
+
+  if (input.percentOff !== undefined) params.percent_off = input.percentOff;
+  if (input.amountOff !== undefined) {
+    params.amount_off = input.amountOff;
+    params.currency = input.currency || 'usd';
+  }
+  if (input.duration === 'repeating' && input.durationInMonths) {
+    params.duration_in_months = input.durationInMonths;
+  }
+  if (input.maxRedemptions) params.max_redemptions = input.maxRedemptions;
+  if (input.redeemBy) params.redeem_by = input.redeemBy;
+
+  const coupon = await stripe.coupons.create(params);
+  return {
+    id: coupon.id,
+    name: coupon.name || coupon.id,
+    percentOff: coupon.percent_off ?? null,
+    amountOff: coupon.amount_off ?? null,
+    currency: coupon.currency ?? null,
+    duration: coupon.duration,
+    durationInMonths: coupon.duration_in_months ?? null,
+    timesRedeemed: coupon.times_redeemed,
+    maxRedemptions: coupon.max_redemptions ?? null,
+    valid: coupon.valid,
+    created: new Date(coupon.created * 1000),
+    redeemBy: coupon.redeem_by ? new Date(coupon.redeem_by * 1000) : null,
+    appliesTo: (coupon.metadata as any)?.appliesTo ?? null,
+  };
+}
+
+export async function deactivateCoupon(couponId: string): Promise<boolean> {
+  if (!stripe) throw new Error('Stripe not initialized');
+  try {
+    await stripe.coupons.del(couponId);
+    return true;
+  } catch (error) {
+    console.error('[Stripe] Error deactivating coupon:', error);
+    return false;
+  }
+}

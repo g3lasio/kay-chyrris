@@ -13,7 +13,8 @@ import Users from "./pages/Users";
 import Payments from "./pages/Payments";
 import Announcements from "./pages/Announcements";
 import UsageSystem from "./pages/UsageSystem";
-import AICreditsAdmin from "./pages/AICreditsAdmin";
+import AICreditsAdmin from './pages/AICreditsAdmin';
+import PartnerCoupons from './pages/PartnerCoupons';
 import DashboardLayout from "./components/DashboardLayout";
 import OwlFencLayout from "./components/OwlFencLayout";
 
@@ -84,6 +85,14 @@ function Router() {
         <ProtectedRoute>
           <OwlFencLayout>
             <AICreditsAdmin />
+          </OwlFencLayout>
+        </ProtectedRoute>
+      </Route>
+      
+      <Route path="/owlfenc/coupons">
+        <ProtectedRoute>
+          <OwlFencLayout>
+            <PartnerCoupons />
           </OwlFencLayout>
         </ProtectedRoute>
       </Route>
