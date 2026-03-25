@@ -20,14 +20,29 @@ import {
 } from "@/components/ui/sidebar";
 
 import { useIsMobile } from "@/hooks/useMobile";
-import { Wallet, ArrowLeft, PanelLeft, LogOut, LayoutDashboard } from "lucide-react";
+import { Wallet, ArrowLeft, PanelLeft, LogOut, LayoutDashboard, Bug } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Button } from "./ui/button";
+import { trpc } from "@/lib/trpc";
+
+function SystemIssuesBadge() {
+  const statsQuery = trpc.leadprime.getSystemIssueStats.useQuery(undefined, {
+    refetchInterval: 60000,
+  });
+  const newCount = statsQuery.data?.data?.byStatus?.new ?? 0;
+  if (newCount === 0) return null;
+  return (
+    <span className="ml-auto bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
+      {newCount}
+    </span>
+  );
+}
 
 const menuItems = [
   { icon: LayoutDashboard, label: "Overview", path: "/leadprime" },
   { icon: Wallet, label: "Credits", path: "/leadprime/credits" },
+  { icon: Bug, label: "System Issues", path: "/leadprime/system-issues" },
 ];
 
 const SIDEBAR_WIDTH_KEY = "leadprime-sidebar-width";
@@ -145,6 +160,7 @@ function LeadPrimeLayoutContent({
                     >
                       <item.icon className={`h-4 w-4 ${isActive ? "text-primary" : ""}`} />
                       <span>{item.label}</span>
+                      {item.path === '/leadprime/system-issues' && <SystemIssuesBadge />}
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 );

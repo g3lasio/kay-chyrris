@@ -401,3 +401,179 @@ export async function getLeadPrimeWalletStats(): Promise<{
     trialUsers: parseInt(subsResult.rows[0].trial_users, 10),
   };
 }
+
+// ─── SYSTEM ISSUES TELEMETRY ─────────────────────────────────────────────────
+
+export interface SystemIssue {
+  id: string;
+  contractorId: string;
+  toolName: string | null;
+  issueType: 'bug' | 'feature_request' | 'config_error';
+  title: string;
+  description: string;
+  errorMessage: string | null;
+  status: 'new' | 'reviewing' | 'resolved';
+  occurrences: number;
+  affectedContractors: string[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface SystemIssueStats {
+  total: number;
+  byStatus: { new: number; reviewing: number; resolved: number };
+  byType: { bug: number; feature_request: number; config_error: number };
+  topIssues: Array<{ title: string; occurrences: number; issueType: string }>;
+}
+
+export async function getSystemIssues(params: {
+  status?: string;
+  issue_type?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ issues: SystemIssue[]; total: number }> {
+  const pool = getLeadPrimePool();
+  const { status, issue_type, limit = 50, offset = 0 } = params;
+
+  const conditions: string[] = [];
+  const values: any[] = [];
+  let idx = 1;
+
+  if (status && status !== 'all') {
+    conditions.push(`status = $${idx++}`);
+    values.push(status);
+  }
+  if (issue_type && issue_type !== 'all') {
+    conditions.push(`issue_type = $${idx++}`);
+    values.push(issue_type);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const [issuesResult, countResult] = await Promise.all([
+    pool.query(
+      `SELECT id, contractor_id, tool_name, issue_type, title, description,
+              error_message, status, occurrences, affected_contractors,
+              created_at, updated_at
+       FROM system_issues
+       ${where}
+       ORDER BY
+         CASE status WHEN 'new' THEN 0 WHEN 'reviewing' THEN 1 ELSE 2 END,
+         occurrences DESC,
+         created_at DESC
+       LIMIT $${idx} OFFSET $${idx + 1}`,
+      [...values, limit, offset]
+    ),
+    pool.query(`SELECT COUNT(*) as total FROM system_issues ${where}`, values),
+  ]);
+
+  const issues: SystemIssue[] = issuesResult.rows.map((row: any) => ({
+    id: row.id,
+    contractorId: row.contractor_id,
+    toolName: row.tool_name,
+    issueType: row.issue_type,
+    title: row.title,
+    description: row.description,
+    errorMessage: row.error_message,
+    status: row.status,
+    occurrences: row.occurrences,
+    affectedContractors: Array.isArray(row.affected_contractors)
+      ? row.affected_contractors.filter((x: any) => typeof x === 'string')
+      : [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+
+  return {
+    issues,
+    total: parseInt(countResult.rows[0].total, 10),
+  };
+}
+
+export async function updateSystemIssueStatus(
+  issueId: string,
+  status: 'new' | 'reviewing' | 'resolved'
+): Promise<SystemIssue | null> {
+  const pool = getLeadPrimePool();
+
+  const result = await pool.query(
+    `UPDATE system_issues
+     SET status = $1, updated_at = NOW()
+     WHERE id = $2
+     RETURNING id, contractor_id, tool_name, issue_type, title, description,
+               error_message, status, occurrences, affected_contractors,
+               created_at, updated_at`,
+    [status, issueId]
+  );
+
+  if (result.rows.length === 0) return null;
+
+  const row = result.rows[0];
+  return {
+    id: row.id,
+    contractorId: row.contractor_id,
+    toolName: row.tool_name,
+    issueType: row.issue_type,
+    title: row.title,
+    description: row.description,
+    errorMessage: row.error_message,
+    status: row.status,
+    occurrences: row.occurrences,
+    affectedContractors: Array.isArray(row.affected_contractors)
+      ? row.affected_contractors.filter((x: any) => typeof x === 'string')
+      : [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function getSystemIssueStats(): Promise<SystemIssueStats> {
+  const pool = getLeadPrimePool();
+
+  const [statusResult, typeResult, topResult] = await Promise.all([
+    pool.query(`
+      SELECT
+        COUNT(CASE WHEN status = 'new' THEN 1 END)::int AS new_count,
+        COUNT(CASE WHEN status = 'reviewing' THEN 1 END)::int AS reviewing_count,
+        COUNT(CASE WHEN status = 'resolved' THEN 1 END)::int AS resolved_count,
+        COUNT(*)::int AS total
+      FROM system_issues
+    `),
+    pool.query(`
+      SELECT
+        COUNT(CASE WHEN issue_type = 'bug' THEN 1 END)::int AS bug_count,
+        COUNT(CASE WHEN issue_type = 'feature_request' THEN 1 END)::int AS feature_count,
+        COUNT(CASE WHEN issue_type = 'config_error' THEN 1 END)::int AS config_count
+      FROM system_issues
+    `),
+    pool.query(`
+      SELECT title, occurrences, issue_type
+      FROM system_issues
+      WHERE status != 'resolved'
+      ORDER BY occurrences DESC
+      LIMIT 5
+    `),
+  ]);
+
+  const s = statusResult.rows[0];
+  const t = typeResult.rows[0];
+
+  return {
+    total: s.total,
+    byStatus: {
+      new: s.new_count,
+      reviewing: s.reviewing_count,
+      resolved: s.resolved_count,
+    },
+    byType: {
+      bug: t.bug_count,
+      feature_request: t.feature_count,
+      config_error: t.config_count,
+    },
+    topIssues: topResult.rows.map((row: any) => ({
+      title: row.title,
+      occurrences: row.occurrences,
+      issueType: row.issue_type,
+    })),
+  };
+}

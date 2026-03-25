@@ -20,6 +20,7 @@ import OwlFencLayout from "./components/OwlFencLayout";
 import LeadPrimeLayout from "./components/LeadPrimeLayout";
 import LeadPrimeDashboard from "./pages/LeadPrimeDashboard";
 import LeadPrimeCreditsAdmin from "./pages/LeadPrimeCreditsAdmin";
+import SystemIssues from "./pages/SystemIssues";
 
 function Router() {
   return (
@@ -117,6 +118,14 @@ function Router() {
         <ProtectedRoute>
           <LeadPrimeLayout>
             <LeadPrimeCreditsAdmin />
+          </LeadPrimeLayout>
+        </ProtectedRoute>
+      </Route>
+
+      <Route path="/leadprime/system-issues">
+        <ProtectedRoute>
+          <LeadPrimeLayout>
+            <SystemIssues />
           </LeadPrimeLayout>
         </ProtectedRoute>
       </Route>
