@@ -758,6 +758,74 @@ export const appRouter = router({
         };
       }
     }),
+
+    // ─── SYSTEM ISSUES TELEMETRY ───────────────────────────────────────────
+
+    // Get system issues list with optional filters
+    getSystemIssues: protectedProcedure
+      .input(z.object({
+        status: z.enum(['all', 'new', 'reviewing', 'resolved']).optional().default('all'),
+        issue_type: z.enum(['all', 'bug', 'feature_request', 'config_error']).optional().default('all'),
+        limit: z.number().optional().default(50),
+        offset: z.number().optional().default(0),
+      }).optional())
+      .query(async ({ input }) => {
+        try {
+          const { getSystemIssues } = await import('./services/leadprime-db');
+          const result = await getSystemIssues({
+            status: input?.status ?? 'all',
+            issue_type: input?.issue_type ?? 'all',
+            limit: input?.limit ?? 50,
+            offset: input?.offset ?? 0,
+          });
+          return { success: true, data: result.issues, total: result.total };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error fetching system issues:', error);
+          return { success: false, error: error.message, data: [], total: 0 };
+        }
+      }),
+
+    // Get system issues stats (counts by status and type)
+    getSystemIssueStats: protectedProcedure.query(async () => {
+      try {
+        const { getSystemIssueStats } = await import('./services/leadprime-db');
+        const stats = await getSystemIssueStats();
+        return { success: true, data: stats };
+      } catch (error: any) {
+        console.error('[LeadPrime Router] Error fetching system issue stats:', error);
+        return {
+          success: false,
+          error: error.message,
+          data: {
+            total: 0,
+            byStatus: { new: 0, reviewing: 0, resolved: 0 },
+            byType: { bug: 0, feature_request: 0, config_error: 0 },
+            topIssues: [],
+          },
+        };
+      }
+    }),
+
+    // Update system issue status (new → reviewing → resolved)
+    updateSystemIssueStatus: protectedProcedure
+      .input(z.object({
+        issueId: z.string().uuid(),
+        status: z.enum(['new', 'reviewing', 'resolved']),
+      }))
+      .mutation(async ({ input }) => {
+        try {
+          const { updateSystemIssueStatus } = await import('./services/leadprime-db');
+          const updated = await updateSystemIssueStatus(input.issueId, input.status);
+          if (!updated) {
+            throw new Error('Issue not found');
+          }
+          return { success: true, data: updated };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error updating system issue status:', error);
+          throw new Error(`Failed to update issue: ${error.message}`);
+        }
+      }),
+
   }),
 
   // ─── END LEADPRIME CREDIT MANAGEMENT ─────────────────────────────────────
