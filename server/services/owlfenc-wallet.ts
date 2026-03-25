@@ -77,7 +77,7 @@ export async function getUserWalletBalances(planFilter?: string): Promise<UserWa
         u.id                                                    AS "userId",
         u.firebase_uid                                          AS "firebaseUid",
         u.email                                                 AS "email",
-        u.display_name                                          AS "displayName",
+        COALESCE(u.owner_name, u.username)                       AS "displayName",
         COALESCE(sp.name, 'Free')                               AS "planName",
         COALESCE(us.plan_id, 5)                                 AS "planId",
         COALESCE(wa.balance_credits, 0)                         AS "creditBalance",
@@ -92,8 +92,9 @@ export async function getUserWalletBalances(planFilter?: string): Promise<UserWa
         ON us.plan_id = sp.id
       LEFT JOIN wallet_accounts wa
         ON u.id = wa.user_id
-      ${planFilter && planFilter !== 'all'
-        ? sql`WHERE LOWER(COALESCE(sp.name, 'Free')) ILIKE ${'%' + planFilter + '%'}`
+      WHERE u.firebase_uid IS NOT NULL
+        ${planFilter && planFilter !== 'all'
+        ? sql`AND LOWER(COALESCE(sp.name, 'Free')) ILIKE ${'%' + planFilter + '%'}`
         : sql``}
       ORDER BY COALESCE(wa.balance_credits, 0) DESC, u.email ASC
     `);
@@ -247,7 +248,7 @@ export async function getAdminGrantHistory(limit = 200): Promise<AdminGrantRecor
         wt.user_id                              AS "userId",
         wt.firebase_uid                         AS "firebaseUid",
         u.email                                 AS "email",
-        u.display_name                          AS "displayName",
+        COALESCE(u.owner_name, u.username)       AS "displayName",
         wt.amount_credits                       AS "amount",
         wt.description                          AS "description",
         wt.metadata->>'adminNote'               AS "adminNote",
@@ -316,8 +317,16 @@ export async function getWalletStats(): Promise<{
         WHERE direction = 'debit'
           AND created_at >= DATE_TRUNC('month', CURRENT_TIMESTAMP)
       `),
-      db.execute(sql`SELECT COUNT(*) AS count FROM wallet_accounts`),
-      db.execute(sql`SELECT COUNT(*) AS count FROM wallet_accounts WHERE balance_credits <= 0`),
+      db.execute(sql`
+        SELECT COUNT(*) AS count FROM wallet_accounts wa
+        INNER JOIN users u ON wa.user_id = u.id
+        WHERE u.firebase_uid IS NOT NULL
+      `),
+      db.execute(sql`
+        SELECT COUNT(*) AS count FROM wallet_accounts wa
+        INNER JOIN users u ON wa.user_id = u.id
+        WHERE u.firebase_uid IS NOT NULL AND wa.balance_credits <= 0
+      `),
     ]);
 
     return {

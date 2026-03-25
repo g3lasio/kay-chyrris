@@ -257,6 +257,7 @@ export default function AICreditsAdmin() {
       message: notifyMessage,
       type: 'announcement',
       targetAudience: 'all',
+      applicationId: 1, // Owl Fenc
     });
   };
 

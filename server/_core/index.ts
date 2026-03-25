@@ -16,6 +16,47 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 
+/**
+ * Seed the applications table with the Owl Fenc application record.
+ * Uses ON CONFLICT DO NOTHING so it is safe to run on every startup.
+ * applicationId=1 is the canonical ID used throughout the codebase.
+ */
+async function seedApplications() {
+  try {
+    const { getDb } = await import('../db');
+    const { applications } = await import('../../drizzle/schema');
+    const { sql } = await import('drizzle-orm');
+
+    const db = await getDb();
+    if (!db) {
+      console.warn('[Seed] Database not available — skipping applications seed');
+      return;
+    }
+
+    const owlfencDbUrl = process.env.OWLFENC_DATABASE_URL || process.env.DATABASE_URL || 'postgresql://localhost/owlfenc';
+
+    // Insert with explicit id=1 so all FK references work
+    await db.execute(sql`
+      INSERT INTO applications (id, name, slug, description, database_url, database_type, status, color)
+      VALUES (
+        1,
+        'Owl Fenc',
+        'owlfenc',
+        'AI-powered estimating, contracts, invoices, and permit advisor for fence contractors',
+        ${owlfencDbUrl},
+        'postgresql',
+        'active',
+        '#00bcd4'
+      )
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    console.log('[Seed] applications table: Owl Fenc record ensured (id=1)');
+  } catch (error) {
+    // Non-fatal: log and continue — the app should still start
+    console.error('[Seed] Failed to seed applications table:', error);
+  }
+}
 
 async function startServer() {
   const app = express();
@@ -58,6 +99,9 @@ async function startServer() {
   } else {
     serveStatic(app);
   }
+
+  // Seed required reference data (idempotent — safe on every startup)
+  await seedApplications();
 
   // For Autoscale deployments, use PORT env var directly (Cloud Run sets this)
   // In development, default to 5000

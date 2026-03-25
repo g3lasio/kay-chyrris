@@ -13,9 +13,13 @@ import Users from "./pages/Users";
 import Payments from "./pages/Payments";
 import Announcements from "./pages/Announcements";
 import UsageSystem from "./pages/UsageSystem";
-import AICreditsAdmin from "./pages/AICreditsAdmin";
+import AICreditsAdmin from './pages/AICreditsAdmin';
+import PartnerCoupons from './pages/PartnerCoupons';
 import DashboardLayout from "./components/DashboardLayout";
 import OwlFencLayout from "./components/OwlFencLayout";
+import LeadPrimeLayout from "./components/LeadPrimeLayout";
+import LeadPrimeDashboard from "./pages/LeadPrimeDashboard";
+import LeadPrimeCreditsAdmin from "./pages/LeadPrimeCreditsAdmin";
 
 function Router() {
   return (
@@ -88,15 +92,32 @@ function Router() {
         </ProtectedRoute>
       </Route>
       
-      {/* LeadPrime App Routes - Coming soon */}
-      <Route path="/apps/leadprime">
+      <Route path="/owlfenc/coupons">
         <ProtectedRoute>
-          <DashboardLayout>
-            <div className="container mx-auto py-8 px-4">
-              <h1 className="text-4xl font-bold mb-4">LeadPrime</h1>
-              <p className="text-muted-foreground">Coming soon...</p>
-            </div>
-          </DashboardLayout>
+          <OwlFencLayout>
+            <PartnerCoupons />
+          </OwlFencLayout>
+        </ProtectedRoute>
+      </Route>
+      
+      {/* LeadPrime App Routes */}
+      <Route path="/apps/leadprime">
+        <Redirect to="/leadprime" />
+      </Route>
+
+      <Route path="/leadprime">
+        <ProtectedRoute>
+          <LeadPrimeLayout>
+            <LeadPrimeDashboard />
+          </LeadPrimeLayout>
+        </ProtectedRoute>
+      </Route>
+
+      <Route path="/leadprime/credits">
+        <ProtectedRoute>
+          <LeadPrimeLayout>
+            <LeadPrimeCreditsAdmin />
+          </LeadPrimeLayout>
         </ProtectedRoute>
       </Route>
       

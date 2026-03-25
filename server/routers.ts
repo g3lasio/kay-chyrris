@@ -496,6 +496,36 @@ export const appRouter = router({
       const mrr = await stripeService.calculateMRR();
       return { success: true, data: mrr };
     }),
+
+    // ─── Partner Coupon Management ───────────────────────────────────
+    getCoupons: protectedProcedure.query(async () => {
+      const coupons = await stripeService.getCoupons();
+      return { success: true, data: coupons };
+    }),
+
+    createCoupon: protectedProcedure
+      .input(z.object({
+        name: z.string().min(2, 'Name must be at least 2 characters'),
+        percentOff: z.number().min(1).max(100).optional(),
+        amountOff: z.number().min(1).optional(),
+        currency: z.string().optional(),
+        duration: z.enum(['forever', 'once', 'repeating']),
+        durationInMonths: z.number().min(1).optional(),
+        maxRedemptions: z.number().min(1).optional(),
+        redeemBy: z.number().optional(),
+        appliesTo: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const coupon = await stripeService.createCoupon(input);
+        return { success: true, data: coupon };
+      }),
+
+    deactivateCoupon: protectedProcedure
+      .input(z.object({ couponId: z.string() }))
+      .mutation(async ({ input }) => {
+        const result = await stripeService.deactivateCoupon(input.couponId);
+        return { success: result };
+      }),
   }),
 
   // Mass notifications system
@@ -585,54 +615,152 @@ export const appRouter = router({
         await pushNotifications.archiveNotification(input.notificationId);
         return { success: true };
       }),
-
-    // Create notification (admin/system)
-    create: protectedProcedure
-      .input(z.object({
-        applicationId: z.number(),
-        userId: z.string().optional().nullable(),
-        title: z.string(),
-        message: z.string(),
-        priority: z.enum(['info', 'warning', 'important', 'critical']),
-        category: z.string().optional(),
-        actionUrl: z.string().optional(),
-        actionLabel: z.string().optional(),
-        icon: z.string().optional(),
-        expiresAt: z.date().optional(),
-        metadata: z.record(z.string(), z.any()).optional(),
-      }))
-      .mutation(async ({ input }) => {
-        const notification = await pushNotifications.createNotification(input);
-        return { success: true, notification };
-      }),
-
-    // Get user preferences
-    getPreferences: protectedProcedure
-      .input(z.object({
-        userId: z.string(),
-        applicationId: z.number(),
-      }))
-      .query(async ({ input }) => {
-        return await pushNotifications.getUserPreferences(input.userId, input.applicationId);
-      }),
-
-    // Update user preferences
-    updatePreferences: protectedProcedure
-      .input(z.object({
-        userId: z.string(),
-        applicationId: z.number(),
-        enabled: z.boolean().optional(),
-        minPriority: z.enum(['info', 'warning', 'important', 'critical']).optional(),
-        categoriesEnabled: z.array(z.string()).optional(),
-        quietHoursStart: z.string().optional(),
-        quietHoursEnd: z.string().optional(),
-      }))
-      .mutation(async ({ input }) => {
-        const { userId, applicationId, ...updates } = input;
-        await pushNotifications.updateUserPreferences(userId, applicationId, updates);
-        return { success: true };
-      }),
   }),
+
+  // ─── LEADPRIME CREDIT MANAGEMENT ──────────────────────────────────────────
+  leadprime: router({
+
+    // Get all LeadPrime users with wallet balances
+    getUsers: protectedProcedure
+      .input(z.object({
+        search: z.string().optional(),
+        limit: z.number().optional().default(100),
+        offset: z.number().optional().default(0),
+      }).optional())
+      .query(async ({ input }) => {
+        try {
+          const { getLeadPrimeUsers } = await import('./services/leadprime-db');
+          const result = await getLeadPrimeUsers({
+            search: input?.search,
+            limit: input?.limit ?? 100,
+            offset: input?.offset ?? 0,
+          });
+          return { success: true, data: result.users, total: result.total };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error fetching users:', error);
+          return { success: false, error: error.message, data: [], total: 0 };
+        }
+      }),
+
+    // Grant credits to a single LeadPrime user
+    grantCredits: protectedProcedure
+      .input(z.object({
+        contractorId: z.string().min(1),
+        amountDollars: z.number().min(0.01).max(1000),
+        description: z.string().min(3),
+        note: z.string().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        try {
+          const { grantCreditsToLeadPrimeUser } = await import('./services/leadprime-db');
+          const adminEmail = (ctx.user as any)?.email ?? 'admin';
+          const amountCents = Math.round(input.amountDollars * 100);
+          const result = await grantCreditsToLeadPrimeUser(
+            input.contractorId,
+            amountCents,
+            input.description,
+            adminEmail,
+            input.note
+          );
+          return { success: true, newBalanceCents: result.newBalanceCents };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error granting credits:', error);
+          throw new Error(`Failed to grant credits: ${error.message}`);
+        }
+      }),
+
+    // Grant credits to multiple LeadPrime users (batch)
+    grantCreditsBatch: protectedProcedure
+      .input(z.object({
+        contractorIds: z.array(z.string()).min(1).max(500),
+        amountDollars: z.number().min(0.01).max(1000),
+        description: z.string().min(3),
+        note: z.string().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        try {
+          const { grantCreditsToLeadPrimeBatch } = await import('./services/leadprime-db');
+          const adminEmail = (ctx.user as any)?.email ?? 'admin';
+          const amountCents = Math.round(input.amountDollars * 100);
+          const result = await grantCreditsToLeadPrimeBatch(
+            input.contractorIds,
+            amountCents,
+            input.description,
+            adminEmail,
+            input.note
+          );
+          return { success: true, ...result };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error batch granting credits:', error);
+          throw new Error(`Failed to batch grant credits: ${error.message}`);
+        }
+      }),
+
+    // Get wallet transaction history
+    getTransactions: protectedProcedure
+      .input(z.object({
+        contractorId: z.string().optional(),
+        type: z.string().optional(),
+        limit: z.number().optional().default(100),
+        offset: z.number().optional().default(0),
+      }).optional())
+      .query(async ({ input }) => {
+        try {
+          const { getLeadPrimeTransactions } = await import('./services/leadprime-db');
+          const transactions = await getLeadPrimeTransactions({
+            contractorId: input?.contractorId,
+            type: input?.type,
+            limit: input?.limit ?? 100,
+            offset: input?.offset ?? 0,
+          });
+          return { success: true, data: transactions };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error fetching transactions:', error);
+          return { success: false, error: error.message, data: [] };
+        }
+      }),
+
+    // Get admin grant history
+    getGrantHistory: protectedProcedure
+      .input(z.object({
+        limit: z.number().optional().default(100),
+      }).optional())
+      .query(async ({ input }) => {
+        try {
+          const { getLeadPrimeAdminGrants } = await import('./services/leadprime-db');
+          const grants = await getLeadPrimeAdminGrants({ limit: input?.limit ?? 100 });
+          return { success: true, data: grants };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error fetching grant history:', error);
+          return { success: false, error: error.message, data: [] };
+        }
+      }),
+
+    // Get wallet stats
+    getStats: protectedProcedure.query(async () => {
+      try {
+        const { getLeadPrimeWalletStats } = await import('./services/leadprime-db');
+        const stats = await getLeadPrimeWalletStats();
+        return { success: true, data: stats };
+      } catch (error: any) {
+        console.error('[LeadPrime Router] Error fetching stats:', error);
+        return {
+          success: false,
+          error: error.message,
+          data: {
+            totalUsers: 0,
+            usersWithWallet: 0,
+            totalBalanceCents: 0,
+            totalGrantedThisMonth: 0,
+            activeSubscribers: 0,
+            trialUsers: 0,
+          },
+        };
+      }
+    }),
+  }),
+
+  // ─── END LEADPRIME CREDIT MANAGEMENT ─────────────────────────────────────
 });
 
 export type AppRouter = typeof appRouter;
