@@ -1,10 +1,15 @@
 import { useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Database, Hammer, ArrowRight } from "lucide-react";
+import { Database, Hammer, ArrowRight, Loader2 } from "lucide-react";
+import { trpc } from "@/lib/trpc";
 
 export default function MyApps() {
   const [, setLocation] = useLocation();
+
+  // Fetch real LeadPrime stats
+  const leadPrimeStatsQuery = trpc.leadprime.getStats.useQuery();
+  const lpStats = leadPrimeStatsQuery.data?.data;
 
   const apps = [
     {
@@ -14,11 +19,11 @@ export default function MyApps() {
       icon: Hammer,
       color: "from-orange-500 to-amber-600",
       route: "/owlfenc",
-      stats: {
-        users: "7 users",
-        clients: "996 clients",
-        contracts: "20 contracts"
-      }
+      stats: [
+        { label: "Users", value: "7 users" },
+        { label: "Clients", value: "996 clients" },
+        { label: "Contracts", value: "20 contracts" },
+      ],
     },
     {
       id: "leadprime",
@@ -27,12 +32,33 @@ export default function MyApps() {
       icon: Database,
       color: "from-blue-500 to-cyan-600",
       route: "/apps/leadprime",
-      stats: {
-        leads: "Coming soon",
-        campaigns: "Coming soon",
-        conversions: "Coming soon"
-      }
-    }
+      stats: [
+        {
+          label: "Users",
+          value: leadPrimeStatsQuery.isLoading
+            ? null
+            : lpStats
+            ? `${lpStats.totalUsers}`
+            : "—",
+        },
+        {
+          label: "Subscribers",
+          value: leadPrimeStatsQuery.isLoading
+            ? null
+            : lpStats
+            ? `${lpStats.activeSubscribers}`
+            : "—",
+        },
+        {
+          label: "Credits",
+          value: leadPrimeStatsQuery.isLoading
+            ? null
+            : lpStats
+            ? `$${(lpStats.totalBalanceCents / 100).toFixed(0)}`
+            : "—",
+        },
+      ],
+    },
   ];
 
   return (
@@ -71,10 +97,14 @@ export default function MyApps() {
                 </div>
 
                 <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t">
-                  {Object.entries(app.stats).map(([key, value]) => (
-                    <div key={key}>
-                      <p className="text-xs text-muted-foreground capitalize mb-1">{key}</p>
-                      <p className="text-sm font-semibold">{value}</p>
+                  {app.stats.map((stat) => (
+                    <div key={stat.label}>
+                      <p className="text-xs text-muted-foreground capitalize mb-1">{stat.label}</p>
+                      {stat.value === null ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      ) : (
+                        <p className="text-sm font-semibold">{stat.value}</p>
+                      )}
                     </div>
                   ))}
                 </div>

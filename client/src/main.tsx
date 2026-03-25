@@ -8,14 +8,38 @@ import App from "./App";
 import { getLoginUrl } from "./const";
 import "./index.css";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Don't retry on auth errors — prevents OTP double-call loop
+      retry: (failureCount, error) => {
+        if (error instanceof TRPCClientError) {
+          if (error.data?.code === 'UNAUTHORIZED' || error.message.includes(UNAUTHED_ERR_MSG)) {
+            return false;
+          }
+        }
+        return failureCount < 2;
+      },
+      // Don't refetch when window regains focus — prevents spurious auth.me calls
+      refetchOnWindowFocus: false,
+      // Keep stale data for 30s to avoid flicker after login redirect
+      staleTime: 30_000,
+    },
+  },
+});
+
+// Track if we're already redirecting to avoid double-redirect race condition
+let isRedirectingToLogin = false;
 
 const redirectToLoginIfUnauthorized = (error: unknown) => {
   if (error instanceof TRPCClientError) {
     // Check if it's an unauthorized error
     if (error.data?.code === 'UNAUTHORIZED' || error.message.includes(UNAUTHED_ERR_MSG)) {
-      // Redirect to login
-      window.location.href = '/login';
+      // Prevent double redirect — only redirect once
+      if (!isRedirectingToLogin && !window.location.pathname.startsWith('/login')) {
+        isRedirectingToLogin = true;
+        window.location.href = '/login';
+      }
     }
   }
 };

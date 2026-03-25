@@ -4,17 +4,25 @@ import { trpc } from '@/lib/trpc';
 
 // ✅ Authentication is ENABLED — OTP-based login required
 export function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const [, setLocation] = useLocation();
-  const { data: user, isLoading, error } = trpc.auth.me.useQuery();
+  const [location, setLocation] = useLocation();
+
+  // retry: false prevents the query from retrying on 401 which causes the OTP loop
+  const { data: user, isLoading, error } = trpc.auth.me.useQuery(undefined, {
+    retry: false,
+  });
 
   useEffect(() => {
-    // Si hay un error de autenticación o no hay usuario después de cargar
-    if (!isLoading && (!user || error)) {
+    // Only redirect if:
+    // 1. Loading is complete
+    // 2. There is no authenticated user
+    // 3. We're not already on the login page (prevents redirect loop)
+    // Note: errors (UNAUTHORIZED) are handled by the global queryCache subscriber in main.tsx
+    if (!isLoading && !user && !error && !location.startsWith('/login')) {
       setLocation('/login');
     }
-  }, [user, isLoading, error, setLocation]);
+  }, [user, isLoading, error, location, setLocation]);
 
-  // Mostrar loading mientras se verifica la sesión
+  // Show loading spinner while verifying session
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -23,11 +31,11 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // Si no hay usuario, no renderizar nada (el useEffect ya redirigió)
+  // If no user, render nothing (useEffect already redirected)
   if (!user) {
     return null;
   }
 
-  // Usuario autenticado, renderizar children
+  // Authenticated — render children
   return <>{children}</>;
 }
