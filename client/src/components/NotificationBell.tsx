@@ -11,7 +11,7 @@ import {
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
 import { Badge } from './ui/badge';
-import { useNavigate } from 'wouter';
+import { useLocation } from 'wouter';
 
 interface NotificationBellProps {
   userId?: string;
@@ -19,7 +19,7 @@ interface NotificationBellProps {
 }
 
 export function NotificationBell({ userId, applicationId }: NotificationBellProps) {
-  const navigate = useNavigate();
+  const [, navigate] = useLocation();
   const [unreadCount, setUnreadCount] = useState(0);
 
   // Get unread count

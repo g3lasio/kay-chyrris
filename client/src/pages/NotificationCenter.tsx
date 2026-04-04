@@ -12,7 +12,7 @@ import {
 } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Bell, Check, Archive, Trash2 } from 'lucide-react';
-import { useNavigate } from 'wouter';
+import { useLocation } from 'wouter';
 
 interface NotificationCenterProps {
   userId?: string;
@@ -20,7 +20,7 @@ interface NotificationCenterProps {
 }
 
 export function NotificationCenter({ userId, applicationId }: NotificationCenterProps) {
-  const navigate = useNavigate();
+  const [, navigate] = useLocation();
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [activeTab, setActiveTab] = useState<'all' | 'unread'>('all');

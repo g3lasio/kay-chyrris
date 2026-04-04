@@ -37,7 +37,7 @@ if (!stripeKey) {
   console.warn('[Config] STRIPE_SECRET_KEY not found, Stripe functionality will be disabled');
 }
 export const stripe = stripeKey ? new Stripe(stripeKey, {
-  apiVersion: '2025-12-15.clover',
+  apiVersion: '2026-02-25.clover',
   typescript: true,
 }) : null;
 
