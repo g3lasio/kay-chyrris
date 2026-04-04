@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/sidebar";
 
 import { useIsMobile } from "@/hooks/useMobile";
-import { Wallet, ArrowLeft, PanelLeft, LogOut, LayoutDashboard, Bug } from "lucide-react";
+import { Wallet, ArrowLeft, PanelLeft, LogOut, LayoutDashboard, Bug, Users } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Button } from "./ui/button";
@@ -42,6 +42,7 @@ function SystemIssuesBadge() {
 const menuItems = [
   { icon: LayoutDashboard, label: "Overview", path: "/leadprime" },
   { icon: Wallet, label: "Credits", path: "/leadprime/credits" },
+  { icon: Users, label: "Users Intelligence", path: "/leadprime/users" },
   { icon: Bug, label: "System Issues", path: "/leadprime/system-issues" },
 ];
 

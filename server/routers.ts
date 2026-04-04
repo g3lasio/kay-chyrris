@@ -826,6 +826,71 @@ export const appRouter = router({
         }
       }),
 
+    // ─── USERS INTELLIGENCE ──────────────────────────────────────────────────
+    getEnrichedUsers: protectedProcedure
+      .input(z.object({
+        search: z.string().optional(),
+        industry: z.string().optional(),
+        subscriptionStatus: z.string().optional(),
+        minBalance: z.number().optional(),
+        maxBalance: z.number().optional(),
+        hasLicense: z.boolean().optional(),
+        isActive: z.boolean().optional(),
+        limit: z.number().optional(),
+        offset: z.number().optional(),
+        sortBy: z.enum(['created_at','balance','last_activity','total_spent','team_size']).optional(),
+        sortDir: z.enum(['asc','desc']).optional(),
+      }).optional())
+      .query(async ({ input }) => {
+        try {
+          const { getEnrichedUsers } = await import('./services/leadprime-db');
+          const result = await getEnrichedUsers(input ?? {});
+          return { success: true, data: result.users, total: result.total };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error fetching enriched users:', error);
+          return { success: false, error: error.message, data: [], total: 0 };
+        }
+      }),
+
+    getUserIntelligenceStats: protectedProcedure.query(async () => {
+      try {
+        const { getUserIntelligenceStats } = await import('./services/leadprime-db');
+        const stats = await getUserIntelligenceStats();
+        return { success: true, data: stats };
+      } catch (error: any) {
+        console.error('[LeadPrime Router] Error fetching user intelligence stats:', error);
+        return { success: false, error: error.message, data: null };
+      }
+    }),
+
+    updateUserContact: protectedProcedure
+      .input(z.object({
+        contractorId: z.string(),
+        email: z.string().email().optional(),
+        phone: z.string().optional(),
+        name: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        try {
+          const { updateLeadPrimeUserContact } = await import('./services/leadprime-db');
+          const { contractorId, ...updates } = input;
+          return await updateLeadPrimeUserContact(contractorId, updates);
+        } catch (error: any) {
+          throw new Error(`Failed to update user: ${error.message}`);
+        }
+      }),
+
+    deleteUser: protectedProcedure
+      .input(z.object({ contractorId: z.string() }))
+      .mutation(async ({ input }) => {
+        try {
+          const { deleteLeadPrimeUser } = await import('./services/leadprime-db');
+          return await deleteLeadPrimeUser(input.contractorId);
+        } catch (error: any) {
+          throw new Error(`Failed to delete user: ${error.message}`);
+        }
+      }),
+
   }),
 
   // ─── END LEADPRIME CREDIT MANAGEMENT ─────────────────────────────────────

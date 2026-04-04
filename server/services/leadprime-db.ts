@@ -577,3 +577,224 @@ export async function getSystemIssueStats(): Promise<SystemIssueStats> {
     })),
   };
 }
+
+// ─── USERS INTELLIGENCE ───────────────────────────────────────────────────────
+
+export interface EnrichedUser {
+  id: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  createdAt: Date;
+  balanceCents: number;
+  balanceDollars: string;
+  totalSpentCents: number;
+  totalSpentDollars: string;
+  lastActivityAt: Date | null;
+  subscriptionStatus: string | null;
+  subscriptionPlanId: string | null;
+  trialEnd: Date | null;
+  businessName: string | null;
+  businessType: string | null;
+  city: string | null;
+  state: string | null;
+  hasLicense: boolean;
+  licenseNumber: string | null;
+  website: string | null;
+  industry: string | null;
+  tradeType: string | null;
+  teamMemberCount: number;
+  daysSinceSignup: number;
+  isActive: boolean;
+}
+
+export interface UserIntelligenceStats {
+  totalUsers: number;
+  activeUsers: number;
+  totalBalanceCents: number;
+  totalSpentCents: number;
+  byIndustry: Array<{ industry: string; count: number }>;
+  bySubscription: Array<{ status: string; count: number }>;
+  withLicense: number;
+  withoutLicense: number;
+  avgTeamSize: number;
+}
+
+export async function getEnrichedUsers(options: {
+  search?: string;
+  industry?: string;
+  subscriptionStatus?: string;
+  minBalance?: number;
+  maxBalance?: number;
+  hasLicense?: boolean;
+  isActive?: boolean;
+  limit?: number;
+  offset?: number;
+  sortBy?: 'created_at' | 'balance' | 'last_activity' | 'total_spent' | 'team_size';
+  sortDir?: 'asc' | 'desc';
+} = {}): Promise<{ users: EnrichedUser[]; total: number }> {
+  const pool = getLeadPrimePool();
+  const {
+    search, industry, subscriptionStatus, minBalance, maxBalance,
+    hasLicense, isActive, limit = 50, offset = 0,
+    sortBy = 'created_at', sortDir = 'desc',
+  } = options;
+
+  const conditions: string[] = [];
+  const params: any[] = [];
+  let pi = 1;
+
+  if (search) {
+    params.push(`%${search.toLowerCase()}%`);
+    conditions.push(`(LOWER(c.name) LIKE $${pi} OR LOWER(c.email) LIKE $${pi} OR COALESCE(c.phone,'') LIKE $${pi} OR LOWER(COALESCE(cp.business_name,'')) LIKE $${pi})`);
+    pi++;
+  }
+  if (industry) { params.push(industry); conditions.push(`c.industry = $${pi++}`); }
+  if (subscriptionStatus && subscriptionStatus !== 'all') {
+    if (subscriptionStatus === 'none') { conditions.push(`s.status IS NULL`); }
+    else { params.push(subscriptionStatus); conditions.push(`s.status = $${pi++}`); }
+  }
+  if (minBalance !== undefined) { params.push(minBalance * 100); conditions.push(`COALESCE(w.balance_cents,0) >= $${pi++}`); }
+  if (maxBalance !== undefined) { params.push(maxBalance * 100); conditions.push(`COALESCE(w.balance_cents,0) <= $${pi++}`); }
+  if (hasLicense !== undefined) { params.push(hasLicense); conditions.push(`COALESCE(cp.has_license,false) = $${pi++}`); }
+  if (isActive === true) { conditions.push(`last_tx.last_activity > NOW() - INTERVAL '30 days'`); }
+  if (isActive === false) { conditions.push(`(last_tx.last_activity IS NULL OR last_tx.last_activity <= NOW() - INTERVAL '30 days')`); }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const sortMap: Record<string, string> = {
+    created_at: 'c.created_at', balance: 'COALESCE(w.balance_cents,0)',
+    last_activity: 'last_tx.last_activity', total_spent: 'COALESCE(spent.total_spent_cents,0)',
+    team_size: 'COALESCE(tm.team_count,0)',
+  };
+  const orderBy = `${sortMap[sortBy] ?? 'c.created_at'} ${sortDir === 'asc' ? 'ASC' : 'DESC'} NULLS LAST`;
+
+  const baseQuery = `
+    FROM contractors c
+    LEFT JOIN wallets w ON w.contractor_id = c.id
+    LEFT JOIN subscriptions s ON s.contractor_id = c.id
+    LEFT JOIN company_profiles cp ON cp.contractor_id = c.id
+    LEFT JOIN (SELECT contractor_id, MAX(created_at) AS last_activity FROM wallet_transactions GROUP BY contractor_id) last_tx ON last_tx.contractor_id = c.id
+    LEFT JOIN (SELECT contractor_id, ABS(SUM(amount_cents)) AS total_spent_cents FROM wallet_transactions WHERE amount_cents < 0 GROUP BY contractor_id) spent ON spent.contractor_id = c.id
+    LEFT JOIN (SELECT contractor_id, COUNT(*) AS team_count FROM team_members GROUP BY contractor_id) tm ON tm.contractor_id = c.id
+    ${whereClause}
+  `;
+
+  const countResult = await pool.query(`SELECT COUNT(*) ${baseQuery}`, params);
+  const total = parseInt(countResult.rows[0].count, 10);
+
+  const dataParams = [...params, limit, offset];
+  const result = await pool.query(
+    `SELECT c.id, c.name, c.email, c.phone, c.created_at, c.industry, c.trade_type,
+       COALESCE(w.balance_cents,0) AS balance_cents,
+       s.status AS subscription_status, s.plan_id AS subscription_plan_id, s.trial_end,
+       cp.business_name, cp.business_type, cp.city, cp.state,
+       COALESCE(cp.has_license,false) AS has_license, cp.license_number, cp.website,
+       last_tx.last_activity,
+       COALESCE(spent.total_spent_cents,0) AS total_spent_cents,
+       COALESCE(tm.team_count,0) AS team_count
+     ${baseQuery}
+     ORDER BY ${orderBy}
+     LIMIT $${pi} OFFSET $${pi + 1}`,
+    dataParams
+  );
+
+  const now = new Date();
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  const users: EnrichedUser[] = result.rows.map(row => {
+    const createdAt = new Date(row.created_at);
+    const lastActivityAt = row.last_activity ? new Date(row.last_activity) : null;
+    return {
+      id: row.id, name: row.name || '(no name)', email: row.email, phone: row.phone, createdAt,
+      balanceCents: parseFloat(row.balance_cents) || 0,
+      balanceDollars: ((parseFloat(row.balance_cents) || 0) / 100).toFixed(2),
+      totalSpentCents: parseFloat(row.total_spent_cents) || 0,
+      totalSpentDollars: ((parseFloat(row.total_spent_cents) || 0) / 100).toFixed(2),
+      lastActivityAt,
+      subscriptionStatus: row.subscription_status, subscriptionPlanId: row.subscription_plan_id,
+      trialEnd: row.trial_end ? new Date(row.trial_end) : null,
+      businessName: row.business_name, businessType: row.business_type,
+      city: row.city, state: row.state,
+      hasLicense: row.has_license, licenseNumber: row.license_number, website: row.website,
+      industry: row.industry, tradeType: row.trade_type,
+      teamMemberCount: parseInt(row.team_count) || 0,
+      daysSinceSignup: Math.floor((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24)),
+      isActive: lastActivityAt ? lastActivityAt > thirtyDaysAgo : false,
+    };
+  });
+
+  return { users, total };
+}
+
+export async function getUserIntelligenceStats(): Promise<UserIntelligenceStats> {
+  const pool = getLeadPrimePool();
+  const [totals, industryDist, subDist, licenseDist, teamAvg] = await Promise.all([
+    pool.query(`
+      SELECT COUNT(DISTINCT c.id)::int AS total_users,
+        COUNT(DISTINCT CASE WHEN last_tx.last_activity > NOW() - INTERVAL '30 days' THEN c.id END)::int AS active_users,
+        COALESCE(SUM(w.balance_cents),0) AS total_balance_cents,
+        COALESCE(SUM(ABS(spent.total_spent_cents)),0) AS total_spent_cents
+      FROM contractors c
+      LEFT JOIN wallets w ON w.contractor_id = c.id
+      LEFT JOIN (SELECT contractor_id, MAX(created_at) AS last_activity FROM wallet_transactions GROUP BY contractor_id) last_tx ON last_tx.contractor_id = c.id
+      LEFT JOIN (SELECT contractor_id, SUM(amount_cents) AS total_spent_cents FROM wallet_transactions WHERE amount_cents < 0 GROUP BY contractor_id) spent ON spent.contractor_id = c.id
+    `),
+    pool.query(`SELECT COALESCE(industry,'unknown') AS industry, COUNT(*)::int AS count FROM contractors GROUP BY industry ORDER BY count DESC LIMIT 15`),
+    pool.query(`SELECT COALESCE(s.status,'none') AS status, COUNT(*)::int AS count FROM contractors c LEFT JOIN subscriptions s ON s.contractor_id = c.id GROUP BY s.status ORDER BY count DESC`),
+    pool.query(`SELECT COUNT(CASE WHEN COALESCE(has_license,false)=true THEN 1 END)::int AS with_license, COUNT(CASE WHEN COALESCE(has_license,false)=false THEN 1 END)::int AS without_license FROM company_profiles`),
+    pool.query(`SELECT COALESCE(AVG(team_count),0) AS avg_team_size FROM (SELECT contractor_id, COUNT(*) AS team_count FROM team_members GROUP BY contractor_id) t`),
+  ]);
+  const t = totals.rows[0];
+  const l = licenseDist.rows[0] || { with_license: 0, without_license: 0 };
+  return {
+    totalUsers: t.total_users, activeUsers: t.active_users,
+    totalBalanceCents: parseFloat(t.total_balance_cents) || 0,
+    totalSpentCents: parseFloat(t.total_spent_cents) || 0,
+    byIndustry: industryDist.rows.map((r: any) => ({ industry: r.industry, count: r.count })),
+    bySubscription: subDist.rows.map((r: any) => ({ status: r.status, count: r.count })),
+    withLicense: l.with_license, withoutLicense: l.without_license,
+    avgTeamSize: parseFloat(teamAvg.rows[0]?.avg_team_size) || 0,
+  };
+}
+
+export async function updateLeadPrimeUserContact(
+  contractorId: string,
+  updates: { email?: string; phone?: string; name?: string }
+): Promise<{ success: boolean; message: string }> {
+  const pool = getLeadPrimePool();
+  const fields: string[] = [];
+  const values: any[] = [];
+  let pi = 1;
+  if (updates.email) { fields.push(`email = $${pi++}`); values.push(updates.email); }
+  if (updates.phone) { fields.push(`phone = $${pi++}`); values.push(updates.phone); }
+  if (updates.name) { fields.push(`name = $${pi++}`); values.push(updates.name); }
+  if (fields.length === 0) return { success: false, message: 'No fields to update' };
+  values.push(contractorId);
+  await pool.query(`UPDATE contractors SET ${fields.join(', ')}, updated_at = NOW() WHERE id = $${pi}`, values);
+  return { success: true, message: 'User updated successfully' };
+}
+
+export async function deleteLeadPrimeUser(
+  contractorId: string
+): Promise<{ success: boolean; message: string }> {
+  const pool = getLeadPrimePool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const tables = [
+      'wallet_transactions','admin_credit_grants','wallets','subscriptions',
+      'team_members','company_profiles','contractor_settings','agent_memory','ai_assistant_settings',
+    ];
+    for (const table of tables) {
+      try { await client.query(`DELETE FROM ${table} WHERE contractor_id = $1`, [contractorId]); } catch {}
+    }
+    await client.query(`DELETE FROM contractors WHERE id = $1`, [contractorId]);
+    await client.query('COMMIT');
+    return { success: true, message: 'User deleted successfully' };
+  } catch (err: any) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
