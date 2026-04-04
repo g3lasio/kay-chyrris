@@ -9,74 +9,35 @@ import { Loader2, Shield, Sparkles } from 'lucide-react';
 
 export default function Login() {
   const [, setLocation] = useLocation();
-  const [step, setStep] = useState<'email' | 'otp'>('email');
-  const [email, setEmail] = useState('');
-  const [otp, setOtp] = useState('');
+  const [passcode, setPasscode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const sendOTPMutation = trpc.auth.sendOTP.useMutation();
-  const verifyOTPMutation = trpc.auth.verifyOTP.useMutation();
+  const verifyPasscodeMutation = trpc.auth.verifyPasscode.useMutation();
 
-  const handleSendOTP = async (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      toast.error('Please enter a valid email address');
+
+    if (!passcode.trim()) {
+      toast.error('Please enter the admin passcode');
       return;
     }
 
     setIsLoading(true);
-    
-    try {
-      const result = await sendOTPMutation.mutateAsync({ email });
-      
-      if (result.success) {
-        toast.success(result.message || `Login code sent to ${email}`);
-        setStep('otp');
-      } else {
-        // Show specific error message from backend
-        if (result.error === 'Email not registered') {
-          toast.error(result.message || 'This email is not registered. Please contact an administrator.');
-        } else {
-          toast.error(result.message || result.error || 'Failed to send code');
-        }
-      }
-    } catch (error: any) {
-      toast.error(error.message || 'Something went wrong');
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
-  const handleVerifyOTP = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!otp || otp.length !== 6) {
-      toast.error('Please enter the 6-digit code');
-      return;
-    }
-
-    setIsLoading(true);
-    
     try {
-      const result = await verifyOTPMutation.mutateAsync({ email, code: otp });
-      
+      const result = await verifyPasscodeMutation.mutateAsync({ passcode });
+
       if (result.success) {
         toast.success('Welcome to Chyrris KAI');
         setLocation('/');
       } else {
-        toast.error(result.error || 'Invalid code');
+        toast.error(result.error || 'Invalid passcode');
       }
     } catch (error: any) {
       toast.error(error.message || 'Something went wrong');
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const handleBackToEmail = () => {
-    setStep('email');
-    setOtp('');
   };
 
   return (
@@ -103,96 +64,42 @@ export default function Login() {
             </CardDescription>
           </div>
         </CardHeader>
-        
-        <CardContent>
-          {step === 'email' ? (
-            <form onSubmit={handleSendOTP} className="space-y-4">
-              <div className="space-y-2">
-                <label htmlFor="email" className="text-sm font-medium text-foreground">
-                  Email Address
-                </label>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="admin@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="h-12 bg-input border-border focus:border-primary transition-all"
-                  disabled={isLoading}
-                  autoFocus
-                />
-              </div>
-              
-              <Button 
-                type="submit" 
-                className="w-full h-12 text-base font-semibold btn-futuristic"
-                disabled={isLoading}
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                    Sending Code...
-                  </>
-                ) : (
-                  'Send Login Code'
-                )}
-              </Button>
-            </form>
-          ) : (
-            <form onSubmit={handleVerifyOTP} className="space-y-6">
-              <div className="space-y-4">
-                <div className="text-center space-y-2">
-                  <label className="text-sm font-medium text-foreground">
-                    Enter Verification Code
-                  </label>
-                  <p className="text-sm text-muted-foreground">
-                    We sent a 6-digit code to{' '}
-                    <span className="text-primary font-medium">{email}</span>
-                  </p>
-                </div>
 
-                <Input
-                  id="otp"
-                  type="text"
-                  placeholder="000000"
-                  value={otp}
-                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  className="text-center text-3xl font-mono tracking-widest h-16 bg-input border-primary/30 focus:border-primary transition-all"
-                  disabled={isLoading}
-                  autoFocus
-                  maxLength={6}
-                />
-              </div>
-              
-              <div className="space-y-3">
-                <Button 
-                  type="submit" 
-                  className="w-full h-12 text-base font-semibold btn-futuristic"
-                  disabled={isLoading || otp.length !== 6}
-                >
-                  {isLoading ? (
-                    <>
-                      <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                      Verifying...
-                    </>
-                  ) : (
-                    'Verify & Login'
-                  )}
-                </Button>
-                
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className="w-full text-muted-foreground hover:text-primary transition-colors"
-                  onClick={handleBackToEmail}
-                  disabled={isLoading}
-                >
-                  Use different email
-                </Button>
-              </div>
-            </form>
-          )}
-          
+        <CardContent>
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div className="space-y-2">
+              <label htmlFor="passcode" className="text-sm font-medium text-foreground">
+                Admin Passcode
+              </label>
+              <Input
+                id="passcode"
+                type="password"
+                placeholder="Enter passcode"
+                value={passcode}
+                onChange={(e) => setPasscode(e.target.value)}
+                className="h-12 bg-input border-border focus:border-primary transition-all text-center text-xl tracking-widest"
+                disabled={isLoading}
+                autoFocus
+                autoComplete="current-password"
+              />
+            </div>
+
+            <Button
+              type="submit"
+              className="w-full h-12 text-base font-semibold btn-futuristic"
+              disabled={isLoading || !passcode.trim()}
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                  Verifying...
+                </>
+              ) : (
+                'Access Admin Panel'
+              )}
+            </Button>
+          </form>
+
           <div className="mt-6 pt-6 border-t border-border/50 text-center">
             <p className="text-xs text-muted-foreground">
               Secure admin access for Owl Fenc management

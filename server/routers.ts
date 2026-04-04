@@ -3,7 +3,7 @@ import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
-import { sendOTP, verifyOTP, validateSession, invalidateSession } from "./services/auth";
+import { verifyPasscode, validateSession, invalidateSession } from "./services/auth";
 import {
   getOwlFencUsers,
   getOwlFencUserCount,
@@ -21,36 +21,27 @@ export const appRouter = router({
   system: systemRouter,
   
   auth: router({
-    // Send OTP to email
-    sendOTP: publicProcedure
-      .input(z.object({ email: z.string().email() }))
-      .mutation(async ({ input }) => {
-        const result = await sendOTP(input.email);
-        return result;
-      }),
-
-    // Verify OTP and create session
-    verifyOTP: publicProcedure
-      .input(
-        z.object({
-          email: z.string().email(),
-          code: z.string().length(6),
-        })
-      )
+    // Verify passcode and create session
+    verifyPasscode: publicProcedure
+      .input(z.object({ passcode: z.string().min(1) }))
       .mutation(async ({ input, ctx }) => {
         const ipAddress = ctx.req.ip || ctx.req.socket.remoteAddress;
         const userAgent = ctx.req.headers['user-agent'];
-
-        const result = await verifyOTP(input.email, input.code, ipAddress, userAgent);
-
+        const result = await verifyPasscode(input.passcode, ipAddress, userAgent);
         if (result.success && result.sessionId) {
-          // Set session cookie
           const cookieOptions = getSessionCookieOptions(ctx.req);
           ctx.res.cookie(COOKIE_NAME, result.sessionId, cookieOptions);
         }
-
         return result;
       }),
+
+    // Legacy stubs - OTP disabled
+    sendOTP: publicProcedure
+      .input(z.object({ email: z.string() }))
+      .mutation(async () => ({ success: false, error: 'OTP login is disabled' })),
+    verifyOTP: publicProcedure
+      .input(z.object({ email: z.string(), code: z.string() }))
+      .mutation(async () => ({ success: false, error: 'OTP login is disabled' })),
 
     // Get current user
     me: publicProcedure.query(async ({ ctx }) => {
