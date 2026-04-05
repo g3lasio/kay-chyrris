@@ -1,9 +1,10 @@
 import Stripe from 'stripe';
 import { getOwlFencUsers } from './owlfenc-firebase';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
+const stripeKey = process.env.STRIPE_SECRET_KEY;
+const stripe = stripeKey ? new Stripe(stripeKey, {
   apiVersion: '2026-02-25.clover',
-});
+}) : null;
 
 export interface RevenueMetrics {
   mrr: number; // Monthly Recurring Revenue
@@ -35,6 +36,7 @@ export interface MonthlyUserData {
  * Calculate MRR from active Stripe subscriptions
  */
 export async function calculateMRR(): Promise<number> {
+  if (!stripe) return 0;
   try {
     const subscriptions = await stripe.subscriptions.list({
       status: 'active',
@@ -68,6 +70,7 @@ export async function calculateMRR(): Promise<number> {
  * Get total revenue for current year from Stripe
  */
 export async function getYearlyRevenue(): Promise<number> {
+  if (!stripe) return 0;
   try {
     const currentYear = new Date().getFullYear();
     const startOfYear = Math.floor(new Date(`${currentYear}-01-01`).getTime() / 1000);
@@ -127,11 +130,11 @@ export async function getYearlyRevenue(): Promise<number> {
  * Calculate revenue growth (month-over-month)
  */
 export async function calculateRevenueGrowth(): Promise<{ growth: number; lastMonthRevenue: number }> {
+  if (!stripe) return { growth: 0, lastMonthRevenue: 0 };
   try {
     const now = new Date();
     const currentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const twoMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 2, 1);
 
     // Get current month revenue
     const currentMonthStart = Math.floor(currentMonth.getTime() / 1000);
@@ -238,16 +241,20 @@ export async function getUserGrowthMetrics(): Promise<UserGrowthMetrics> {
       : 0;
 
     // Count active users (with active subscriptions)
-    const activeSubscriptions = await stripe.subscriptions.list({
-      status: 'active',
-      limit: 100,
-    });
+    let activeUsers = 0;
+    if (stripe) {
+      const activeSubscriptions = await stripe.subscriptions.list({
+        status: 'active',
+        limit: 100,
+      });
+      activeUsers = activeSubscriptions.data.length;
+    }
 
     return {
       totalUsers,
       newUsersThisMonth,
       userGrowth: Math.round(userGrowth * 100) / 100,
-      activeUsers: activeSubscriptions.data.length,
+      activeUsers,
     };
   } catch (error) {
     console.error('[UserGrowth] Error calculating user growth metrics:', error);
@@ -264,6 +271,7 @@ export async function getUserGrowthMetrics(): Promise<UserGrowthMetrics> {
  * Get monthly revenue history for charts (last 12 months)
  */
 export async function getRevenueHistory(): Promise<MonthlyRevenueData[]> {
+  if (!stripe) return [];
   try {
     const history: MonthlyRevenueData[] = [];
     const now = new Date();
