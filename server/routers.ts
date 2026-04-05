@@ -882,6 +882,17 @@ export const appRouter = router({
         }
       }),
 
+    deleteUsers: protectedProcedure
+      .input(z.object({ contractorIds: z.array(z.string()).min(1).max(100) }))
+      .mutation(async ({ input }) => {
+        try {
+          const { deleteLeadPrimeUsers } = await import('./services/leadprime-db');
+          return await deleteLeadPrimeUsers(input.contractorIds);
+        } catch (error: any) {
+          throw new Error(`Failed to batch delete users: ${error.message}`);
+        }
+      }),
+
   }),
 
   // ─── END LEADPRIME CREDIT MANAGEMENT ─────────────────────────────────────

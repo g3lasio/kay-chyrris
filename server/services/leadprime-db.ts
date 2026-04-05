@@ -798,19 +798,54 @@ export async function deleteLeadPrimeUser(
   try {
     await client.query('BEGIN');
     const tables = [
-      'wallet_transactions','admin_credit_grants','wallets','subscriptions',
-      'team_members','company_profiles','contractor_settings','agent_memory','ai_assistant_settings',
+      'wallet_transactions', 'admin_credit_grants', 'wallets', 'subscriptions',
+      'team_members', 'company_profiles', 'contractor_settings', 'agent_memory',
+      'ai_assistant_settings', 'leads', 'conversations', 'messages',
+      'appointments', 'invoices', 'projects', 'team_invitations',
     ];
     for (const table of tables) {
-      try { await client.query(`DELETE FROM ${table} WHERE contractor_id = $1`, [contractorId]); } catch {}
+      // Use SAVEPOINT so a missing table error doesn't abort the whole transaction
+      const sp = `sp_${table}`;
+      await client.query(`SAVEPOINT ${sp}`);
+      try {
+        await client.query(`DELETE FROM ${table} WHERE contractor_id = $1`, [contractorId]);
+        await client.query(`RELEASE SAVEPOINT ${sp}`);
+      } catch {
+        // Table may not exist or column may differ — roll back only this step
+        await client.query(`ROLLBACK TO SAVEPOINT ${sp}`);
+        await client.query(`RELEASE SAVEPOINT ${sp}`);
+      }
     }
     await client.query(`DELETE FROM contractors WHERE id = $1`, [contractorId]);
     await client.query('COMMIT');
     return { success: true, message: 'User deleted successfully' };
   } catch (err: any) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     throw err;
   } finally {
     client.release();
   }
+}
+
+export async function deleteLeadPrimeUsers(
+  contractorIds: string[]
+): Promise<{ success: boolean; deleted: number; failed: string[]; message: string }> {
+  if (!contractorIds.length) return { success: true, deleted: 0, failed: [], message: 'No users to delete' };
+  const results = await Promise.allSettled(
+    contractorIds.map(id => deleteLeadPrimeUser(id))
+  );
+  const failed: string[] = [];
+  let deleted = 0;
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') deleted++;
+    else failed.push(contractorIds[i]);
+  });
+  return {
+    success: failed.length === 0,
+    deleted,
+    failed,
+    message: failed.length === 0
+      ? `${deleted} user(s) deleted successfully`
+      : `${deleted} deleted, ${failed.length} failed`,
+  };
 }

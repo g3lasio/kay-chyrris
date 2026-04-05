@@ -6,6 +6,7 @@
  * - Filterable/sortable table with all user data
  * - Quick filters: inactive, low balance, no subscription, licensed
  * - Per-user actions: edit contact, grant credits, delete
+ * - Batch delete: select multiple users and delete at once
  */
 import { useState, useMemo } from 'react';
 import { trpc } from '@/lib/trpc';
@@ -94,8 +95,12 @@ export default function LeadPrimeUsersIntelligence() {
   const [grantAmount, setGrantAmount] = useState('');
   const [grantDesc, setGrantDesc] = useState('Admin grant');
 
-  // Delete confirm state
+  // Delete confirm state (single)
   const [deleteUser, setDeleteUser] = useState<EnrichedUser | null>(null);
+
+  // Batch selection state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false);
 
   // Expanded row
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -147,11 +152,54 @@ export default function LeadPrimeUsersIntelligence() {
     onError: (e) => toast.error(e.message),
   });
 
+  const deleteUsersMutation = trpc.leadprime.deleteUsers.useMutation({
+    onSuccess: (result: any) => {
+      toast.success(result.message || `${result.deleted} user(s) deleted`);
+      if (result.failed?.length > 0) {
+        toast.error(`${result.failed.length} user(s) could not be deleted`);
+      }
+      setSelectedIds(new Set());
+      setShowBatchDeleteConfirm(false);
+      utils.leadprime.getEnrichedUsers.invalidate();
+      utils.leadprime.getUserIntelligenceStats.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const users: EnrichedUser[] = (usersQuery.data?.data as any) ?? [];
   const total = usersQuery.data?.total ?? 0;
   const stats = statsQuery.data?.data;
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
+
+  // Selection helpers
+  const allSelected = users.length > 0 && users.every(u => selectedIds.has(u.id));
+  const someSelected = users.some(u => selectedIds.has(u.id));
+
+  function toggleUser(id: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    if (allSelected) {
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        users.forEach(u => next.delete(u.id));
+        return next;
+      });
+    } else {
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        users.forEach(u => next.add(u.id));
+        return next;
+      });
+    }
+  }
 
   function toggleSort(col: typeof sortBy) {
     if (sortBy === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -291,6 +339,25 @@ export default function LeadPrimeUsersIntelligence() {
         )}
       </div>
 
+      {/* Batch action toolbar */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 px-4 py-2.5 bg-destructive/10 border border-destructive/30 rounded-lg">
+          <span className="text-sm font-medium text-destructive">{selectedIds.size} user{selectedIds.size > 1 ? 's' : ''} selected</span>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={() => setShowBatchDeleteConfirm(true)}
+            disabled={deleteUsersMutation.isPending}
+          >
+            <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+            Delete Selected
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>
+            <X className="h-3.5 w-3.5 mr-1" /> Clear selection
+          </Button>
+        </div>
+      )}
+
       {/* Table */}
       <Card>
         <CardContent className="p-0">
@@ -303,6 +370,16 @@ export default function LeadPrimeUsersIntelligence() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border/50 text-muted-foreground text-xs">
+                    <th className="px-4 py-3 w-8">
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        ref={el => { if (el) el.indeterminate = someSelected && !allSelected; }}
+                        onChange={toggleAll}
+                        className="cursor-pointer accent-primary"
+                        title="Select all"
+                      />
+                    </th>
                     <th className="text-left px-4 py-3 font-medium">User / Company</th>
                     <th className="text-left px-3 py-3 font-medium">Industry</th>
                     <th className="text-left px-3 py-3 font-medium">Location</th>
@@ -330,9 +407,17 @@ export default function LeadPrimeUsersIntelligence() {
                     <>
                       <tr
                         key={u.id}
-                        className="border-b border-border/30 hover:bg-accent/30 transition-colors cursor-pointer"
+                        className={`border-b border-border/30 hover:bg-accent/30 transition-colors cursor-pointer ${selectedIds.has(u.id) ? 'bg-destructive/5' : ''}`}
                         onClick={() => setExpandedId(expandedId === u.id ? null : u.id)}
                       >
+                        <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(u.id)}
+                            onChange={() => toggleUser(u.id)}
+                            className="cursor-pointer accent-primary"
+                          />
+                        </td>
                         <td className="px-4 py-3">
                           <div className="font-medium truncate max-w-[180px]">{u.businessName || u.name}</div>
                           <div className="text-xs text-muted-foreground truncate max-w-[180px]">{u.email}</div>
@@ -374,7 +459,7 @@ export default function LeadPrimeUsersIntelligence() {
                       </tr>
                       {expandedId === u.id && (
                         <tr key={`${u.id}-expanded`} className="bg-accent/20">
-                          <td colSpan={10} className="px-6 py-4">
+                          <td colSpan={11} className="px-6 py-4">
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
                               <div>
                                 <div className="text-muted-foreground mb-1 flex items-center gap-1"><Mail className="h-3 w-3" /> Email</div>
@@ -488,7 +573,7 @@ export default function LeadPrimeUsersIntelligence() {
         </div>
       )}
 
-      {/* Delete Confirm Modal */}
+      {/* Delete Confirm Modal (single) */}
       {deleteUser && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
           <div className="bg-background border border-border rounded-xl p-6 w-full max-w-md space-y-4">
@@ -507,6 +592,31 @@ export default function LeadPrimeUsersIntelligence() {
                 onClick={() => deleteUserMutation.mutate({ contractorId: deleteUser.id })}
               >
                 {deleteUserMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4 mr-1" />} Delete Permanently
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Delete Confirm Modal */}
+      {showBatchDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-background border border-border rounded-xl p-6 w-full max-w-md space-y-4">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="h-5 w-5 text-red-400 shrink-0" />
+              <h2 className="font-semibold">Delete {selectedIds.size} Users</h2>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              This will permanently delete <span className="text-foreground font-medium">{selectedIds.size} users</span> and all their data. This cannot be undone.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <Button variant="outline" onClick={() => setShowBatchDeleteConfirm(false)}>Cancel</Button>
+              <Button
+                variant="destructive"
+                disabled={deleteUsersMutation.isPending}
+                onClick={() => deleteUsersMutation.mutate({ contractorIds: Array.from(selectedIds) })}
+              >
+                {deleteUsersMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4 mr-1" />} Delete {selectedIds.size} Users
               </Button>
             </div>
           </div>
