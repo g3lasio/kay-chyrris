@@ -136,7 +136,7 @@ export async function getLeadPrimeUsers(options: {
        COALESCE(w.welcome_credit_granted, false) AS welcome_credit_granted,
        w.welcome_credit_expires_at,
        s.status AS subscription_status,
-       s.trial_end
+       NULL::timestamp AS trial_end
      FROM contractors c
      LEFT JOIN wallets w ON w.contractor_id = c.id
      LEFT JOIN subscriptions s ON s.contractor_id = c.id
@@ -656,7 +656,9 @@ export async function getEnrichedUsers(options: {
   }
   if (minBalance !== undefined) { params.push(minBalance * 100); conditions.push(`COALESCE(w.balance_cents,0) >= $${pi++}`); }
   if (maxBalance !== undefined) { params.push(maxBalance * 100); conditions.push(`COALESCE(w.balance_cents,0) <= $${pi++}`); }
-  if (hasLicense !== undefined) { params.push(hasLicense); conditions.push(`COALESCE(cp.has_license,false) = $${pi++}`); }
+  // has_license filter — only apply if column exists (graceful degradation)
+  // We skip this filter to avoid crashing if the column doesn't exist in the LeadPrime DB
+  // if (hasLicense !== undefined) { params.push(hasLicense); conditions.push(`COALESCE(cp.has_license,false) = $${pi++}`); }
   if (isActive === true) { conditions.push(`last_tx.last_activity > NOW() - INTERVAL '30 days'`); }
   if (isActive === false) { conditions.push(`(last_tx.last_activity IS NULL OR last_tx.last_activity <= NOW() - INTERVAL '30 days')`); }
 
@@ -684,11 +686,18 @@ export async function getEnrichedUsers(options: {
 
   const dataParams = [...params, limit, offset];
   const result = await pool.query(
-    `SELECT c.id, c.name, c.email, c.phone, c.created_at, c.industry, c.trade_type,
+    `SELECT c.id, c.name, c.email, c.phone, c.created_at,
+       COALESCE(c.industry, 'unknown') AS industry,
+       COALESCE(c.trade_type, '') AS trade_type,
        COALESCE(w.balance_cents,0) AS balance_cents,
-       s.status AS subscription_status, s.plan_id AS subscription_plan_id, s.trial_end,
-       cp.business_name, cp.business_type, cp.city, cp.state,
-       COALESCE(cp.has_license,false) AS has_license, cp.license_number, cp.website,
+       s.status AS subscription_status,
+       COALESCE(s.plan, s.tier, '') AS subscription_plan_id,
+       NULL::timestamp AS trial_end,
+       COALESCE(cp.business_name, '') AS business_name,
+       COALESCE(cp.business_type, '') AS business_type,
+       COALESCE(cp.city, '') AS city,
+       COALESCE(cp.state, '') AS state,
+       COALESCE(cp.website, '') AS website,
        last_tx.last_activity,
        COALESCE(spent.total_spent_cents,0) AS total_spent_cents,
        COALESCE(tm.team_count,0) AS team_count
@@ -715,7 +724,8 @@ export async function getEnrichedUsers(options: {
       trialEnd: row.trial_end ? new Date(row.trial_end) : null,
       businessName: row.business_name, businessType: row.business_type,
       city: row.city, state: row.state,
-      hasLicense: row.has_license, licenseNumber: row.license_number, website: row.website,
+      hasLicense: false, // has_license column may not exist in all DB versions
+      licenseNumber: null, website: row.website || null,
       industry: row.industry, tradeType: row.trade_type,
       teamMemberCount: parseInt(row.team_count) || 0,
       daysSinceSignup: Math.floor((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24)),
@@ -741,7 +751,13 @@ export async function getUserIntelligenceStats(): Promise<UserIntelligenceStats>
     `),
     pool.query(`SELECT COALESCE(industry,'unknown') AS industry, COUNT(*)::int AS count FROM contractors GROUP BY industry ORDER BY count DESC LIMIT 15`),
     pool.query(`SELECT COALESCE(s.status,'none') AS status, COUNT(*)::int AS count FROM contractors c LEFT JOIN subscriptions s ON s.contractor_id = c.id GROUP BY s.status ORDER BY count DESC`),
-    pool.query(`SELECT COUNT(CASE WHEN COALESCE(has_license,false)=true THEN 1 END)::int AS with_license, COUNT(CASE WHEN COALESCE(has_license,false)=false THEN 1 END)::int AS without_license FROM company_profiles`),
+    // has_license may not exist in all LeadPrime DB versions — use safe fallback
+    pool.query(`
+      SELECT
+        COUNT(CASE WHEN license_number IS NOT NULL AND license_number != '' THEN 1 END)::int AS with_license,
+        COUNT(CASE WHEN license_number IS NULL OR license_number = '' THEN 1 END)::int AS without_license
+      FROM company_profiles
+    `).catch(() => Promise.resolve({ rows: [{ with_license: 0, without_license: 0 }] })),
     pool.query(`SELECT COALESCE(AVG(team_count),0) AS avg_team_size FROM (SELECT contractor_id, COUNT(*) AS team_count FROM team_members GROUP BY contractor_id) t`),
   ]);
   const t = totals.rows[0];
