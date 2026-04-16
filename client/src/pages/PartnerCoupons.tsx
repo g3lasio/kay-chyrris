@@ -1,17 +1,35 @@
 import { useState } from 'react';
 import { trpc } from '@/lib/trpc';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Tag, Plus, Trash2, CheckCircle2, XCircle, Users, Percent, Calendar, RefreshCw } from 'lucide-react';
-import { format } from 'date-fns';
+import { Tag, Plus, Trash2, CheckCircle2, XCircle, Users, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
+
+// Native select styled to match the dark admin theme
+const NativeSelect = ({
+  value,
+  onChange,
+  children,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  children: React.ReactNode;
+}) => (
+  <select
+    value={value}
+    onChange={(e) => onChange(e.target.value)}
+    className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 cursor-pointer"
+    style={{ colorScheme: 'dark' }}
+  >
+    {children}
+  </select>
+);
 
 export default function PartnerCoupons() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -64,7 +82,7 @@ export default function PartnerCoupons() {
     if (form.discountType === 'percent') {
       input.percentOff = form.percentOff;
     } else {
-      input.amountOff = Math.round(form.amountOff * 100); // convert to cents
+      input.amountOff = Math.round(form.amountOff * 100);
       input.currency = 'usd';
     }
     if (form.duration === 'repeating') input.durationInMonths = form.durationInMonths;
@@ -76,18 +94,18 @@ export default function PartnerCoupons() {
   const getDurationLabel = (coupon: any) => {
     if (coupon.duration === 'forever') return 'Forever';
     if (coupon.duration === 'once') return 'One-time';
-    if (coupon.duration === 'repeating') return `${coupon.durationInMonths} months`;
+    if (coupon.duration === 'repeating') return `${coupon.duration_in_months || coupon.durationInMonths} months`;
     return coupon.duration;
   };
 
   const getDiscountLabel = (coupon: any) => {
-    if (coupon.percentOff) return `${coupon.percentOff}% off`;
-    if (coupon.amountOff) return `$${(coupon.amountOff / 100).toFixed(2)} off`;
+    if (coupon.percentOff || coupon.percent_off) return `${coupon.percentOff || coupon.percent_off}% off`;
+    if (coupon.amountOff || coupon.amount_off) return `$${((coupon.amountOff || coupon.amount_off) / 100).toFixed(2)} off`;
     return 'Unknown';
   };
 
-  const totalRedemptions = coupons.reduce((sum, c) => sum + c.timesRedeemed, 0);
-  const activeCoupons = coupons.filter((c) => c.valid).length;
+  const totalRedemptions = coupons.reduce((sum: number, c: any) => sum + (c.timesRedeemed || c.times_redeemed || 0), 0);
+  const activeCoupons = coupons.filter((c: any) => c.valid).length;
 
   return (
     <div className="space-y-8 p-6">
@@ -124,6 +142,7 @@ export default function PartnerCoupons() {
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-4 py-2">
+                {/* Partner Code Name */}
                 <div className="space-y-1">
                   <Label>Partner Code Name</Label>
                   <Input
@@ -135,16 +154,17 @@ export default function PartnerCoupons() {
                   <p className="text-xs text-muted-foreground">Will be stored in uppercase. This is the code partners share with their clients.</p>
                 </div>
 
+                {/* Discount Type + Value */}
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <Label>Discount Type</Label>
-                    <Select value={form.discountType} onValueChange={(v: any) => setForm({ ...form, discountType: v })}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent position="popper" className="z-[9999]">
-                        <SelectItem value="percent">Percentage (%)</SelectItem>
-                        <SelectItem value="amount">Fixed Amount ($)</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <NativeSelect
+                      value={form.discountType}
+                      onChange={(v) => setForm({ ...form, discountType: v as 'percent' | 'amount' })}
+                    >
+                      <option value="percent">Percentage (%)</option>
+                      <option value="amount">Fixed Amount ($)</option>
+                    </NativeSelect>
                   </div>
                   <div className="space-y-1">
                     <Label>{form.discountType === 'percent' ? 'Percent Off' : 'Amount Off ($)'}</Label>
@@ -164,17 +184,18 @@ export default function PartnerCoupons() {
                   </div>
                 </div>
 
+                {/* Duration */}
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <Label>Duration</Label>
-                    <Select value={form.duration} onValueChange={(v: any) => setForm({ ...form, duration: v })}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent position="popper" className="z-[9999]">
-                        <SelectItem value="forever">Forever (every billing cycle)</SelectItem>
-                        <SelectItem value="once">Once (first payment only)</SelectItem>
-                        <SelectItem value="repeating">Repeating (X months)</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <NativeSelect
+                      value={form.duration}
+                      onChange={(v) => setForm({ ...form, duration: v as 'forever' | 'once' | 'repeating' })}
+                    >
+                      <option value="forever">Forever (every billing cycle)</option>
+                      <option value="once">Once (first payment only)</option>
+                      <option value="repeating">Repeating (X months)</option>
+                    </NativeSelect>
                   </div>
                   {form.duration === 'repeating' && (
                     <div className="space-y-1">
@@ -188,6 +209,7 @@ export default function PartnerCoupons() {
                   )}
                 </div>
 
+                {/* Max Redemptions + Expiry */}
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <Label>Max Redemptions (optional)</Label>
@@ -207,16 +229,17 @@ export default function PartnerCoupons() {
                   </div>
                 </div>
 
+                {/* Applies To */}
                 <div className="space-y-1">
                   <Label>Applies To (Plan)</Label>
-                  <Select value={form.appliesTo} onValueChange={(v) => setForm({ ...form, appliesTo: v })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent position="popper" className="z-[9999]">
-                      <SelectItem value="Master Contractor">Master Contractor only</SelectItem>
-                      <SelectItem value="Mero Patron">Mero Patrón only</SelectItem>
-                      <SelectItem value="All Plans">All Plans</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <NativeSelect
+                    value={form.appliesTo}
+                    onChange={(v) => setForm({ ...form, appliesTo: v })}
+                  >
+                    <option value="Master Contractor">Master Contractor only</option>
+                    <option value="Mero Patron">Mero Patrón only</option>
+                    <option value="All Plans">All Plans</option>
+                  </NativeSelect>
                   <p className="text-xs text-muted-foreground">Note: plan restriction is enforced by the backend, not by Stripe itself.</p>
                 </div>
               </div>
@@ -250,7 +273,9 @@ export default function PartnerCoupons() {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">{metric.label}</p>
-                  {isLoading ? <Skeleton className="h-8 w-12 mt-1" /> : (
+                  {isLoading ? (
+                    <Skeleton className="h-8 w-16 mt-1" />
+                  ) : (
                     <p className="text-3xl font-bold">{metric.value}</p>
                   )}
                 </div>
@@ -260,100 +285,87 @@ export default function PartnerCoupons() {
         ))}
       </div>
 
-      {/* Coupons table */}
+      {/* Partner Codes List */}
       <Card className="border-border/50">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Percent className="w-5 h-5" />
-            Partner Codes
-          </CardTitle>
-          <CardDescription>
+        <CardContent className="p-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Tag className="w-4 h-4 text-orange-400" />
+            <h2 className="text-lg font-semibold">Partner Codes</h2>
+          </div>
+          <p className="text-sm text-muted-foreground mb-4">
             All discount codes synced from Stripe. Codes are validated live — any code created here works at checkout immediately.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+          </p>
           {isLoading ? (
             <div className="space-y-3">
-              {[1, 2, 3].map((i) => <Skeleton key={i} className="h-16 w-full" />)}
+              {[1, 2, 3].map((i) => <Skeleton key={i} className="h-16 w-full rounded-lg" />)}
             </div>
           ) : coupons.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
-              <Tag className="w-12 h-12 mx-auto mb-4 opacity-30" />
-              <p className="text-lg font-medium">No partner codes yet</p>
-              <p className="text-sm">Create your first partner discount code to get started.</p>
+              <Tag className="w-12 h-12 mx-auto mb-3 opacity-30" />
+              <p className="font-medium">No partner codes yet</p>
+              <p className="text-sm mt-1">Create your first partner code to get started.</p>
             </div>
           ) : (
             <div className="space-y-3">
-              {coupons.map((coupon) => (
+              {coupons.map((coupon: any) => (
                 <div
                   key={coupon.id}
-                  className="flex items-center justify-between p-4 rounded-xl border border-border/50 bg-card/50 hover:bg-card transition-colors"
+                  className="flex items-center justify-between p-4 rounded-lg border border-border/50 bg-muted/20 hover:bg-muted/40 transition-colors"
                 >
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-3">
                     <div className={`p-2 rounded-lg ${coupon.valid ? 'bg-green-500/10' : 'bg-red-500/10'}`}>
                       {coupon.valid
-                        ? <CheckCircle2 className="w-5 h-5 text-green-500" />
-                        : <XCircle className="w-5 h-5 text-red-500" />
+                        ? <CheckCircle2 className="w-4 h-4 text-green-400" />
+                        : <XCircle className="w-4 h-4 text-red-400" />
                       }
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-mono font-bold text-lg tracking-widest">{coupon.name}</span>
-                        <Badge variant={coupon.valid ? 'default' : 'secondary'} className="text-xs">
+                        <span className="font-mono font-bold text-sm tracking-widest">{coupon.id || coupon.name}</span>
+                        <Badge variant={coupon.valid ? 'default' : 'destructive'} className="text-xs">
                           {coupon.valid ? 'Active' : 'Inactive'}
                         </Badge>
-                        {coupon.appliesTo && (
-                          <Badge variant="outline" className="text-xs">
-                            {coupon.appliesTo}
+                        {coupon.metadata?.appliesTo && (
+                          <Badge variant="outline" className="text-xs border-orange-500/50 text-orange-400">
+                            {coupon.metadata.appliesTo}
                           </Badge>
                         )}
                       </div>
-                      <div className="flex items-center gap-3 mt-1 text-sm text-muted-foreground">
-                        <span className="flex items-center gap-1">
-                          <Percent className="w-3 h-3" />
-                          {getDiscountLabel(coupon)}
-                        </span>
+                      <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
+                        <span>{getDiscountLabel(coupon)}</span>
                         <span>·</span>
-                        <span className="flex items-center gap-1">
-                          <Calendar className="w-3 h-3" />
-                          {getDurationLabel(coupon)}
-                        </span>
+                        <span>{getDurationLabel(coupon)}</span>
                         <span>·</span>
-                        <span className="flex items-center gap-1">
-                          <Users className="w-3 h-3" />
-                          {coupon.timesRedeemed} used
-                          {coupon.maxRedemptions ? ` / ${coupon.maxRedemptions} max` : ''}
-                        </span>
-                        <span>·</span>
-                        <span>Created {format(new Date(coupon.created), 'MMM d, yyyy')}</span>
+                        <span>{coupon.timesRedeemed || coupon.times_redeemed || 0} used</span>
+                        {coupon.redeemBy || coupon.redeem_by ? (
+                          <>
+                            <span>·</span>
+                            <span>Expires {new Date((coupon.redeemBy || coupon.redeem_by) * 1000).toLocaleDateString()}</span>
+                          </>
+                        ) : null}
                       </div>
                     </div>
                   </div>
                   <AlertDialog>
                     <AlertDialogTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-red-500 hover:text-red-600 hover:bg-red-500/10"
-                        disabled={!coupon.valid}
-                      >
+                      <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive">
                         <Trash2 className="w-4 h-4" />
                       </Button>
                     </AlertDialogTrigger>
                     <AlertDialogContent>
                       <AlertDialogHeader>
-                        <AlertDialogTitle>Deactivate partner code?</AlertDialogTitle>
+                        <AlertDialogTitle>Delete Partner Code</AlertDialogTitle>
                         <AlertDialogDescription>
-                          This will permanently delete <strong>{coupon.name}</strong> from Stripe. Existing subscribers who already applied this discount will keep their discount, but new users will no longer be able to use this code. This action cannot be undone.
+                          This will permanently delete the code <strong>{coupon.id || coupon.name}</strong> from Stripe. It will no longer work at checkout. This action cannot be undone.
                         </AlertDialogDescription>
                       </AlertDialogHeader>
                       <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <AlertDialogAction
                           onClick={() => deactivateMutation.mutate({ couponId: coupon.id })}
-                          className="bg-red-500 hover:bg-red-600 text-white"
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                         >
-                          Deactivate
+                          Delete
                         </AlertDialogAction>
                       </AlertDialogFooter>
                     </AlertDialogContent>
