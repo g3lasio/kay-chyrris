@@ -356,440 +356,206 @@ export async function getLeadPrimeAdminGrants(options: {
   }));
 }
 
-/**
- * Get wallet stats for LeadPrime
- */
-export async function getLeadPrimeWalletStats(): Promise<{
-  totalUsers: number;
-  usersWithWallet: number;
-  totalBalanceCents: number;
-  totalGrantedThisMonth: number;
-  activeSubscribers: number;
-  trialUsers: number;
-}> {
-  const pool = getLeadPrimePool();
-
-  const [statsResult, grantsResult, subsResult] = await Promise.all([
-    pool.query(`
-      SELECT
-        COUNT(DISTINCT c.id) AS total_users,
-        COUNT(DISTINCT w.contractor_id) AS users_with_wallet,
-        COALESCE(SUM(w.balance_cents), 0) AS total_balance_cents
-      FROM contractors c
-      LEFT JOIN wallets w ON w.contractor_id = c.id
-    `),
-    pool.query(`
-      SELECT COALESCE(SUM(amount_cents), 0) AS total_granted
-      FROM admin_credit_grants
-      WHERE applied = true
-        AND applied_at >= date_trunc('month', NOW())
-    `),
-    pool.query(`
-      SELECT
-        COUNT(CASE WHEN status = 'active' THEN 1 END) AS active_subscribers,
-        COUNT(CASE WHEN status = 'trialing' THEN 1 END) AS trial_users
-      FROM subscriptions
-    `),
-  ]);
-
-  return {
-    totalUsers: parseInt(statsResult.rows[0].total_users, 10),
-    usersWithWallet: parseInt(statsResult.rows[0].users_with_wallet, 10),
-    totalBalanceCents: parseFloat(statsResult.rows[0].total_balance_cents) || 0,
-    totalGrantedThisMonth: parseFloat(grantsResult.rows[0].total_granted) || 0,
-    activeSubscribers: parseInt(subsResult.rows[0].active_subscribers, 10),
-    trialUsers: parseInt(subsResult.rows[0].trial_users, 10),
-  };
-}
-
-// ─── SYSTEM ISSUES TELEMETRY ─────────────────────────────────────────────────
-
-export interface SystemIssue {
-  id: string;
-  contractorId: string;
-  toolName: string | null;
-  issueType: 'bug' | 'feature_request' | 'config_error';
-  title: string;
-  description: string;
-  errorMessage: string | null;
-  status: 'new' | 'reviewing' | 'resolved';
-  occurrences: number;
-  affectedContractors: string[];
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export interface SystemIssueStats {
-  total: number;
-  byStatus: { new: number; reviewing: number; resolved: number };
-  byType: { bug: number; feature_request: number; config_error: number };
-  topIssues: Array<{ title: string; occurrences: number; issueType: string }>;
-}
-
-export async function getSystemIssues(params: {
-  status?: string;
-  issue_type?: string;
-  limit?: number;
-  offset?: number;
-}): Promise<{ issues: SystemIssue[]; total: number }> {
-  const pool = getLeadPrimePool();
-  const { status, issue_type, limit = 50, offset = 0 } = params;
-
-  const conditions: string[] = [];
-  const values: any[] = [];
-  let idx = 1;
-
-  if (status && status !== 'all') {
-    conditions.push(`status = $${idx++}`);
-    values.push(status);
-  }
-  if (issue_type && issue_type !== 'all') {
-    conditions.push(`issue_type = $${idx++}`);
-    values.push(issue_type);
-  }
-
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-
-  const [issuesResult, countResult] = await Promise.all([
-    pool.query(
-      `SELECT id, contractor_id, tool_name, issue_type, title, description,
-              error_message, status, occurrences, affected_contractors,
-              created_at, updated_at
-       FROM system_issues
-       ${where}
-       ORDER BY
-         CASE status WHEN 'new' THEN 0 WHEN 'reviewing' THEN 1 ELSE 2 END,
-         occurrences DESC,
-         created_at DESC
-       LIMIT $${idx} OFFSET $${idx + 1}`,
-      [...values, limit, offset]
-    ),
-    pool.query(`SELECT COUNT(*) as total FROM system_issues ${where}`, values),
-  ]);
-
-  const issues: SystemIssue[] = issuesResult.rows.map((row: any) => ({
-    id: row.id,
-    contractorId: row.contractor_id,
-    toolName: row.tool_name,
-    issueType: row.issue_type,
-    title: row.title,
-    description: row.description,
-    errorMessage: row.error_message,
-    status: row.status,
-    occurrences: row.occurrences,
-    affectedContractors: Array.isArray(row.affected_contractors)
-      ? row.affected_contractors.filter((x: any) => typeof x === 'string')
-      : [],
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  }));
-
-  return {
-    issues,
-    total: parseInt(countResult.rows[0].total, 10),
-  };
-}
-
-export async function updateSystemIssueStatus(
-  issueId: string,
-  status: 'new' | 'reviewing' | 'resolved'
-): Promise<SystemIssue | null> {
-  const pool = getLeadPrimePool();
-
-  const result = await pool.query(
-    `UPDATE system_issues
-     SET status = $1, updated_at = NOW()
-     WHERE id = $2
-     RETURNING id, contractor_id, tool_name, issue_type, title, description,
-               error_message, status, occurrences, affected_contractors,
-               created_at, updated_at`,
-    [status, issueId]
-  );
-
-  if (result.rows.length === 0) return null;
-
-  const row = result.rows[0];
-  return {
-    id: row.id,
-    contractorId: row.contractor_id,
-    toolName: row.tool_name,
-    issueType: row.issue_type,
-    title: row.title,
-    description: row.description,
-    errorMessage: row.error_message,
-    status: row.status,
-    occurrences: row.occurrences,
-    affectedContractors: Array.isArray(row.affected_contractors)
-      ? row.affected_contractors.filter((x: any) => typeof x === 'string')
-      : [],
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-export async function getSystemIssueStats(): Promise<SystemIssueStats> {
-  const pool = getLeadPrimePool();
-
-  const [statusResult, typeResult, topResult] = await Promise.all([
-    pool.query(`
-      SELECT
-        COUNT(CASE WHEN status = 'new' THEN 1 END)::int AS new_count,
-        COUNT(CASE WHEN status = 'reviewing' THEN 1 END)::int AS reviewing_count,
-        COUNT(CASE WHEN status = 'resolved' THEN 1 END)::int AS resolved_count,
-        COUNT(*)::int AS total
-      FROM system_issues
-    `),
-    pool.query(`
-      SELECT
-        COUNT(CASE WHEN issue_type = 'bug' THEN 1 END)::int AS bug_count,
-        COUNT(CASE WHEN issue_type = 'feature_request' THEN 1 END)::int AS feature_count,
-        COUNT(CASE WHEN issue_type = 'config_error' THEN 1 END)::int AS config_count
-      FROM system_issues
-    `),
-    pool.query(`
-      SELECT title, occurrences, issue_type
-      FROM system_issues
-      WHERE status != 'resolved'
-      ORDER BY occurrences DESC
-      LIMIT 5
-    `),
-  ]);
-
-  const s = statusResult.rows[0];
-  const t = typeResult.rows[0];
-
-  return {
-    total: s.total,
-    byStatus: {
-      new: s.new_count,
-      reviewing: s.reviewing_count,
-      resolved: s.resolved_count,
-    },
-    byType: {
-      bug: t.bug_count,
-      feature_request: t.feature_count,
-      config_error: t.config_count,
-    },
-    topIssues: topResult.rows.map((row: any) => ({
-      title: row.title,
-      occurrences: row.occurrences,
-      issueType: row.issue_type,
-    })),
-  };
-}
-
-// ─── USERS INTELLIGENCE ───────────────────────────────────────────────────────
+// ─── Types for enriched user intelligence ────────────────────────────────────
 
 export interface EnrichedUser {
   id: string;
   name: string;
   email: string;
   phone: string | null;
-  createdAt: Date;
-  balanceCents: number;
-  balanceDollars: string;
-  totalSpentCents: number;
-  totalSpentDollars: string;
-  lastActivityAt: Date | null;
-  subscriptionStatus: string | null;
-  subscriptionPlanId: string | null;
-  trialEnd: Date | null;
-  businessName: string | null;
-  businessType: string | null;
-  city: string | null;
-  state: string | null;
-  hasLicense: boolean;
-  licenseNumber: string | null;
-  website: string | null;
   industry: string | null;
   tradeType: string | null;
-  teamMemberCount: number;
-  daysSinceSignup: number;
-  isActive: boolean;
+  companyName: string | null;
+  phoneVerified: boolean;
+  onboardingCompleted: boolean;
+  twilioPhoneNumber: string | null;
+  createdAt: Date;
+  // wallet
+  balanceCents: number;
+  balanceDollars: string;
+  // subscription
+  subscriptionStatus: string | null;
+  // activity
+  leadCount: number;
+  messageCount: number;
+  campaignCount: number;
+  lastActivityAt: Date | null;
 }
 
 export interface UserIntelligenceStats {
   totalUsers: number;
-  activeUsers: number;
-  totalBalanceCents: number;
-  totalSpentCents: number;
-  byIndustry: Array<{ industry: string; count: number }>;
-  bySubscription: Array<{ status: string; count: number }>;
-  withLicense: number;
-  withoutLicense: number;
-  avgTeamSize: number;
+  verifiedUsers: number;
+  onboardedUsers: number;
+  activeSubscriptions: number;
+  totalLeads: number;
+  totalMessages: number;
+  totalCampaigns: number;
+  newUsersLast30Days: number;
 }
 
-export async function getEnrichedUsers(options: {
+/**
+ * Get enriched user list with activity metrics
+ */
+export async function getEnrichedLeadPrimeUsers(options: {
   search?: string;
-  industry?: string;
-  subscriptionStatus?: string;
-  minBalance?: number;
-  maxBalance?: number;
-  hasLicense?: boolean;
-  isActive?: boolean;
   limit?: number;
   offset?: number;
-  sortBy?: 'created_at' | 'balance' | 'last_activity' | 'total_spent' | 'team_size';
+  sortBy?: string;
   sortDir?: 'asc' | 'desc';
 } = {}): Promise<{ users: EnrichedUser[]; total: number }> {
   const pool = getLeadPrimePool();
-  const {
-    search, industry, subscriptionStatus, minBalance, maxBalance,
-    hasLicense, isActive, limit = 50, offset = 0,
-    sortBy = 'created_at', sortDir = 'desc',
-  } = options;
+  const { search, limit = 50, offset = 0 } = options;
 
-  const conditions: string[] = [];
+  let whereClause = '';
   const params: any[] = [];
-  let pi = 1;
 
   if (search) {
     params.push(`%${search.toLowerCase()}%`);
-    conditions.push(`(LOWER(c.name) LIKE $${pi} OR LOWER(c.email) LIKE $${pi} OR COALESCE(c.phone,'') LIKE $${pi} OR LOWER(COALESCE(cp.business_name,'')) LIKE $${pi})`);
-    pi++;
+    whereClause = `WHERE LOWER(c.name) LIKE $1 OR LOWER(c.email) LIKE $1 OR c.phone LIKE $1 OR LOWER(c.company_name) LIKE $1`;
   }
-  if (industry) { params.push(industry); conditions.push(`c.industry = $${pi++}`); }
-  if (subscriptionStatus && subscriptionStatus !== 'all') {
-    if (subscriptionStatus === 'none') { conditions.push(`s.status IS NULL`); }
-    else { params.push(subscriptionStatus); conditions.push(`s.status = $${pi++}`); }
-  }
-  if (minBalance !== undefined) { params.push(minBalance * 100); conditions.push(`COALESCE(w.balance_cents,0) >= $${pi++}`); }
-  if (maxBalance !== undefined) { params.push(maxBalance * 100); conditions.push(`COALESCE(w.balance_cents,0) <= $${pi++}`); }
-  // has_license filter — only apply if column exists (graceful degradation)
-  // We skip this filter to avoid crashing if the column doesn't exist in the LeadPrime DB
-  // if (hasLicense !== undefined) { params.push(hasLicense); conditions.push(`COALESCE(cp.has_license,false) = $${pi++}`); }
-  if (isActive === true) { conditions.push(`last_tx.last_activity > NOW() - INTERVAL '30 days'`); }
-  if (isActive === false) { conditions.push(`(last_tx.last_activity IS NULL OR last_tx.last_activity <= NOW() - INTERVAL '30 days')`); }
 
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-  const sortMap: Record<string, string> = {
-    created_at: 'c.created_at', balance: 'COALESCE(w.balance_cents,0)',
-    last_activity: 'last_tx.last_activity', total_spent: 'COALESCE(spent.total_spent_cents,0)',
-    team_size: 'COALESCE(tm.team_count,0)',
-  };
-  const orderBy = `${sortMap[sortBy] ?? 'c.created_at'} ${sortDir === 'asc' ? 'ASC' : 'DESC'} NULLS LAST`;
-
-  const baseQuery = `
-    FROM contractors c
-    LEFT JOIN wallets w ON w.contractor_id = c.id
-    LEFT JOIN subscriptions s ON s.contractor_id = c.id
-    LEFT JOIN company_profiles cp ON cp.contractor_id = c.id
-    LEFT JOIN (SELECT contractor_id, MAX(created_at) AS last_activity FROM wallet_transactions GROUP BY contractor_id) last_tx ON last_tx.contractor_id = c.id
-    LEFT JOIN (SELECT contractor_id, ABS(SUM(amount_cents)) AS total_spent_cents FROM wallet_transactions WHERE amount_cents < 0 GROUP BY contractor_id) spent ON spent.contractor_id = c.id
-    LEFT JOIN (SELECT contractor_id, COUNT(*) AS team_count FROM team_members GROUP BY contractor_id) tm ON tm.contractor_id = c.id
-    ${whereClause}
-  `;
-
-  const countResult = await pool.query(`SELECT COUNT(*) ${baseQuery}`, params);
+  const countResult = await pool.query(
+    `SELECT COUNT(*) FROM contractors c ${whereClause}`,
+    params
+  );
   const total = parseInt(countResult.rows[0].count, 10);
 
   const dataParams = [...params, limit, offset];
   const result = await pool.query(
-    `SELECT c.id, c.name, c.email, c.phone, c.created_at,
-       COALESCE(c.industry, 'unknown') AS industry,
-       COALESCE(c.trade_type, '') AS trade_type,
-       COALESCE(w.balance_cents,0) AS balance_cents,
+    `SELECT
+       c.id, c.name, c.email, c.phone, c.industry, c.trade_type,
+       c.company_name, c.phone_verified, c.onboarding_completed,
+       c.twilio_phone_number, c.created_at,
+       COALESCE(w.balance_cents, 0) AS balance_cents,
        s.status AS subscription_status,
-       COALESCE(s.plan, s.tier, '') AS subscription_plan_id,
-       NULL::timestamp AS trial_end,
-       COALESCE(cp.business_name, '') AS business_name,
-       COALESCE(cp.business_type, '') AS business_type,
-       COALESCE(cp.city, '') AS city,
-       COALESCE(cp.state, '') AS state,
-       COALESCE(cp.website, '') AS website,
-       last_tx.last_activity,
-       COALESCE(spent.total_spent_cents,0) AS total_spent_cents,
-       COALESCE(tm.team_count,0) AS team_count
-     ${baseQuery}
-     ORDER BY ${orderBy}
-     LIMIT $${pi} OFFSET $${pi + 1}`,
+       COALESCE(lc.lead_count, 0) AS lead_count,
+       COALESCE(mc.message_count, 0) AS message_count,
+       COALESCE(cc.campaign_count, 0) AS campaign_count,
+       GREATEST(lc.last_lead_at, mc.last_message_at, cc.last_campaign_at) AS last_activity_at
+     FROM contractors c
+     LEFT JOIN wallets w ON w.contractor_id = c.id
+     LEFT JOIN subscriptions s ON s.contractor_id = c.id
+     LEFT JOIN (
+       SELECT contractor_id, COUNT(*) AS lead_count, MAX(created_at) AS last_lead_at
+       FROM leads GROUP BY contractor_id
+     ) lc ON lc.contractor_id = c.id
+     LEFT JOIN (
+       SELECT contractor_id, COUNT(*) AS message_count, MAX(created_at) AS last_message_at
+       FROM messages GROUP BY contractor_id
+     ) mc ON mc.contractor_id = c.id
+     LEFT JOIN (
+       SELECT contractor_id, COUNT(*) AS campaign_count, MAX(created_at) AS last_campaign_at
+       FROM campaigns GROUP BY contractor_id
+     ) cc ON cc.contractor_id = c.id
+     ${whereClause}
+     ORDER BY c.created_at DESC
+     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
     dataParams
   );
 
-  const now = new Date();
-  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-  const users: EnrichedUser[] = result.rows.map(row => {
-    const createdAt = new Date(row.created_at);
-    const lastActivityAt = row.last_activity ? new Date(row.last_activity) : null;
-    return {
-      id: row.id, name: row.name || '(no name)', email: row.email, phone: row.phone, createdAt,
-      balanceCents: parseFloat(row.balance_cents) || 0,
-      balanceDollars: ((parseFloat(row.balance_cents) || 0) / 100).toFixed(2),
-      totalSpentCents: parseFloat(row.total_spent_cents) || 0,
-      totalSpentDollars: ((parseFloat(row.total_spent_cents) || 0) / 100).toFixed(2),
-      lastActivityAt,
-      subscriptionStatus: row.subscription_status, subscriptionPlanId: row.subscription_plan_id,
-      trialEnd: row.trial_end ? new Date(row.trial_end) : null,
-      businessName: row.business_name, businessType: row.business_type,
-      city: row.city, state: row.state,
-      hasLicense: false, // has_license column may not exist in all DB versions
-      licenseNumber: null, website: row.website || null,
-      industry: row.industry, tradeType: row.trade_type,
-      teamMemberCount: parseInt(row.team_count) || 0,
-      daysSinceSignup: Math.floor((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24)),
-      isActive: lastActivityAt ? lastActivityAt > thirtyDaysAgo : false,
-    };
-  });
+  const users: EnrichedUser[] = result.rows.map(row => ({
+    id: row.id,
+    name: row.name || '(no name)',
+    email: row.email,
+    phone: row.phone,
+    industry: row.industry,
+    tradeType: row.trade_type,
+    companyName: row.company_name,
+    phoneVerified: row.phone_verified || false,
+    onboardingCompleted: row.onboarding_completed || false,
+    twilioPhoneNumber: row.twilio_phone_number,
+    createdAt: row.created_at,
+    balanceCents: parseFloat(row.balance_cents) || 0,
+    balanceDollars: ((parseFloat(row.balance_cents) || 0) / 100).toFixed(2),
+    subscriptionStatus: row.subscription_status,
+    leadCount: parseInt(row.lead_count) || 0,
+    messageCount: parseInt(row.message_count) || 0,
+    campaignCount: parseInt(row.campaign_count) || 0,
+    lastActivityAt: row.last_activity_at,
+  }));
 
   return { users, total };
 }
 
-export async function getUserIntelligenceStats(): Promise<UserIntelligenceStats> {
+/**
+ * Get aggregate stats for user intelligence dashboard
+ */
+export async function getLeadPrimeUserIntelligenceStats(): Promise<UserIntelligenceStats> {
   const pool = getLeadPrimePool();
-  const [totals, industryDist, subDist, licenseDist, teamAvg] = await Promise.all([
-    pool.query(`
-      SELECT COUNT(DISTINCT c.id)::int AS total_users,
-        COUNT(DISTINCT CASE WHEN last_tx.last_activity > NOW() - INTERVAL '30 days' THEN c.id END)::int AS active_users,
-        COALESCE(SUM(w.balance_cents),0) AS total_balance_cents,
-        COALESCE(SUM(ABS(spent.total_spent_cents)),0) AS total_spent_cents
-      FROM contractors c
-      LEFT JOIN wallets w ON w.contractor_id = c.id
-      LEFT JOIN (SELECT contractor_id, MAX(created_at) AS last_activity FROM wallet_transactions GROUP BY contractor_id) last_tx ON last_tx.contractor_id = c.id
-      LEFT JOIN (SELECT contractor_id, SUM(amount_cents) AS total_spent_cents FROM wallet_transactions WHERE amount_cents < 0 GROUP BY contractor_id) spent ON spent.contractor_id = c.id
-    `),
-    pool.query(`SELECT COALESCE(industry,'unknown') AS industry, COUNT(*)::int AS count FROM contractors GROUP BY industry ORDER BY count DESC LIMIT 15`),
-    pool.query(`SELECT COALESCE(s.status,'none') AS status, COUNT(*)::int AS count FROM contractors c LEFT JOIN subscriptions s ON s.contractor_id = c.id GROUP BY s.status ORDER BY count DESC`),
-    // has_license may not exist in all LeadPrime DB versions — use safe fallback
-    pool.query(`
-      SELECT
-        COUNT(CASE WHEN license_number IS NOT NULL AND license_number != '' THEN 1 END)::int AS with_license,
-        COUNT(CASE WHEN license_number IS NULL OR license_number = '' THEN 1 END)::int AS without_license
-      FROM company_profiles
-    `).catch(() => Promise.resolve({ rows: [{ with_license: 0, without_license: 0 }] })),
-    pool.query(`SELECT COALESCE(AVG(team_count),0) AS avg_team_size FROM (SELECT contractor_id, COUNT(*) AS team_count FROM team_members GROUP BY contractor_id) t`),
-  ]);
-  const t = totals.rows[0];
-  const l = licenseDist.rows[0] || { with_license: 0, without_license: 0 };
+
+  const result = await pool.query(`
+    SELECT
+      (SELECT COUNT(*) FROM contractors) AS total_users,
+      (SELECT COUNT(*) FROM contractors WHERE phone_verified = true) AS verified_users,
+      (SELECT COUNT(*) FROM contractors WHERE onboarding_completed = true) AS onboarded_users,
+      (SELECT COUNT(*) FROM subscriptions WHERE status IN ('active', 'trialing')) AS active_subscriptions,
+      (SELECT COUNT(*) FROM leads) AS total_leads,
+      (SELECT COUNT(*) FROM messages) AS total_messages,
+      (SELECT COUNT(*) FROM campaigns) AS total_campaigns,
+      (SELECT COUNT(*) FROM contractors WHERE created_at >= NOW() - INTERVAL '30 days') AS new_users_last_30_days
+  `);
+
+  const row = result.rows[0];
   return {
-    totalUsers: t.total_users, activeUsers: t.active_users,
-    totalBalanceCents: parseFloat(t.total_balance_cents) || 0,
-    totalSpentCents: parseFloat(t.total_spent_cents) || 0,
-    byIndustry: industryDist.rows.map((r: any) => ({ industry: r.industry, count: r.count })),
-    bySubscription: subDist.rows.map((r: any) => ({ status: r.status, count: r.count })),
-    withLicense: l.with_license, withoutLicense: l.without_license,
-    avgTeamSize: parseFloat(teamAvg.rows[0]?.avg_team_size) || 0,
+    totalUsers: parseInt(row.total_users) || 0,
+    verifiedUsers: parseInt(row.verified_users) || 0,
+    onboardedUsers: parseInt(row.onboarded_users) || 0,
+    activeSubscriptions: parseInt(row.active_subscriptions) || 0,
+    totalLeads: parseInt(row.total_leads) || 0,
+    totalMessages: parseInt(row.total_messages) || 0,
+    totalCampaigns: parseInt(row.total_campaigns) || 0,
+    newUsersLast30Days: parseInt(row.new_users_last_30_days) || 0,
   };
 }
 
+/**
+ * Update contact info for a LeadPrime user
+ */
 export async function updateLeadPrimeUserContact(
   contractorId: string,
-  updates: { email?: string; phone?: string; name?: string }
-): Promise<{ success: boolean; message: string }> {
+  updates: { name?: string; email?: string; phone?: string }
+): Promise<{ success: boolean }> {
   const pool = getLeadPrimePool();
-  const fields: string[] = [];
-  const values: any[] = [];
-  let pi = 1;
-  if (updates.email) { fields.push(`email = $${pi++}`); values.push(updates.email); }
-  if (updates.phone) { fields.push(`phone = $${pi++}`); values.push(updates.phone); }
-  if (updates.name) { fields.push(`name = $${pi++}`); values.push(updates.name); }
-  if (fields.length === 0) return { success: false, message: 'No fields to update' };
-  values.push(contractorId);
-  await pool.query(`UPDATE contractors SET ${fields.join(', ')}, updated_at = NOW() WHERE id = $${pi}`, values);
-  return { success: true, message: 'User updated successfully' };
+  const setClauses: string[] = [];
+  const params: any[] = [];
+
+  if (updates.name !== undefined) {
+    params.push(updates.name);
+    setClauses.push(`name = $${params.length}`);
+  }
+  if (updates.email !== undefined) {
+    params.push(updates.email);
+    setClauses.push(`email = $${params.length}`);
+  }
+  if (updates.phone !== undefined) {
+    params.push(updates.phone);
+    setClauses.push(`phone = $${params.length}`);
+  }
+
+  if (setClauses.length === 0) return { success: true };
+
+  params.push(contractorId);
+  await pool.query(
+    `UPDATE contractors SET ${setClauses.join(', ')}, updated_at = NOW() WHERE id = $${params.length}`,
+    params
+  );
+
+  return { success: true };
 }
 
+/**
+ * Delete a single LeadPrime user and all their data.
+ *
+ * FIX (2026-04-16): The DB has a trigger `prevent_last_owner_deletion_trigger`
+ * on team_members that blocks deleting the last owner row of a contractor.
+ * When an admin deletes a contractor account entirely, we WANT to remove all
+ * team_members rows (including the last owner). We temporarily disable the
+ * trigger for this session, perform the deletion, then re-enable it.
+ *
+ * Most child tables have ON DELETE CASCADE FK to contractors, so deleting the
+ * contractor row is sufficient for those. We explicitly delete the tables that
+ * do NOT have a CASCADE FK (or that need to be deleted before the contractor row).
+ */
 export async function deleteLeadPrimeUser(
   contractorId: string
 ): Promise<{ success: boolean; message: string }> {
@@ -797,14 +563,45 @@ export async function deleteLeadPrimeUser(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
+    // Temporarily disable the last-owner guard trigger so admin can delete
+    // the contractor's own team_members row (which is always the last owner).
+    await client.query(
+      `ALTER TABLE team_members DISABLE TRIGGER prevent_last_owner_deletion_trigger`
+    );
+
+    // Tables that need explicit DELETE (not covered by CASCADE FK from contractors)
     const tables = [
-      'wallet_transactions', 'admin_credit_grants', 'wallets', 'subscriptions',
-      'team_members', 'company_profiles', 'contractor_settings', 'agent_memory',
-      'ai_assistant_settings', 'leads', 'conversations', 'messages',
-      'appointments', 'invoices', 'projects', 'team_invitations',
+      // Billing / wallet (no CASCADE)
+      'wallet_transactions', 'admin_credit_grants', 'wallets',
+      'subscriptions', 'subscription_items',
+      // Team (trigger was blocking this)
+      'team_members', 'team_audit_logs', 'team_billing_logs',
+      // Profile / settings
+      'company_profiles', 'contractor_settings', 'contractor_billing_settings',
+      // AI
+      'agent_memory', 'ai_assistant_settings',
+      // CRM
+      'leads', 'conversations', 'messages',
+      'appointments', 'invoices', 'projects',
+      // Campaigns (non-cascade tables)
+      'campaign_ai_generations', 'campaign_csv_imports', 'campaign_contact_history',
+      // Email
+      'email_daily_limits', 'email_unsubscribe_list',
+      // LeadHunter
+      'leadhunter_purchases', 'leadhunter_results', 'leadhunter_searches',
+      // Misc
+      'web_search_usage', 'system_issues',
+      'automation_logs', 'automation_queue',
+      'pipeline_move_log',
+      // PM (usually empty but safe to include)
+      'pm_vendors', 'pm_vendor_assignments', 'pm_owners',
+      'pm_expenses', 'pm_inspections', 'pm_late_fees', 'pm_late_fee_config',
+      'pm_lease_renewals', 'pm_monthly_variable_charges', 'pm_reminder_config',
     ];
+
     for (const table of tables) {
-      // Use SAVEPOINT so a missing table error doesn't abort the whole transaction
+      // Use SAVEPOINT so a missing table / column error doesn't abort the whole transaction
       const sp = `sp_${table}`;
       await client.query(`SAVEPOINT ${sp}`);
       try {
@@ -816,10 +613,22 @@ export async function deleteLeadPrimeUser(
         await client.query(`RELEASE SAVEPOINT ${sp}`);
       }
     }
+
+    // Delete the contractor itself — CASCADE FK will clean up remaining children
     await client.query(`DELETE FROM contractors WHERE id = $1`, [contractorId]);
+
+    // Re-enable the trigger
+    await client.query(
+      `ALTER TABLE team_members ENABLE TRIGGER prevent_last_owner_deletion_trigger`
+    );
+
     await client.query('COMMIT');
     return { success: true, message: 'User deleted successfully' };
   } catch (err: any) {
+    // Always re-enable the trigger even on error to avoid leaving it disabled
+    await client.query(
+      `ALTER TABLE team_members ENABLE TRIGGER prevent_last_owner_deletion_trigger`
+    ).catch(() => {});
     await client.query('ROLLBACK').catch(() => {});
     throw err;
   } finally {
