@@ -140,7 +140,7 @@ export default function PartnerCoupons() {
                     <Label>Discount Type</Label>
                     <Select value={form.discountType} onValueChange={(v: any) => setForm({ ...form, discountType: v })}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
+                      <SelectContent position="popper" className="z-[9999]">
                         <SelectItem value="percent">Percentage (%)</SelectItem>
                         <SelectItem value="amount">Fixed Amount ($)</SelectItem>
                       </SelectContent>
@@ -169,7 +169,7 @@ export default function PartnerCoupons() {
                     <Label>Duration</Label>
                     <Select value={form.duration} onValueChange={(v: any) => setForm({ ...form, duration: v })}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
+                      <SelectContent position="popper" className="z-[9999]">
                         <SelectItem value="forever">Forever (every billing cycle)</SelectItem>
                         <SelectItem value="once">Once (first payment only)</SelectItem>
                         <SelectItem value="repeating">Repeating (X months)</SelectItem>
@@ -211,7 +211,7 @@ export default function PartnerCoupons() {
                   <Label>Applies To (Plan)</Label>
                   <Select value={form.appliesTo} onValueChange={(v) => setForm({ ...form, appliesTo: v })}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
+                    <SelectContent position="popper" className="z-[9999]">
                       <SelectItem value="Master Contractor">Master Contractor only</SelectItem>
                       <SelectItem value="Mero Patron">Mero Patrón only</SelectItem>
                       <SelectItem value="All Plans">All Plans</SelectItem>
