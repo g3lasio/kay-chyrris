@@ -260,7 +260,13 @@ export async function getCoupons(): Promise<PartnerCoupon[]> {
 export async function createCoupon(input: CreateCouponInput): Promise<PartnerCoupon> {
   if (!stripe) throw new Error('Stripe not initialized');
 
+  // Use the name as the Stripe coupon ID so the code is predictable and exact-matchable.
+  // e.g. name="BLUECOLLAR" → Stripe ID="BLUECOLLAR" → user enters "BLUECOLLAR" → exact match.
+  // Sanitize: uppercase, replace spaces/special chars with underscore.
+  const couponId = input.name.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '_');
+
   const params: any = {
+    id: couponId,
     name: input.name,
     duration: input.duration,
     metadata: { appliesTo: input.appliesTo || 'Master Contractor' },
