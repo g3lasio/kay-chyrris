@@ -408,6 +408,12 @@ export interface UserIntelligenceStats {
   totalMessages: number;
   totalCampaigns: number;
   newUsersLast30Days: number;
+  activeUsers: number;
+  totalBalanceCents: number;
+  totalSpentCents: number;
+  withLicense: number;
+  withoutLicense: number;
+  byIndustry: { industry: string; count: number }[];
 }
 
 /**
@@ -607,7 +613,6 @@ export async function getEnrichedLeadPrimeUsers(options: {
  */
 export async function getLeadPrimeUserIntelligenceStats(): Promise<UserIntelligenceStats> {
   const pool = getLeadPrimePool();
-
   const result = await pool.query(`
     SELECT
       (SELECT COUNT(*) FROM contractors) AS total_users,
@@ -617,12 +622,29 @@ export async function getLeadPrimeUserIntelligenceStats(): Promise<UserIntellige
       (SELECT COUNT(*) FROM leads) AS total_leads,
       (SELECT COUNT(*) FROM messages) AS total_messages,
       (SELECT COUNT(*) FROM campaigns) AS total_campaigns,
-      (SELECT COUNT(*) FROM contractors WHERE created_at >= NOW() - INTERVAL '30 days') AS new_users_last_30_days
+      (SELECT COUNT(*) FROM contractors WHERE created_at >= NOW() - INTERVAL '30 days') AS new_users_last_30_days,
+      (SELECT COUNT(*) FROM contractors WHERE updated_at >= NOW() - INTERVAL '30 days') AS active_users_30d,
+      (SELECT COALESCE(SUM(balance_cents), 0) FROM contractor_wallets) AS total_balance_cents,
+      (SELECT COALESCE(SUM(ABS(amount_cents)), 0) FROM wallet_transactions WHERE amount_cents < 0) AS total_spent_cents,
+      (SELECT COUNT(*) FROM contractors c2 JOIN network_profiles np ON np.contractor_id = c2.id WHERE np.license_number IS NOT NULL AND np.license_number != \'\') AS with_license
   `);
-
   const row = result.rows[0];
+  const totalUsers = parseInt(row.total_users) || 0;
+  const withLicense = parseInt(row.with_license) || 0;
+  // Industry breakdown
+  const industryResult = await pool.query(`
+    SELECT COALESCE(industry, 'unknown') AS industry, COUNT(*) AS count
+    FROM contractors
+    GROUP BY industry
+    ORDER BY count DESC
+    LIMIT 10
+  `);
+  const byIndustry = industryResult.rows.map((r: any) => ({
+    industry: r.industry,
+    count: parseInt(r.count) || 0,
+  }));
   return {
-    totalUsers: parseInt(row.total_users) || 0,
+    totalUsers,
     verifiedUsers: parseInt(row.verified_users) || 0,
     onboardedUsers: parseInt(row.onboarded_users) || 0,
     activeSubscriptions: parseInt(row.active_subscriptions) || 0,
@@ -630,8 +652,15 @@ export async function getLeadPrimeUserIntelligenceStats(): Promise<UserIntellige
     totalMessages: parseInt(row.total_messages) || 0,
     totalCampaigns: parseInt(row.total_campaigns) || 0,
     newUsersLast30Days: parseInt(row.new_users_last_30_days) || 0,
+    activeUsers: parseInt(row.active_users_30d) || 0,
+    totalBalanceCents: parseInt(row.total_balance_cents) || 0,
+    totalSpentCents: parseInt(row.total_spent_cents) || 0,
+    withLicense,
+    withoutLicense: Math.max(0, totalUsers - withLicense),
+    byIndustry,
   };
 }
+
 
 /**
  * Update contact info for a LeadPrime user
