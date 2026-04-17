@@ -30,6 +30,7 @@ import {
   Users,
   Wrench,
   TrendingUp,
+  Download,
 } from 'lucide-react';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -164,6 +165,46 @@ export default function SystemIssues() {
     updateStatusMutation.mutate({ issueId: issue.id, status: newStatus });
   }
 
+  function exportIssuesToJson() {
+    // Build a well-organized export object
+    const exportData = {
+      exportedAt: new Date().toISOString(),
+      exportedBy: 'LeadPrime Admin',
+      totalIssues: issues.length,
+      summary: {
+        bugs: issues.filter(i => i.issueType === 'bug').length,
+        featureRequests: issues.filter(i => i.issueType === 'feature_request').length,
+        configErrors: issues.filter(i => i.issueType === 'config_error').length,
+        statusNew: issues.filter(i => i.status === 'new').length,
+        statusReviewing: issues.filter(i => i.status === 'reviewing').length,
+        statusResolved: issues.filter(i => i.status === 'resolved').length,
+      },
+      issues: issues.map(issue => ({
+        id: issue.id,
+        title: issue.title,
+        description: issue.description,
+        errorMessage: issue.errorMessage ?? null,
+        issueType: issue.issueType,
+        status: issue.status,
+        toolName: issue.toolName ?? null,
+        occurrences: issue.occurrences,
+        affectedContractors: issue.affectedContractors ?? [],
+        reportedAt: issue.createdAt,
+        lastUpdated: issue.updatedAt,
+      })),
+    };
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const dateStr = new Date().toISOString().split('T')[0];
+    a.href = url;
+    a.download = `leadprime-issues-${dateStr}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -181,15 +222,26 @@ export default function SystemIssues() {
             Real-time bug reports and feature requests from the LeadPrime AI agent.
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => { issuesQuery.refetch(); statsQuery.refetch(); }}
-          disabled={issuesQuery.isFetching}
-        >
-          <RefreshCw className={`h-4 w-4 mr-2 ${issuesQuery.isFetching ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportIssuesToJson}
+            disabled={issues.length === 0}
+          >
+            <Download className="h-4 w-4 mr-2" />
+            Export JSON
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => { issuesQuery.refetch(); statsQuery.refetch(); }}
+            disabled={issuesQuery.isFetching}
+          >
+            <RefreshCw className={`h-4 w-4 mr-2 ${issuesQuery.isFetching ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Stats Cards */}
