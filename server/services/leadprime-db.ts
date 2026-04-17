@@ -356,29 +356,46 @@ export async function getLeadPrimeAdminGrants(options: {
   }));
 }
 
-// ─── Types for enriched user intelligence ────────────────────────────────────
-
+/// ─── Types for enriched user intelligence ────────────────────────────────────
 export interface EnrichedUser {
   id: string;
   name: string;
   email: string;
   phone: string | null;
+  // identity
+  networkHandle: string | null;       // @handle — unique LeadPrime Network username
   industry: string | null;
   tradeType: string | null;
   companyName: string | null;
+  // profile (company_profiles)
+  businessName: string | null;
+  businessType: string | null;
+  city: string | null;
+  state: string | null;
+  website: string | null;
+  // compliance (network_profiles)
+  hasLicense: boolean;
+  licenseNumber: string | null;
+  // status
   phoneVerified: boolean;
   onboardingCompleted: boolean;
   twilioPhoneNumber: string | null;
+  isActive: boolean;                  // had activity in last 30 days
+  daysSinceSignup: number;
   createdAt: string;
   // wallet
   balanceCents: number;
   balanceDollars: string;
+  totalSpentCents: number;
+  totalSpentDollars: string;
   // subscription
   subscriptionStatus: string | null;
+  subscriptionPlanId: string | null;
   // activity
   leadCount: number;
   messageCount: number;
   campaignCount: number;
+  teamMemberCount: number;
   lastActivityAt: string | null;
 }
 
@@ -394,28 +411,78 @@ export interface UserIntelligenceStats {
 }
 
 /**
- * Get enriched user list with activity metrics
+ * Get enriched user list with full profile data.
+ * Includes: network_handle (@handle), company profile (city/state/website/businessName/businessType),
+ * license info (from network_profiles), total spent, team size, isActive, daysSinceSignup.
  */
 export async function getEnrichedLeadPrimeUsers(options: {
   search?: string;
+  industry?: string;
+  subscriptionStatus?: string;
+  hasLicense?: boolean;
+  isActive?: boolean;
   limit?: number;
   offset?: number;
   sortBy?: string;
   sortDir?: 'asc' | 'desc';
 } = {}): Promise<{ users: EnrichedUser[]; total: number }> {
   const pool = getLeadPrimePool();
-  const { search, limit = 50, offset = 0 } = options;
+  const { search, industry, subscriptionStatus, hasLicense, isActive, limit = 50, offset = 0, sortBy, sortDir = 'desc' } = options;
 
-  let whereClause = '';
+  const conditions: string[] = [];
   const params: any[] = [];
 
   if (search) {
     params.push(`%${search.toLowerCase()}%`);
-    whereClause = `WHERE LOWER(c.name) LIKE $1 OR LOWER(c.email) LIKE $1 OR c.phone LIKE $1 OR LOWER(c.company_name) LIKE $1`;
+    conditions.push(`(LOWER(c.name) LIKE $${params.length} OR LOWER(c.email) LIKE $${params.length} OR c.phone LIKE $${params.length} OR LOWER(COALESCE(c.company_name,'')) LIKE $${params.length} OR LOWER(COALESCE(c.network_handle,'')) LIKE $${params.length})`);
+  }
+  if (industry) {
+    params.push(industry);
+    conditions.push(`c.industry = $${params.length}`);
+  }
+  if (subscriptionStatus) {
+    params.push(subscriptionStatus);
+    conditions.push(`s.status = $${params.length}`);
+  }
+  if (hasLicense === true) {
+    conditions.push(`np.license_number IS NOT NULL`);
+  } else if (hasLicense === false) {
+    conditions.push(`np.license_number IS NULL`);
+  }
+  if (isActive === true) {
+    conditions.push(`GREATEST(lc.last_lead_at, mc.last_message_at, cc.last_campaign_at) >= NOW() - INTERVAL '30 days'`);
+  } else if (isActive === false) {
+    conditions.push(`(GREATEST(lc.last_lead_at, mc.last_message_at, cc.last_campaign_at) IS NULL OR GREATEST(lc.last_lead_at, mc.last_message_at, cc.last_campaign_at) < NOW() - INTERVAL '30 days')`);
   }
 
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  // Allowed sort columns
+  const sortColMap: Record<string, string> = {
+    created_at: 'c.created_at',
+    balance: 'COALESCE(w.balance_cents, 0)',
+    last_activity: 'GREATEST(lc.last_lead_at, mc.last_message_at, cc.last_campaign_at)',
+    total_spent: 'COALESCE(spent.total_spent_cents, 0)',
+    team_size: 'COALESCE(tm.team_count, 0)',
+  };
+  const orderCol = sortColMap[sortBy ?? ''] ?? 'c.created_at';
+  const orderDir = sortDir === 'asc' ? 'ASC' : 'DESC';
+
   const countResult = await pool.query(
-    `SELECT COUNT(*) FROM contractors c ${whereClause}`,
+    `SELECT COUNT(*)
+     FROM contractors c
+     LEFT JOIN subscriptions s ON s.contractor_id = c.id
+     LEFT JOIN network_profiles np ON np.contractor_id = c.id
+     LEFT JOIN (
+       SELECT contractor_id, MAX(created_at) AS last_lead_at FROM leads GROUP BY contractor_id
+     ) lc ON lc.contractor_id = c.id
+     LEFT JOIN (
+       SELECT contractor_id, MAX(created_at) AS last_message_at FROM messages GROUP BY contractor_id
+     ) mc ON mc.contractor_id = c.id
+     LEFT JOIN (
+       SELECT contractor_id, MAX(created_at) AS last_campaign_at FROM campaigns GROUP BY contractor_id
+     ) cc ON cc.contractor_id = c.id
+     ${whereClause}`,
     params
   );
   const total = parseInt(countResult.rows[0].count, 10);
@@ -423,18 +490,49 @@ export async function getEnrichedLeadPrimeUsers(options: {
   const dataParams = [...params, limit, offset];
   const result = await pool.query(
     `SELECT
-       c.id, c.name, c.email, c.phone, c.industry, c.trade_type,
-       c.company_name, c.phone_verified, c.onboarding_completed,
-       c.twilio_phone_number, c.created_at,
+       c.id,
+       c.name,
+       c.email,
+       c.phone,
+       c.network_handle,
+       c.industry,
+       c.trade_type,
+       c.company_name,
+       c.phone_verified,
+       c.onboarding_completed,
+       c.twilio_phone_number,
+       c.created_at,
+       -- company_profiles
+       cp.business_name,
+       cp.business_type,
+       cp.city,
+       cp.state,
+       cp.website,
+       -- network_profiles (license/compliance)
+       np.license_number,
+       np.license_verified,
+       -- wallet
        COALESCE(w.balance_cents, 0) AS balance_cents,
+       COALESCE(spent.total_spent_cents, 0) AS total_spent_cents,
+       -- subscription
        s.status AS subscription_status,
+       s.plan AS subscription_plan_id,
+       -- activity counts
        COALESCE(lc.lead_count, 0) AS lead_count,
        COALESCE(mc.message_count, 0) AS message_count,
        COALESCE(cc.campaign_count, 0) AS campaign_count,
+       COALESCE(tm.team_count, 0) AS team_count,
        GREATEST(lc.last_lead_at, mc.last_message_at, cc.last_campaign_at) AS last_activity_at
      FROM contractors c
+     LEFT JOIN company_profiles cp ON cp.contractor_id = c.id
+     LEFT JOIN network_profiles np ON np.contractor_id = c.id
      LEFT JOIN wallets w ON w.contractor_id = c.id
      LEFT JOIN subscriptions s ON s.contractor_id = c.id
+     LEFT JOIN (
+       SELECT contractor_id, SUM(ABS(amount_cents)) AS total_spent_cents
+       FROM wallet_transactions WHERE amount_cents < 0
+       GROUP BY contractor_id
+     ) spent ON spent.contractor_id = c.id
      LEFT JOIN (
        SELECT contractor_id, COUNT(*) AS lead_count, MAX(created_at) AS last_lead_at
        FROM leads GROUP BY contractor_id
@@ -447,33 +545,60 @@ export async function getEnrichedLeadPrimeUsers(options: {
        SELECT contractor_id, COUNT(*) AS campaign_count, MAX(created_at) AS last_campaign_at
        FROM campaigns GROUP BY contractor_id
      ) cc ON cc.contractor_id = c.id
+     LEFT JOIN (
+       SELECT contractor_id, COUNT(*) AS team_count
+       FROM team_members WHERE status = 'active'
+       GROUP BY contractor_id
+     ) tm ON tm.contractor_id = c.id
      ${whereClause}
-     ORDER BY c.created_at DESC
+     ORDER BY ${orderCol} ${orderDir} NULLS LAST
      LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
     dataParams
   );
 
-  const users: EnrichedUser[] = result.rows.map(row => ({
-    id: row.id,
-    name: row.name || '(no name)',
-    email: row.email,
-    phone: row.phone,
-    industry: row.industry,
-    tradeType: row.trade_type,
-    companyName: row.company_name,
-    phoneVerified: row.phone_verified || false,
-    onboardingCompleted: row.onboarding_completed || false,
-    twilioPhoneNumber: row.twilio_phone_number,
-    createdAt: row.created_at,
-    balanceCents: parseFloat(row.balance_cents) || 0,
-    balanceDollars: ((parseFloat(row.balance_cents) || 0) / 100).toFixed(2),
-    subscriptionStatus: row.subscription_status,
-    leadCount: parseInt(row.lead_count) || 0,
-    messageCount: parseInt(row.message_count) || 0,
-    campaignCount: parseInt(row.campaign_count) || 0,
-    lastActivityAt: row.last_activity_at,
-  }));
-
+  const now = Date.now();
+  const users: EnrichedUser[] = result.rows.map(row => {
+    const balanceCents = parseFloat(row.balance_cents) || 0;
+    const totalSpentCents = parseFloat(row.total_spent_cents) || 0;
+    const createdAt = row.created_at instanceof Date ? row.created_at : new Date(row.created_at);
+    const daysSinceSignup = Math.floor((now - createdAt.getTime()) / (1000 * 60 * 60 * 24));
+    const lastActivity = row.last_activity_at ? new Date(row.last_activity_at) : null;
+    const isActiveUser = lastActivity ? (now - lastActivity.getTime()) < 30 * 24 * 60 * 60 * 1000 : false;
+    return {
+      id: row.id,
+      name: row.name || '(no name)',
+      email: row.email,
+      phone: row.phone ?? null,
+      networkHandle: row.network_handle ?? null,
+      industry: row.industry ?? null,
+      tradeType: row.trade_type ?? null,
+      companyName: row.company_name ?? null,
+      businessName: row.business_name ?? null,
+      businessType: row.business_type ?? null,
+      city: row.city ?? null,
+      state: row.state ?? null,
+      website: row.website ?? null,
+      hasLicense: !!(row.license_number),
+      licenseNumber: row.license_number ?? null,
+      phoneVerified: row.phone_verified || false,
+      onboardingCompleted: row.onboarding_completed || false,
+      twilioPhoneNumber: row.twilio_phone_number ?? null,
+      isActive: isActiveUser,
+      daysSinceSignup,
+      createdAt: createdAt.toISOString(),
+      balanceCents,
+      balanceDollars: (balanceCents / 100).toFixed(2),
+      totalSpentCents,
+      totalSpentDollars: (totalSpentCents / 100).toFixed(2),
+      subscriptionStatus: row.subscription_status ?? null,
+      subscriptionPlanId: row.subscription_plan_id ?? null,
+      leadCount: parseInt(row.lead_count) || 0,
+      messageCount: parseInt(row.message_count) || 0,
+      campaignCount: parseInt(row.campaign_count) || 0,
+      teamMemberCount: parseInt(row.team_count) || 0,
+      lastActivityAt: row.last_activity_at ? new Date(row.last_activity_at).toISOString() : null,
+    };
+  });
   return { users, total };
 }
 
@@ -513,32 +638,76 @@ export async function getLeadPrimeUserIntelligenceStats(): Promise<UserIntellige
  */
 export async function updateLeadPrimeUserContact(
   contractorId: string,
-  updates: { name?: string; email?: string; phone?: string }
+  updates: {
+    name?: string;
+    email?: string;
+    phone?: string;
+    industry?: string;
+    companyName?: string;
+    // company_profiles fields
+    businessName?: string;
+    businessType?: string;
+    city?: string;
+    state?: string;
+    website?: string;
+  }
 ): Promise<{ success: boolean }> {
   const pool = getLeadPrimePool();
-  const setClauses: string[] = [];
-  const params: any[] = [];
 
-  if (updates.name !== undefined) {
-    params.push(updates.name);
-    setClauses.push(`name = $${params.length}`);
+  // ── Update contractors table ──────────────────────────────────────────────
+  const contractorCols: string[] = [];
+  const contractorParams: any[] = [];
+  const contractorFields: Record<string, any> = {
+    name: updates.name,
+    email: updates.email,
+    phone: updates.phone,
+    industry: updates.industry,
+    company_name: updates.companyName,
+  };
+  for (const [col, val] of Object.entries(contractorFields)) {
+    if (val !== undefined) {
+      contractorParams.push(val);
+      contractorCols.push(`${col} = $${contractorParams.length}`);
+    }
   }
-  if (updates.email !== undefined) {
-    params.push(updates.email);
-    setClauses.push(`email = $${params.length}`);
-  }
-  if (updates.phone !== undefined) {
-    params.push(updates.phone);
-    setClauses.push(`phone = $${params.length}`);
+  if (contractorCols.length > 0) {
+    contractorParams.push(contractorId);
+    await pool.query(
+      `UPDATE contractors SET ${contractorCols.join(', ')}, updated_at = NOW() WHERE id = $${contractorParams.length}`,
+      contractorParams
+    );
   }
 
-  if (setClauses.length === 0) return { success: true };
-
-  params.push(contractorId);
-  await pool.query(
-    `UPDATE contractors SET ${setClauses.join(', ')}, updated_at = NOW() WHERE id = $${params.length}`,
-    params
-  );
+  // ── Update company_profiles table ────────────────────────────────────────
+  const profileFields: Record<string, any> = {
+    business_name: updates.businessName,
+    business_type: updates.businessType,
+    city: updates.city,
+    state: updates.state,
+    website: updates.website,
+  };
+  const profileCols: string[] = [];
+  const profileParams: any[] = [];
+  for (const [col, val] of Object.entries(profileFields)) {
+    if (val !== undefined) {
+      profileParams.push(val);
+      profileCols.push(`${col} = $${profileParams.length}`);
+    }
+  }
+  if (profileCols.length > 0) {
+    profileParams.push(contractorId);
+    // Upsert: insert row if not exists, then update
+    await pool.query(
+      `INSERT INTO company_profiles (id, contractor_id, updated_at)
+       VALUES (gen_random_uuid()::VARCHAR(50), $${profileParams.length}, NOW())
+       ON CONFLICT (contractor_id) DO NOTHING`,
+      [contractorId]
+    );
+    await pool.query(
+      `UPDATE company_profiles SET ${profileCols.join(', ')}, updated_at = NOW() WHERE contractor_id = $${profileParams.length}`,
+      profileParams
+    );
+  }
 
   return { success: true };
 }

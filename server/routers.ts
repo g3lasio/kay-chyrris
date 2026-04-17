@@ -857,9 +857,16 @@ export const appRouter = router({
     updateUserContact: protectedProcedure
       .input(z.object({
         contractorId: z.string(),
+        name: z.string().optional(),
         email: z.string().email().optional(),
         phone: z.string().optional(),
-        name: z.string().optional(),
+        industry: z.string().optional(),
+        companyName: z.string().optional(),
+        businessName: z.string().optional(),
+        businessType: z.string().optional(),
+        city: z.string().optional(),
+        state: z.string().optional(),
+        website: z.string().optional(),
       }))
       .mutation(async ({ input }) => {
         try {

@@ -28,6 +28,8 @@ interface EnrichedUser {
   name: string;
   email: string;
   phone: string | null;
+  networkHandle: string | null;
+  companyName: string | null;
   createdAt: string;
   balanceCents: number;
   balanceDollars: string;
@@ -89,6 +91,12 @@ export default function LeadPrimeUsersIntelligence() {
   const [editName, setEditName] = useState('');
   const [editEmail, setEditEmail] = useState('');
   const [editPhone, setEditPhone] = useState('');
+  const [editIndustry, setEditIndustry] = useState('');
+  const [editCompanyName, setEditCompanyName] = useState('');
+  const [editCity, setEditCity] = useState('');
+  const [editState, setEditState] = useState('');
+  const [editWebsite, setEditWebsite] = useState('');
+  const [editBusinessType, setEditBusinessType] = useState('');
 
   // Grant credits modal state
   const [grantUser, setGrantUser] = useState<EnrichedUser | null>(null);
@@ -216,6 +224,12 @@ export default function LeadPrimeUsersIntelligence() {
     setEditName(u.name);
     setEditEmail(u.email);
     setEditPhone(u.phone ?? '');
+    setEditIndustry(u.industry ?? '');
+    setEditCompanyName(u.companyName ?? '');
+    setEditCity(u.city ?? '');
+    setEditState(u.state ?? '');
+    setEditWebsite(u.website ?? '');
+    setEditBusinessType(u.businessType ?? '');
   }
 
   const industries = useMemo(() => {
@@ -421,6 +435,7 @@ export default function LeadPrimeUsersIntelligence() {
                         <td className="px-4 py-3">
                           <div className="font-medium truncate max-w-[180px]">{u.businessName || u.name}</div>
                           <div className="text-xs text-muted-foreground truncate max-w-[180px]">{u.email}</div>
+                          {u.networkHandle && <div className="text-xs text-primary/70 font-mono mt-0.5">@{u.networkHandle}</div>}
                           {u.hasLicense && <span className="text-xs text-emerald-400 flex items-center gap-0.5 mt-0.5"><BadgeCheck className="h-3 w-3" /> Licensed</span>}
                         </td>
                         <td className="px-3 py-3">
@@ -493,6 +508,18 @@ export default function LeadPrimeUsersIntelligence() {
                                 <div className="text-muted-foreground mb-1 flex items-center gap-1"><Calendar className="h-3 w-3" /> Days since signup</div>
                                 <div>{u.daysSinceSignup} days</div>
                               </div>
+                              {u.networkHandle && (
+                                <div>
+                                  <div className="text-muted-foreground mb-1 flex items-center gap-1"><span className="text-primary font-bold">@</span> Handle</div>
+                                  <div className="font-mono text-primary">@{u.networkHandle}</div>
+                                </div>
+                              )}
+                              {u.companyName && (
+                                <div>
+                                  <div className="text-muted-foreground mb-1 flex items-center gap-1"><Building2 className="h-3 w-3" /> Company</div>
+                                  <div>{u.companyName}</div>
+                                </div>
+                              )}
                               <div>
                                 <div className="text-muted-foreground mb-1">User ID</div>
                                 <div className="font-mono text-xs opacity-60 truncate">{u.id}</div>
@@ -529,16 +556,39 @@ export default function LeadPrimeUsersIntelligence() {
               <h2 className="font-semibold">Edit Contact — {editUser.name}</h2>
               <button onClick={() => setEditUser(null)}><X className="h-4 w-4" /></button>
             </div>
-            <div className="space-y-3">
+            <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider pt-1">Identity</div>
               <div><Label>Name</Label><Input value={editName} onChange={e => setEditName(e.target.value)} /></div>
-              <div><Label>Email</Label><Input value={editEmail} onChange={e => setEditEmail(e.target.value)} /></div>
-              <div><Label>Phone</Label><Input value={editPhone} onChange={e => setEditPhone(e.target.value)} /></div>
+              <div><Label>Email</Label><Input type="email" value={editEmail} onChange={e => setEditEmail(e.target.value)} /></div>
+              <div><Label>Phone</Label><Input type="tel" placeholder="+1 (555) 000-0000" value={editPhone} onChange={e => setEditPhone(e.target.value)} /></div>
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider pt-2">Business</div>
+              <div><Label>Company Name</Label><Input placeholder="Acme LLC" value={editCompanyName} onChange={e => setEditCompanyName(e.target.value)} /></div>
+              <div><Label>Industry</Label><Input placeholder="e.g. Roofing, HVAC, Plumbing" value={editIndustry} onChange={e => setEditIndustry(e.target.value)} /></div>
+              <div><Label>Business Type</Label><Input placeholder="e.g. LLC, Sole Proprietor" value={editBusinessType} onChange={e => setEditBusinessType(e.target.value)} /></div>
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider pt-2">Location & Web</div>
+              <div className="grid grid-cols-2 gap-2">
+                <div><Label>City</Label><Input placeholder="Austin" value={editCity} onChange={e => setEditCity(e.target.value)} /></div>
+                <div><Label>State</Label><Input placeholder="TX" maxLength={2} value={editState} onChange={e => setEditState(e.target.value.toUpperCase())} /></div>
+              </div>
+              <div><Label>Website</Label><Input type="url" placeholder="https://example.com" value={editWebsite} onChange={e => setEditWebsite(e.target.value)} /></div>
             </div>
-            <div className="flex gap-2 justify-end">
+            <div className="flex gap-2 justify-end pt-2">
               <Button variant="outline" onClick={() => setEditUser(null)}>Cancel</Button>
               <Button
                 disabled={updateContact.isPending}
-                onClick={() => updateContact.mutate({ contractorId: editUser.id, name: editName || undefined, email: editEmail || undefined, phone: editPhone || undefined })}
+                onClick={() => updateContact.mutate({
+                  contractorId: editUser.id,
+                  name: editName || undefined,
+                  email: editEmail || undefined,
+                  phone: editPhone || undefined,
+                  industry: editIndustry || undefined,
+                  companyName: editCompanyName || undefined,
+                  businessName: editCompanyName || undefined,
+                  businessType: editBusinessType || undefined,
+                  city: editCity || undefined,
+                  state: editState || undefined,
+                  website: editWebsite || undefined,
+                })}
               >
                 {updateContact.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 mr-1" />} Save
               </Button>
