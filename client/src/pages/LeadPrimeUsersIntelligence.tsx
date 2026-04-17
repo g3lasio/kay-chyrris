@@ -168,7 +168,7 @@ export default function LeadPrimeUsersIntelligence() {
 
   const users: EnrichedUser[] = (usersQuery.data?.data as any) ?? [];
   const total = usersQuery.data?.total ?? 0;
-  const stats = statsQuery.data?.data;
+  const stats = statsQuery.data?.data as any;
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
 
@@ -564,7 +564,7 @@ export default function LeadPrimeUsersIntelligence() {
               <Button variant="outline" onClick={() => setGrantUser(null)}>Cancel</Button>
               <Button
                 disabled={!grantAmount || parseFloat(grantAmount) <= 0 || grantCredits.isPending}
-                onClick={() => grantCredits.mutate({ contractorIds: [grantUser.id], amountCents: Math.round(parseFloat(grantAmount) * 100), description: grantDesc, grantedBy: 'kai-admin' })}
+                onClick={() => grantCredits.mutate({ contractorId: grantUser.id, amountDollars: parseFloat(grantAmount), description: grantDesc })}
               >
                 {grantCredits.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Gift className="h-4 w-4 mr-1" />} Grant
               </Button>

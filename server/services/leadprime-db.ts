@@ -56,13 +56,13 @@ export interface LeadPrimeUser {
   name: string;
   email: string;
   phone: string | null;
-  createdAt: Date;
+  createdAt: string;
   balanceCents: number;
   balanceDollars: string;
   welcomeCreditGranted: boolean;
-  welcomeCreditExpiresAt: Date | null;
+  welcomeCreditExpiresAt: string | null;
   subscriptionStatus: string | null;
-  trialEnd: Date | null;
+  trialEnd: string | null;
 }
 
 export interface LeadPrimeTransaction {
@@ -74,7 +74,7 @@ export interface LeadPrimeTransaction {
   type: string;
   description: string;
   metadata: Record<string, any>;
-  createdAt: Date;
+  createdAt: string;
 }
 
 export interface LeadPrimeAdminGrant {
@@ -88,8 +88,8 @@ export interface LeadPrimeAdminGrant {
   description: string;
   note: string | null;
   applied: boolean;
-  appliedAt: Date | null;
-  createdAt: Date;
+  appliedAt: string | null;
+  createdAt: string;
 }
 
 export interface GrantResult {
@@ -369,7 +369,7 @@ export interface EnrichedUser {
   phoneVerified: boolean;
   onboardingCompleted: boolean;
   twilioPhoneNumber: string | null;
-  createdAt: Date;
+  createdAt: string;
   // wallet
   balanceCents: number;
   balanceDollars: string;
@@ -379,7 +379,7 @@ export interface EnrichedUser {
   leadCount: number;
   messageCount: number;
   campaignCount: number;
-  lastActivityAt: Date | null;
+  lastActivityAt: string | null;
 }
 
 export interface UserIntelligenceStats {
@@ -657,4 +657,270 @@ export async function deleteLeadPrimeUsers(
       ? `${deleted} user(s) deleted successfully`
       : `${deleted} deleted, ${failed.length} failed`,
   };
+}
+
+// ─── ALIAS EXPORTS FOR ROUTER COMPATIBILITY ───────────────────────────────────
+// The router imports these names; the actual implementations use longer names.
+export const getEnrichedUsers = getEnrichedLeadPrimeUsers;
+export const getUserIntelligenceStats = getLeadPrimeUserIntelligenceStats;
+
+// ─── WALLET STATS ─────────────────────────────────────────────────────────────
+export interface LeadPrimeWalletStats {
+  totalUsers: number;
+  usersWithWallet: number;
+  totalBalanceCents: number;
+  totalGrantedThisMonth: number;
+  activeSubscribers: number;
+  trialUsers: number;
+}
+
+export async function getLeadPrimeWalletStats(): Promise<LeadPrimeWalletStats> {
+  const pool = getLeadPrimePool();
+  const result = await pool.query(`
+    SELECT
+      (SELECT COUNT(*) FROM contractors) AS total_users,
+      (SELECT COUNT(*) FROM wallets WHERE balance_cents > 0) AS users_with_wallet,
+      (SELECT COALESCE(SUM(balance_cents), 0) FROM wallets) AS total_balance_cents,
+      (
+        SELECT COALESCE(SUM(amount_cents), 0)
+        FROM admin_credit_grants
+        WHERE created_at >= date_trunc('month', NOW())
+      ) AS total_granted_this_month,
+      (
+        SELECT COUNT(*)
+        FROM subscriptions
+        WHERE status = 'active'
+      ) AS active_subscribers,
+      (
+        SELECT COUNT(*)
+        FROM subscriptions
+        WHERE status = 'trialing'
+      ) AS trial_users
+  `);
+  const row = result.rows[0];
+  return {
+    totalUsers: parseInt(row.total_users) || 0,
+    usersWithWallet: parseInt(row.users_with_wallet) || 0,
+    totalBalanceCents: parseFloat(row.total_balance_cents) || 0,
+    totalGrantedThisMonth: parseFloat(row.total_granted_this_month) || 0,
+    activeSubscribers: parseInt(row.active_subscribers) || 0,
+    trialUsers: parseInt(row.trial_users) || 0,
+  };
+}
+
+// ─── SYSTEM ISSUES ────────────────────────────────────────────────────────────
+export interface SystemIssue {
+  id: string;
+  contractorId: string;
+  toolName: string | null;
+  issueType: 'bug' | 'feature_request' | 'config_error';
+  title: string;
+  description: string;
+  errorMessage: string | null;
+  status: 'new' | 'reviewing' | 'resolved';
+  occurrences: number;
+  affectedContractors: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SystemIssueStats {
+  total: number;
+  byStatus: { new: number; reviewing: number; resolved: number };
+  byType: { bug: number; feature_request: number; config_error: number };
+  topIssues: Array<{ id: string; title: string; occurrences: number; status: string; issueType: string }>;
+}
+
+/**
+ * Get system issues list with optional filters.
+ * Handles missing table gracefully — returns empty results instead of crashing.
+ */
+export async function getSystemIssues(options: {
+  status?: string;
+  issue_type?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<{ issues: SystemIssue[]; total: number }> {
+  const pool = getLeadPrimePool();
+  const { status = 'all', issue_type = 'all', limit = 50, offset = 0 } = options;
+
+  try {
+    const conditions: string[] = [];
+    const params: any[] = [];
+
+    if (status && status !== 'all') {
+      params.push(status);
+      conditions.push(`status = $${params.length}`);
+    }
+    if (issue_type && issue_type !== 'all') {
+      params.push(issue_type);
+      conditions.push(`issue_type = $${params.length}`);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const countResult = await pool.query(
+      `SELECT COUNT(*) AS total FROM system_issues ${whereClause}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0]?.total) || 0;
+
+    const dataParams = [...params, limit, offset];
+    const dataResult = await pool.query(
+      `SELECT
+         id, contractor_id, tool_name, issue_type, title, description,
+         error_message, status, occurrences,
+         COALESCE(affected_contractors, '{}') AS affected_contractors,
+         created_at, updated_at
+       FROM system_issues
+       ${whereClause}
+       ORDER BY
+         CASE status WHEN 'new' THEN 0 WHEN 'reviewing' THEN 1 ELSE 2 END,
+         occurrences DESC,
+         created_at DESC
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      dataParams
+    );
+
+    const issues: SystemIssue[] = dataResult.rows.map(row => ({
+      id: row.id,
+      contractorId: row.contractor_id,
+      toolName: row.tool_name,
+      issueType: row.issue_type,
+      title: row.title,
+      description: row.description,
+      errorMessage: row.error_message,
+      status: row.status,
+      occurrences: parseInt(row.occurrences) || 1,
+      affectedContractors: Array.isArray(row.affected_contractors)
+        ? row.affected_contractors
+        : [],
+      createdAt: row.created_at instanceof Date
+        ? row.created_at.toISOString()
+        : row.created_at,
+      updatedAt: row.updated_at instanceof Date
+        ? row.updated_at.toISOString()
+        : row.updated_at,
+    }));
+
+    return { issues, total };
+  } catch (err: any) {
+    if (err.code === '42P01') {
+      console.warn('[LeadPrime DB] system_issues table does not exist yet — returning empty');
+      return { issues: [], total: 0 };
+    }
+    throw err;
+  }
+}
+
+/**
+ * Get aggregate stats for system issues dashboard.
+ * Handles missing table gracefully.
+ */
+export async function getSystemIssueStats(): Promise<SystemIssueStats> {
+  const pool = getLeadPrimePool();
+  try {
+    const result = await pool.query(`
+      SELECT
+        COUNT(*) AS total,
+        COUNT(*) FILTER (WHERE status = 'new') AS new_count,
+        COUNT(*) FILTER (WHERE status = 'reviewing') AS reviewing_count,
+        COUNT(*) FILTER (WHERE status = 'resolved') AS resolved_count,
+        COUNT(*) FILTER (WHERE issue_type = 'bug') AS bug_count,
+        COUNT(*) FILTER (WHERE issue_type = 'feature_request') AS feature_count,
+        COUNT(*) FILTER (WHERE issue_type = 'config_error') AS config_count
+      FROM system_issues
+    `);
+    const row = result.rows[0];
+
+    const topResult = await pool.query(`
+      SELECT id, title, occurrences, status, issue_type
+      FROM system_issues
+      WHERE status != 'resolved'
+      ORDER BY occurrences DESC
+      LIMIT 5
+    `);
+    return {
+      total: parseInt(row.total) || 0,
+      byStatus: {
+        new: parseInt(row.new_count) || 0,
+        reviewing: parseInt(row.reviewing_count) || 0,
+        resolved: parseInt(row.resolved_count) || 0,
+      },
+      byType: {
+        bug: parseInt(row.bug_count) || 0,
+        feature_request: parseInt(row.feature_count) || 0,
+        config_error: parseInt(row.config_count) || 0,
+      },
+      topIssues: topResult.rows.map(r => ({
+        id: r.id,
+        title: r.title,
+        occurrences: parseInt(r.occurrences) || 1,
+        status: r.status,
+        issueType: r.issue_type,
+      })),
+    };
+  } catch (err: any) {
+    if (err.code === '42P01') {
+      console.warn('[LeadPrime DB] system_issues table does not exist yet — returning empty stats');
+      return {
+        total: 0,
+        byStatus: { new: 0, reviewing: 0, resolved: 0 },
+        byType: { bug: 0, feature_request: 0, config_error: 0 },
+        topIssues: [],
+      };
+    }
+    throw err;
+  }
+}
+
+/**
+ * Update the status of a system issue.
+ * Returns the updated issue or null if not found.
+ */
+export async function updateSystemIssueStatus(
+  issueId: string,
+  status: string
+): Promise<SystemIssue | null> {
+  const pool = getLeadPrimePool();
+  try {
+    const result = await pool.query(
+      `UPDATE system_issues
+       SET status = $1, updated_at = NOW()
+       WHERE id = $2
+       RETURNING
+         id, contractor_id, tool_name, issue_type, title, description,
+         error_message, status, occurrences,
+         COALESCE(affected_contractors, '{}') AS affected_contractors,
+         created_at, updated_at`,
+      [status, issueId]
+    );
+    if (!result.rows.length) return null;
+    const row = result.rows[0];
+    return {
+      id: row.id,
+      contractorId: row.contractor_id,
+      toolName: row.tool_name,
+      issueType: row.issue_type,
+      title: row.title,
+      description: row.description,
+      errorMessage: row.error_message,
+      status: row.status,
+      occurrences: parseInt(row.occurrences) || 1,
+      affectedContractors: Array.isArray(row.affected_contractors)
+        ? row.affected_contractors
+        : [],
+      createdAt: row.created_at instanceof Date
+        ? row.created_at.toISOString()
+        : row.created_at,
+      updatedAt: row.updated_at instanceof Date
+        ? row.updated_at.toISOString()
+        : row.updated_at,
+    };
+  } catch (err: any) {
+    if (err.code === '42P01') {
+      throw new Error('system_issues table does not exist');
+    }
+    throw err;
+  }
 }

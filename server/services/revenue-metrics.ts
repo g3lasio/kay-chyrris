@@ -3,7 +3,7 @@ import { getOwlFencUsers } from './owlfenc-firebase';
 
 const stripeKey = process.env.STRIPE_SECRET_KEY;
 const stripe = stripeKey ? new Stripe(stripeKey, {
-  apiVersion: '2026-02-25.clover',
+  apiVersion: '2025-12-15.clover',
 }) : null;
 
 export interface RevenueMetrics {

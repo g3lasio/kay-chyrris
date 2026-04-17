@@ -58,7 +58,7 @@ function formatCents(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
-function subscriptionBadge(status: string | null): JSX.Element {
+function subscriptionBadge(status: string | null) {
   if (!status) return <span className="text-xs text-muted-foreground">No sub</span>;
   const colors: Record<string, string> = {
     active: 'bg-green-500/20 text-green-300 border border-green-500/30',
