@@ -61,6 +61,8 @@ async function seedApplications() {
 async function startServer() {
   const app = express();
   const server = createServer(app);
+  // Trust reverse proxies (Railway/Cloud Run) so req.protocol reflects original HTTPS.
+  app.set("trust proxy", 1);
   // Configure cookie parser
   app.use(cookieParser());
   // Configure body parser with larger size limit for file uploads
