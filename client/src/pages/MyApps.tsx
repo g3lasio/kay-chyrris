@@ -54,7 +54,7 @@ export default function MyApps() {
           value: leadPrimeStatsQuery.isLoading
             ? null
             : lpStats
-            ? `$${(lpStats.totalBalanceCents / 100).toFixed(0)}`
+            ? `$${(lpStats.totalBalanceCents / 100).toFixed(2)}`
             : "—",
         },
       ],

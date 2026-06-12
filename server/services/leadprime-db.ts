@@ -26,7 +26,7 @@
  *   amount_cents, description, note, applied, applied_at, created_at
  *
  * subscriptions:
- *   contractor_id, status ('active'|'trialing'|'canceled'|...), trial_end
+ *   contractor_id, status ('active'|'trialing'|'canceled'|...), plan, trial_end
  */
 
 import { Pool } from 'pg';
@@ -56,12 +56,14 @@ export interface LeadPrimeUser {
   name: string;
   email: string;
   phone: string | null;
+  businessName: string | null;
   createdAt: string;
   balanceCents: number;
   balanceDollars: string;
   welcomeCreditGranted: boolean;
   welcomeCreditExpiresAt: string | null;
   subscriptionStatus: string | null;
+  subscriptionPlan: string | null;
   trialEnd: string | null;
 }
 
@@ -115,15 +117,21 @@ export async function getLeadPrimeUsers(options: {
 
   if (search) {
     params.push(`%${search.toLowerCase()}%`);
-    whereClause = `WHERE LOWER(c.name) LIKE $1 OR LOWER(c.email) LIKE $1 OR c.phone LIKE $1`;
+    whereClause = `WHERE LOWER(c.name) LIKE $1 OR LOWER(c.email) LIKE $1 OR c.phone LIKE $1
+      OR LOWER(COALESCE(c.company_name, '')) LIKE $1 OR LOWER(COALESCE(cp.business_name, '')) LIKE $1`;
   }
 
   const countResult = await pool.query(
-    `SELECT COUNT(*) FROM contractors c ${whereClause}`,
+    `SELECT COUNT(*)
+     FROM contractors c
+     LEFT JOIN company_profiles cp ON cp.contractor_id = c.id
+     ${whereClause}`,
     params
   );
   const total = parseInt(countResult.rows[0].count, 10);
 
+  // Subscriptions are joined via LATERAL so a contractor with multiple
+  // subscription rows yields exactly one user row (active > trialing > rest).
   const dataParams = [...params, limit, offset];
   const result = await pool.query(
     `SELECT
@@ -132,14 +140,28 @@ export async function getLeadPrimeUsers(options: {
        c.email,
        c.phone,
        c.created_at,
+       COALESCE(NULLIF(TRIM(cp.business_name), ''), NULLIF(TRIM(c.company_name), '')) AS business_name,
        COALESCE(w.balance_cents, 0) AS balance_cents,
        COALESCE(w.welcome_credit_granted, false) AS welcome_credit_granted,
        w.welcome_credit_expires_at,
        s.status AS subscription_status,
+       s.plan AS subscription_plan,
        NULL::timestamp AS trial_end
      FROM contractors c
+     LEFT JOIN company_profiles cp ON cp.contractor_id = c.id
      LEFT JOIN wallets w ON w.contractor_id = c.id
-     LEFT JOIN subscriptions s ON s.contractor_id = c.id
+     LEFT JOIN LATERAL (
+       SELECT status, plan
+       FROM subscriptions
+       WHERE contractor_id = c.id
+       ORDER BY CASE status
+         WHEN 'active' THEN 0
+         WHEN 'trialing' THEN 1
+         WHEN 'past_due' THEN 2
+         ELSE 3
+       END
+       LIMIT 1
+     ) s ON true
      ${whereClause}
      ORDER BY c.created_at DESC
      LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
@@ -151,12 +173,14 @@ export async function getLeadPrimeUsers(options: {
     name: row.name || '(no name)',
     email: row.email,
     phone: row.phone,
+    businessName: row.business_name ?? null,
     createdAt: row.created_at,
     balanceCents: parseFloat(row.balance_cents) || 0,
     balanceDollars: ((parseFloat(row.balance_cents) || 0) / 100).toFixed(2),
     welcomeCreditGranted: row.welcome_credit_granted,
     welcomeCreditExpiresAt: row.welcome_credit_expires_at,
     subscriptionStatus: row.subscription_status,
+    subscriptionPlan: row.subscription_plan ?? null,
     trialEnd: row.trial_end,
   }));
 

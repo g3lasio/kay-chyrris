@@ -8,7 +8,7 @@
  * - Per-user actions: edit contact, grant credits, delete
  * - Batch delete: select multiple users and delete at once
  */
-import { useState, useMemo } from 'react';
+import { Fragment, useState, useMemo } from 'react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -394,7 +394,8 @@ export default function LeadPrimeUsersIntelligence() {
                         title="Select all"
                       />
                     </th>
-                    <th className="text-left px-4 py-3 font-medium">User / Company</th>
+                    <th className="text-left px-4 py-3 font-medium">User</th>
+                    <th className="text-left px-3 py-3 font-medium">Business</th>
                     <th className="text-left px-3 py-3 font-medium">Industry</th>
                     <th className="text-left px-3 py-3 font-medium">Location</th>
                     <th className="text-left px-3 py-3 font-medium">Status</th>
@@ -418,9 +419,8 @@ export default function LeadPrimeUsersIntelligence() {
                 </thead>
                 <tbody>
                   {users.map(u => (
-                    <>
+                    <Fragment key={u.id}>
                       <tr
-                        key={u.id}
                         className={`border-b border-border/30 hover:bg-accent/30 transition-colors cursor-pointer ${selectedIds.has(u.id) ? 'bg-destructive/5' : ''}`}
                         onClick={() => setExpandedId(expandedId === u.id ? null : u.id)}
                       >
@@ -433,10 +433,20 @@ export default function LeadPrimeUsersIntelligence() {
                           />
                         </td>
                         <td className="px-4 py-3">
-                          <div className="font-medium truncate max-w-[180px]">{u.businessName || u.name}</div>
+                          <div className="font-medium truncate max-w-[180px]">{u.name}</div>
                           <div className="text-xs text-muted-foreground truncate max-w-[180px]">{u.email}</div>
                           {u.networkHandle && <div className="text-xs text-primary/70 font-mono mt-0.5">@{u.networkHandle}</div>}
                           {u.hasLicense && <span className="text-xs text-emerald-400 flex items-center gap-0.5 mt-0.5"><BadgeCheck className="h-3 w-3" /> Licensed</span>}
+                        </td>
+                        <td className="px-3 py-3">
+                          {(u.businessName || u.companyName) ? (
+                            <div className="flex items-center gap-1.5">
+                              <Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              <span className="text-xs font-medium truncate max-w-[160px]">{u.businessName || u.companyName}</span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
                         </td>
                         <td className="px-3 py-3">
                           <div className="text-xs">{u.industry ?? '—'}</div>
@@ -473,8 +483,8 @@ export default function LeadPrimeUsersIntelligence() {
                         </td>
                       </tr>
                       {expandedId === u.id && (
-                        <tr key={`${u.id}-expanded`} className="bg-accent/20">
-                          <td colSpan={11} className="px-6 py-4">
+                        <tr className="bg-accent/20">
+                          <td colSpan={12} className="px-6 py-4">
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
                               <div>
                                 <div className="text-muted-foreground mb-1 flex items-center gap-1"><Mail className="h-3 w-3" /> Email</div>
@@ -490,7 +500,9 @@ export default function LeadPrimeUsersIntelligence() {
                               </div>
                               <div>
                                 <div className="text-muted-foreground mb-1 flex items-center gap-1"><Star className="h-3 w-3" /> Plan</div>
-                                <div>{u.subscriptionPlanId ?? '—'}</div>
+                                <div className="capitalize" title={u.subscriptionPlanId ?? undefined}>
+                                  {u.subscriptionPlanId ? u.subscriptionPlanId.replace(/^price_/, '').replace(/[_-]+/g, ' ') : '—'}
+                                </div>
                               </div>
                               {u.licenseNumber && (
                                 <div>
@@ -528,7 +540,7 @@ export default function LeadPrimeUsersIntelligence() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   ))}
                 </tbody>
               </table>

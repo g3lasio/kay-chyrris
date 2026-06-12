@@ -5,11 +5,14 @@
  * Features:
  *   - Stats overview: total users, balances, active subscribers
  *   - User table with real-time wallet balances, search, and checkbox selection
+ *   - Business name + subscription plan columns
+ *   - Linked-account grouping: accounts sharing a phone number are shown
+ *     together under one owner with a combined balance
  *   - Grant panel: individual or batch credit grants with description + note
  *   - Transaction history with type filter
  *   - Admin grant history with batch grouping
  */
-import { useState, useMemo } from 'react';
+import { Fragment, useState, useMemo } from 'react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -34,6 +37,9 @@ import {
   AlertTriangle,
   BadgeCheck,
   Clock,
+  Building2,
+  Link2,
+  CornerDownRight,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -43,13 +49,20 @@ interface LeadPrimeUser {
   name: string;
   email: string;
   phone: string | null;
+  businessName: string | null;
   createdAt: string;
   balanceCents: number;
   balanceDollars: string;
   welcomeCreditGranted: boolean;
   welcomeCreditExpiresAt: string | null;
   subscriptionStatus: string | null;
+  subscriptionPlan: string | null;
   trialEnd: string | null;
+}
+
+interface UserGroup {
+  key: string;
+  users: LeadPrimeUser[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -73,6 +86,39 @@ function subscriptionBadge(status: string | null) {
   );
 }
 
+const PLAN_COLORS: Record<string, string> = {
+  starter: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+  basic: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+  growth: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
+  pro: 'bg-fuchsia-500/15 text-fuchsia-300 border-fuchsia-500/30',
+  premium: 'bg-fuchsia-500/15 text-fuchsia-300 border-fuchsia-500/30',
+  elite: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+  enterprise: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+};
+
+function planBadge(plan: string | null) {
+  if (!plan) return <span className="text-xs text-muted-foreground">—</span>;
+  const label = plan.replace(/^price_/, '').replace(/[_-]+/g, ' ').trim();
+  const colorKey = label.split(' ')[0].toLowerCase();
+  const cls = PLAN_COLORS[colorKey] ?? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30';
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full font-medium border capitalize whitespace-nowrap ${cls}`} title={plan}>
+      {label}
+    </span>
+  );
+}
+
+/**
+ * Normalize a phone number for linked-account matching: keep the last 10
+ * digits so "+1 707 770 4888" and "7077704888" map to the same key.
+ */
+function normalizePhone(phone: string | null): string | null {
+  if (!phone) return null;
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length < 7) return null;
+  return digits.slice(-10);
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function LeadPrimeCreditsAdmin() {
@@ -84,6 +130,7 @@ export default function LeadPrimeCreditsAdmin() {
   const [activeTab, setActiveTab] = useState<'users' | 'transactions' | 'grants'>('users');
   const [showGrantPanel, setShowGrantPanel] = useState(false);
   const [txTypeFilter, setTxTypeFilter] = useState('');
+  const [groupLinked, setGroupLinked] = useState(true);
 
   // ─── Queries ────────────────────────────────────────────────────────────────
 
@@ -113,6 +160,29 @@ export default function LeadPrimeCreditsAdmin() {
   const allSelected = users.length > 0 && selectedIds.size === users.length;
   const someSelected = selectedIds.size > 0 && !allSelected;
 
+  // Group accounts that share a phone number (same owner, multiple businesses).
+  // Groups keep the server order (newest account first decides group position);
+  // accounts inside a group are also kept newest-first.
+  const userGroups: UserGroup[] = useMemo(() => {
+    if (!groupLinked) return users.map(u => ({ key: u.id, users: [u] }));
+    const byPhone = new Map<string, LeadPrimeUser[]>();
+    const order: string[] = [];
+    for (const u of users) {
+      const key = normalizePhone(u.phone) ?? `solo_${u.id}`;
+      if (!byPhone.has(key)) {
+        byPhone.set(key, []);
+        order.push(key);
+      }
+      byPhone.get(key)!.push(u);
+    }
+    return order.map(key => ({ key, users: byPhone.get(key)! }));
+  }, [users, groupLinked]);
+
+  const linkedGroupCount = useMemo(
+    () => userGroups.filter(g => g.users.length > 1).length,
+    [userGroups]
+  );
+
   // ─── Handlers ───────────────────────────────────────────────────────────────
 
   function toggleUser(id: string) {
@@ -130,6 +200,15 @@ export default function LeadPrimeCreditsAdmin() {
     } else {
       setSelectedIds(new Set(users.map(u => u.id)));
     }
+  }
+
+  function toggleGroup(group: UserGroup) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      const allInGroup = group.users.every(u => next.has(u.id));
+      group.users.forEach(u => (allInGroup ? next.delete(u.id) : next.add(u.id)));
+      return next;
+    });
   }
 
   async function handleGrant() {
@@ -260,16 +339,30 @@ export default function LeadPrimeCreditsAdmin() {
       {activeTab === 'users' && (
         <div className="space-y-4">
           {/* Search + Grant Button */}
-          <div className="flex gap-2">
-            <div className="relative flex-1">
+          <div className="flex flex-wrap gap-2">
+            <div className="relative flex-1 min-w-[220px]">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Search by name, email, or phone..."
+                placeholder="Search by name, email, phone, or business..."
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 className="pl-9"
               />
             </div>
+            <Button
+              variant={groupLinked ? 'secondary' : 'outline'}
+              onClick={() => setGroupLinked(v => !v)}
+              className="gap-2"
+              title="Group accounts that share the same phone number under one owner"
+            >
+              <Link2 className="h-4 w-4" />
+              Group accounts
+              {groupLinked && linkedGroupCount > 0 && (
+                <span className="bg-primary/15 text-primary text-xs px-1.5 py-0.5 rounded-full">
+                  {linkedGroupCount}
+                </span>
+              )}
+            </Button>
             <Button
               onClick={() => setShowGrantPanel(!showGrantPanel)}
               disabled={selectedIds.size === 0}
@@ -375,57 +468,127 @@ export default function LeadPrimeCreditsAdmin() {
                           </button>
                         </th>
                         <th className="p-3 text-left font-medium text-muted-foreground">User</th>
+                        <th className="p-3 text-left font-medium text-muted-foreground">Business</th>
                         <th className="p-3 text-left font-medium text-muted-foreground">Phone</th>
                         <th className="p-3 text-right font-medium text-muted-foreground">Balance</th>
+                        <th className="p-3 text-center font-medium text-muted-foreground">Plan</th>
                         <th className="p-3 text-center font-medium text-muted-foreground">Subscription</th>
                         <th className="p-3 text-center font-medium text-muted-foreground">Welcome Credit</th>
                         <th className="p-3 text-left font-medium text-muted-foreground">Joined</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {users.map(user => {
-                        const isSelected = selectedIds.has(user.id);
+                      {userGroups.map(group => {
+                        const isLinkedGroup = group.users.length > 1;
+                        const rows = group.users.map(user => {
+                          const isSelected = selectedIds.has(user.id);
+                          return (
+                            <tr
+                              key={user.id}
+                              onClick={() => toggleUser(user.id)}
+                              className={`border-b cursor-pointer transition-colors hover:bg-muted/20 ${isSelected ? 'bg-primary/5' : ''}`}
+                            >
+                              <td className="p-3">
+                                {isSelected ? (
+                                  <CheckSquare className="h-4 w-4 text-primary" />
+                                ) : (
+                                  <Square className="h-4 w-4 text-muted-foreground" />
+                                )}
+                              </td>
+                              <td className="p-3">
+                                <div className={`flex items-start gap-1.5 ${isLinkedGroup ? 'pl-3 border-l-2 border-primary/30' : ''}`}>
+                                  {isLinkedGroup && (
+                                    <CornerDownRight className="h-3.5 w-3.5 text-primary/50 mt-0.5 shrink-0" />
+                                  )}
+                                  <div>
+                                    <div className="font-medium">{user.name}</div>
+                                    <div className="text-xs text-muted-foreground">{user.email}</div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="p-3">
+                                {user.businessName ? (
+                                  <div className="flex items-center gap-1.5">
+                                    <Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                                    <span className="text-xs font-medium">{user.businessName}</span>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">—</span>
+                                )}
+                              </td>
+                              <td className="p-3 text-muted-foreground text-xs">{user.phone ?? '—'}</td>
+                              <td className="p-3 text-right">
+                                <span className={`font-mono font-semibold ${user.balanceCents <= 0 ? 'text-red-400' : user.balanceCents < 200 ? 'text-amber-400' : 'text-green-400'}`}>
+                                  {formatCents(user.balanceCents)}
+                                </span>
+                              </td>
+                              <td className="p-3 text-center">{planBadge(user.subscriptionPlan)}</td>
+                              <td className="p-3 text-center">{subscriptionBadge(user.subscriptionStatus)}</td>
+                              <td className="p-3 text-center">
+                                {user.welcomeCreditGranted ? (
+                                  <span className="text-xs text-green-400">✓ Granted</span>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">—</span>
+                                )}
+                              </td>
+                              <td className="p-3 text-xs text-muted-foreground">
+                                {new Date(user.createdAt).toLocaleDateString()}
+                              </td>
+                            </tr>
+                          );
+                        });
+
+                        if (!isLinkedGroup) return rows;
+
+                        // Oldest account (last in newest-first order) names the group
+                        const owner = group.users[group.users.length - 1];
+                        const combinedCents = group.users.reduce((sum, u) => sum + u.balanceCents, 0);
+                        const allInGroup = group.users.every(u => selectedIds.has(u.id));
+                        const someInGroup = !allInGroup && group.users.some(u => selectedIds.has(u.id));
+
                         return (
-                          <tr
-                            key={user.id}
-                            onClick={() => toggleUser(user.id)}
-                            className={`border-b cursor-pointer transition-colors hover:bg-muted/20 ${isSelected ? 'bg-primary/5' : ''}`}
-                          >
-                            <td className="p-3">
-                              {isSelected ? (
-                                <CheckSquare className="h-4 w-4 text-primary" />
-                              ) : (
-                                <Square className="h-4 w-4 text-muted-foreground" />
-                              )}
-                            </td>
-                            <td className="p-3">
-                              <div className="font-medium">{user.name}</div>
-                              <div className="text-xs text-muted-foreground">{user.email}</div>
-                            </td>
-                            <td className="p-3 text-muted-foreground text-xs">{user.phone ?? '—'}</td>
-                            <td className="p-3 text-right">
-                              <span className={`font-mono font-semibold ${user.balanceCents <= 0 ? 'text-red-400' : user.balanceCents < 200 ? 'text-amber-400' : 'text-green-400'}`}>
-                                {formatCents(user.balanceCents)}
-                              </span>
-                            </td>
-                            <td className="p-3 text-center">{subscriptionBadge(user.subscriptionStatus)}</td>
-                            <td className="p-3 text-center">
-                              {user.welcomeCreditGranted ? (
-                                <span className="text-xs text-green-400">✓ Granted</span>
-                              ) : (
-                                <span className="text-xs text-muted-foreground">—</span>
-                              )}
-                            </td>
-                            <td className="p-3 text-xs text-muted-foreground">
-                              {new Date(user.createdAt).toLocaleDateString()}
-                            </td>
-                          </tr>
+                          <Fragment key={`group-${group.key}`}>
+                            <tr
+                              onClick={() => toggleGroup(group)}
+                              className="border-b bg-primary/[0.06] cursor-pointer transition-colors hover:bg-primary/10"
+                            >
+                              <td className="p-3">
+                                {allInGroup ? (
+                                  <CheckSquare className="h-4 w-4 text-primary" />
+                                ) : someInGroup ? (
+                                  <CheckSquare className="h-4 w-4 text-primary/50" />
+                                ) : (
+                                  <Square className="h-4 w-4 text-muted-foreground" />
+                                )}
+                              </td>
+                              <td className="p-3" colSpan={2}>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <Link2 className="h-3.5 w-3.5 text-primary shrink-0" />
+                                  <span className="font-semibold">{owner.name}</span>
+                                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-primary/15 text-primary border border-primary/30 font-medium whitespace-nowrap">
+                                    {group.users.length} linked accounts
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="p-3 text-xs text-muted-foreground">{owner.phone ?? '—'}</td>
+                              <td className="p-3 text-right">
+                                <span className="font-mono font-semibold">{formatCents(combinedCents)}</span>
+                                <div className="text-[10px] text-muted-foreground">combined</div>
+                              </td>
+                              <td className="p-3" colSpan={4} />
+                            </tr>
+                            {rows}
+                          </Fragment>
                         );
                       })}
                     </tbody>
                   </table>
                   <div className="p-3 text-xs text-muted-foreground border-t">
-                    {users.length} users loaded · {selectedIds.size} selected
+                    {users.length} users loaded
+                    {groupLinked && linkedGroupCount > 0 && (
+                      <> · {linkedGroupCount} linked group{linkedGroupCount > 1 ? 's' : ''}</>
+                    )}
+                    {' '}· {selectedIds.size} selected
                   </div>
                 </div>
               )}

@@ -6,7 +6,6 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import Login from "./pages/Login";
-import Dashboard from "./pages/Dashboard";
 import MyApps from "./pages/MyApps";
 import OwlFencDashboard from "./pages/OwlFencDashboard";
 import Users from "./pages/Users";
