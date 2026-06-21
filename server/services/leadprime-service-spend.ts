@@ -173,9 +173,13 @@ async function getBilledRollup(pool: Pool, notes: string[]): Promise<BilledRollu
   };
   let topConsumers: TopConsumer[] = [];
 
+  // NOTE: production usage_events bills via the `cost` column (NUMERIC dollars =
+  // quantity * unit_cost), NOT total_cost_cents. (A legacy migration defined a
+  // total_cost_cents column that never materialized — the live INSERTs in
+  // usageTrackingService write `cost`.)
   try {
     const r = await pool.query(
-      `SELECT event_type, SUM(total_cost_cents)::bigint AS cents
+      `SELECT event_type, SUM(cost)::numeric AS usd
          FROM usage_events
         WHERE created_at >= date_trunc('month', now())
         GROUP BY event_type`
@@ -183,7 +187,7 @@ async function getBilledRollup(pool: Pool, notes: string[]): Promise<BilledRollu
     for (const row of r.rows) {
       const p = providerForEventType(String(row.event_type));
       if (!p) continue;
-      byProvider[p] += Number(row.cents || 0) / 100;
+      byProvider[p] += Number(row.usd || 0);
     }
   } catch (err: any) {
     if (isMissingSchema(err)) notes.push('billed: usage_events not available');
@@ -193,17 +197,17 @@ async function getBilledRollup(pool: Pool, notes: string[]): Promise<BilledRollu
   try {
     const r = await pool.query(
       `SELECT contractor_id,
-              SUM(total_cost_cents)::bigint AS cents,
+              SUM(cost)::numeric AS usd,
               COUNT(*)::int AS n
          FROM usage_events
         WHERE created_at >= date_trunc('month', now())
         GROUP BY contractor_id
-        ORDER BY cents DESC
+        ORDER BY usd DESC
         LIMIT 10`
     );
     topConsumers = r.rows.map((row) => ({
       contractorId: String(row.contractor_id),
-      billedUsd: Number(row.cents || 0) / 100,
+      billedUsd: Number(row.usd || 0),
       events: Number(row.n || 0),
     }));
   } catch (err: any) {
