@@ -242,37 +242,52 @@ async function getAnthropicSpend(billedUsd: number, notes: string[]): Promise<Pr
     return base;
   }
   base.configured = true;
-  const params = new URLSearchParams({
-    starting_at: monthStart().toISOString(),
-    ending_at: new Date().toISOString(),
-    bucket_width: '1d',
-  });
+  const startingAt = monthStart().toISOString();
+  const endingAt = new Date().toISOString();
   try {
-    const resp = await fetch(
-      `https://api.anthropic.com/v1/organizations/cost_report?${params}`,
-      {
-        headers: {
-          'x-api-key': key,
-          'anthropic-version': '2023-06-01',
-          Accept: 'application/json',
-        },
-        signal: AbortSignal.timeout(12000),
-      }
-    );
-    if (!resp.ok) {
-      const body = await resp.text().catch(() => '');
-      return applyHttpError(base, resp.status, body, 'Anthropic', notes);
-    }
-    const json: any = await resp.json();
-    const buckets: any[] = Array.isArray(json?.data) ? json.data : [];
     let month = 0;
     let today = 0;
     const todayKey = new Date().toISOString().slice(0, 10);
-    for (const b of buckets) {
-      const results: any[] = Array.isArray(b?.results) ? b.results : [];
-      const bucketTotal = results.reduce((s, r) => s + Number(r?.amount ?? r?.amount?.value ?? 0), 0);
-      month += bucketTotal;
-      if (String(b?.starting_at ?? '').slice(0, 10) === todayKey) today += bucketTotal;
+    let page: string | undefined;
+    // Anthropic paginates daily buckets (has_more / next_page). Walk every page
+    // so a full month is not truncated to the default page size.
+    for (let i = 0; i < 40; i++) {
+      const params = new URLSearchParams({
+        starting_at: startingAt,
+        ending_at: endingAt,
+        bucket_width: '1d',
+        limit: '31',
+      });
+      if (page) params.set('page', page);
+      const resp = await fetch(
+        `https://api.anthropic.com/v1/organizations/cost_report?${params}`,
+        {
+          headers: {
+            'x-api-key': key,
+            'anthropic-version': '2023-06-01',
+            Accept: 'application/json',
+          },
+          signal: AbortSignal.timeout(12000),
+        }
+      );
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => '');
+        return applyHttpError(base, resp.status, body, 'Anthropic', notes);
+      }
+      const json: any = await resp.json();
+      const buckets: any[] = Array.isArray(json?.data) ? json.data : [];
+      for (const b of buckets) {
+        const results: any[] = Array.isArray(b?.results) ? b.results : [];
+        // CRITICAL: Anthropic's `amount` is a decimal STRING in the LOWEST
+        // currency unit (cents) — "123.45" USD == $1.2345. Divide by 100 to get
+        // dollars. (It was summed as dollars → 100× overstatement, e.g. real
+        // ~$55/mo was shown as ~$5535/mo, which also blew up COGS & margins.)
+        const bucketTotal = results.reduce((s, r) => s + (Number(r?.amount) || 0) / 100, 0);
+        month += bucketTotal;
+        if (String(b?.starting_at ?? '').slice(0, 10) === todayKey) today += bucketTotal;
+      }
+      if (json?.has_more && json?.next_page) page = String(json.next_page);
+      else break;
     }
     base.available = true;
     base.monthSpendUsd = month;
