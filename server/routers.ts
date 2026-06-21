@@ -652,6 +652,22 @@ export const appRouter = router({
         }
       }),
 
+    // Read-only finance P&L — LeadPrime revenue captured by Stripe (filtered by
+    // metadata.product='leadprime' in the shared OwlFenc Stripe account), MRR/ARR,
+    // Stripe fees, COGS (providers + Neon), free credits (CAC) and gross/operating
+    // profit. NEVER moves money; only Stripe reads + SELECTs.
+    financeOverview: protectedProcedure
+      .query(async () => {
+        try {
+          const { getFinanceOverview } = await import('./services/leadprime-finance');
+          const data = await getFinanceOverview();
+          return { success: true, data };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error fetching finance overview:', error);
+          return { success: false, error: error.message, data: null };
+        }
+      }),
+
     // Get all LeadPrime users with wallet balances
     getUsers: protectedProcedure
       .input(z.object({
