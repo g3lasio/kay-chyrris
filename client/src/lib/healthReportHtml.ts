@@ -22,6 +22,7 @@ export interface HealthReportData {
     monthCostUsd: number;
     projectedMonthCostUsd: number;
     days: { date: string; activeHours: number; computeHours: number; alwaysOn: boolean }[];
+    riskVerdict?: { level: 'low' | 'elevated' | 'high' | 'unknown'; reason: string };
   };
   costPerUser: {
     available: boolean;
@@ -42,6 +43,7 @@ export interface HealthReportData {
       lastRunAt: string | null;
       totalRuns: number;
       keepsComputeAwake: boolean;
+      observedReliable: boolean;
       lastError: string | null;
     }[];
   };
@@ -115,6 +117,14 @@ export function buildHealthReportHtml(r: HealthReportData): string {
   const rangeWord = r.range === 'week' ? 'Weekly' : r.range === 'quarter' ? 'Quarterly' : 'Monthly';
   const leaksTone = r.billing.leaksDetected > 0 ? 'neg' : 'pos';
   const pollersTone = r.pollers.keepingComputeAwake > 0 ? 'warn' : 'pos';
+  const neonRisk = r.neon.riskVerdict?.level;
+  const neonTone: 'pos' | 'neg' | 'warn' = r.neon.available
+    ? 'warn'
+    : neonRisk === 'high'
+      ? 'neg'
+      : neonRisk === 'low'
+        ? 'pos'
+        : 'warn';
   const cpuSev = r.costPerUser.severity;
   const cpuTone = cpuSev === 'alarm' ? 'neg' : cpuSev === 'watch' ? 'warn' : 'pos';
 
@@ -133,7 +143,7 @@ export function buildHealthReportHtml(r: HealthReportData): string {
     .map(
       (w) => `<tr>
         <td>${esc(w.workerName)}</td>
-        <td class="num">${w.observedIntervalMs != null ? Math.round(w.observedIntervalMs / 1000) + 's' : '—'}</td>
+        <td class="num">${w.observedIntervalMs != null ? Math.round(w.observedIntervalMs / 1000) + 's' + (w.observedReliable ? '' : ' <span class="tag gray">burst</span>') : '—'}</td>
         <td class="num">${w.configuredIntervalMs != null ? Math.round(w.configuredIntervalMs / 1000) + 's' : '—'}</td>
         <td class="num">${w.totalRuns.toLocaleString('en-US')}</td>
         <td>${w.keepsComputeAwake ? '<span class="tag warn">keeps awake</span>' : '<span class="tag ok">ok</span>'}</td>
@@ -144,13 +154,16 @@ export function buildHealthReportHtml(r: HealthReportData): string {
 
   const providerRows = r.serviceSpend.providers
     .map((p) => {
+      const belowCost = p.available && p.marginUsd != null && p.marginUsd < 0;
       const status = p.keyIssue
         ? '<span class="tag neg">key rejected</span>'
         : p.paymentIssue
           ? '<span class="tag neg">payment issue</span>'
-          : p.available
-            ? '<span class="tag ok">ok</span>'
-            : '<span class="tag gray">off</span>';
+          : belowCost
+            ? '<span class="tag warn">below cost</span>'
+            : p.available
+              ? '<span class="tag ok">ok</span>'
+              : '<span class="tag gray">off</span>';
       return `<tr>
         <td>${esc(p.label)}</td>
         <td class="num">${p.monthSpendUsd != null ? usd(p.monthSpendUsd) : '—'}</td>
@@ -230,7 +243,7 @@ export function buildHealthReportHtml(r: HealthReportData): string {
 
   <h2>Health at a glance</h2>
   <div class="kpis">
-    ${kpiCard('Neon compute cost', r.neon.available ? usd(r.neon.costUsd) : 'n/a', r.neon.available ? `${r.neon.daysCovered} days · ${r.neon.computeHours} CU-h` : r.neon.note, 'warn')}
+    ${kpiCard('Neon compute cost', r.neon.available ? usd(r.neon.costUsd) : neonRisk ? `risk: ${neonRisk}` : 'n/a', r.neon.available ? `${r.neon.daysCovered} days · ${r.neon.computeHours} CU-h` : neonRisk ? 'API plan-gated' : r.neon.note, neonTone)}
     ${kpiCard('Billing leaks', String(r.billing.leaksDetected), r.billing.available ? 'detected' : 'detector off', leaksTone)}
     ${kpiCard('Pollers 24/7', String(r.pollers.keepingComputeAwake), `of ${r.pollers.workers.length} workers`, pollersTone)}
     ${kpiCard('Service margin', r.serviceSpend.available ? usd(r.serviceSpend.marginUsd) : 'n/a', r.serviceSpend.marginPct != null ? `${r.serviceSpend.marginPct}%` : undefined, r.serviceSpend.marginUsd >= 0 ? 'pos' : 'neg')}
@@ -247,7 +260,12 @@ export function buildHealthReportHtml(r: HealthReportData): string {
         </div>
         ${r.neon.capped ? '<p class="est">Window truncated to Neon&#39;s ~30-day retention.</p>' : ''}
         ${r.neon.days.length ? `<table style="margin-top:12px"><thead><tr><th>Date</th><th class="num">Active</th><th class="num">CU-hours</th><th>Suspend?</th></tr></thead><tbody>${neonRows}</tbody></table>` : ''}`
-      : `<p class="muted">Unavailable — ${esc(r.neon.note || 'set NEON_API_KEY + NEON_PROJECT_ID')}</p>`
+      : `<p class="muted">Consumption API unavailable — ${esc(r.neon.note || 'set NEON_API_KEY + NEON_PROJECT_ID')}</p>
+        ${
+          r.neon.riskVerdict
+            ? `<div class="kpis"><div class="kpi"><div class="kpi-label">Runaway-cost risk (from worker cadence)</div><div class="kpi-value" style="color:${neonTone === 'neg' ? '#b91c1c' : neonTone === 'pos' ? '#047857' : '#b45309'}">${esc(r.neon.riskVerdict.level)}</div><div class="kpi-sub">${esc(r.neon.riskVerdict.reason)}</div></div></div>`
+            : ''
+        }`
   }
 
   <h2>Cost per active user</h2>

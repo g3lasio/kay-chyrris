@@ -25,18 +25,20 @@ import {
   getStripe,
   getStripeKeySource,
   getLeadPrimePool,
-  LP_FILTER,
+  sumLeadPrimeCharges,
   FEE_PCT,
   FEE_FIXED,
   round,
   isMissingSchema,
   metaFor,
+  FREE_CREDIT_TYPES,
+  REAL_CAC_TYPES,
   type Category,
 } from './leadprime-finance';
 
 export type ReportRange = 'week' | 'month' | 'quarter';
 
-const CREDIT_TYPES = ['admin_grant', 'welcome_credit', 'promo_credit', 'referral_credit'];
+const REAL_CAC_SET = new Set(REAL_CAC_TYPES);
 
 // ── Period bounds (UTC) ──────────────────────────────────────────────────────────
 
@@ -121,6 +123,7 @@ export interface FinanceReport {
     refundedUsd: number;
     netUsd: number;
     charges: number;
+    customers: number;
     estFeesUsd: number;
     projectedPeriodUsd: number;
   };
@@ -136,8 +139,10 @@ export interface FinanceReport {
   freeCredits: {
     available: boolean;
     note?: string;
+    cacUsd: number;
+    internalUsd: number;
     totalUsd: number;
-    byType: { type: string; usd: number }[];
+    byType: { type: string; usd: number; cac: boolean }[];
   };
 
   subscriptions: {
@@ -197,6 +202,7 @@ async function capturedRevenue(period: Period, notes: string[]): Promise<Finance
     refundedUsd: 0,
     netUsd: 0,
     charges: 0,
+    customers: 0,
     estFeesUsd: 0,
     projectedPeriodUsd: 0,
   };
@@ -207,28 +213,24 @@ async function capturedRevenue(period: Period, notes: string[]): Promise<Finance
     return out;
   }
   try {
-    let gross = 0;
-    let refunded = 0;
-    let count = 0;
-    const search = stripe.charges.search({
-      query: `status:'succeeded' AND ${LP_FILTER} AND created>${period.startUnix}`,
-      limit: 100,
-    });
-    for await (const ch of search) {
-      count += 1;
-      gross += (ch.amount ?? 0) / 100;
-      refunded += (ch.amount_refunded ?? 0) / 100;
-    }
+    // Charges don't inherit subscription metadata, so resolve LeadPrime customers
+    // and sum their succeeded charges in the window (see leadprime-finance.ts).
+    const { gross, refunded, count, customers } = await sumLeadPrimeCharges(stripe, period.startUnix);
     const net = gross - refunded;
     out.available = true;
     out.charges = count;
+    out.customers = customers;
     out.grossUsd = round(gross);
     out.refundedUsd = round(refunded);
     out.netUsd = round(net);
     out.estFeesUsd = round(gross * FEE_PCT + count * FEE_FIXED);
     out.projectedPeriodUsd = projectTo(period, net);
+    if (customers === 0) {
+      out.note = 'No Stripe customers tagged metadata.product=leadprime were found';
+      notes.push(`captured: ${out.note}`);
+    }
   } catch (err: any) {
-    out.note = `Stripe charges.search failed: ${err.message}`;
+    out.note = `Stripe charge sum failed: ${err.message}`;
     notes.push(`captured: ${out.note}`);
   }
   return out;
@@ -298,10 +300,10 @@ async function usageRevenue(period: Period, notes: string[]): Promise<FinanceRep
 }
 
 async function freeCredits(period: Period, notes: string[]): Promise<FinanceReport['freeCredits']> {
-  const out: FinanceReport['freeCredits'] = { available: false, totalUsd: 0, byType: [] };
+  const out: FinanceReport['freeCredits'] = { available: false, cacUsd: 0, internalUsd: 0, totalUsd: 0, byType: [] };
   const pool = getLeadPrimePool();
   try {
-    const list = CREDIT_TYPES.map((t) => `'${t}'`).join(',');
+    const list = FREE_CREDIT_TYPES.map((t) => `'${t}'`).join(',');
     const r = await pool.query(
       `SELECT type, SUM(amount_cents)::bigint AS cents
          FROM wallet_transactions
@@ -312,15 +314,21 @@ async function freeCredits(period: Period, notes: string[]): Promise<FinanceRepo
         ORDER BY cents DESC`,
       [period.start.toISOString()]
     );
-    let total = 0;
-    const byType: { type: string; usd: number }[] = [];
+    let cac = 0;
+    let internal = 0;
+    const byType: { type: string; usd: number; cac: boolean }[] = [];
     for (const row of r.rows) {
+      const type = String(row.type);
       const usd = Number(row.cents || 0) / 100;
-      total += usd;
-      byType.push({ type: String(row.type), usd: round(usd) });
+      const isCac = REAL_CAC_SET.has(type);
+      if (isCac) cac += usd;
+      else internal += usd;
+      byType.push({ type, usd: round(usd), cac: isCac });
     }
     out.available = true;
-    out.totalUsd = round(total);
+    out.cacUsd = round(cac);
+    out.internalUsd = round(internal);
+    out.totalUsd = round(cac + internal);
     out.byType = byType;
   } catch (err: any) {
     if (isMissingSchema(err)) out.note = 'wallet_transactions not available';
@@ -503,7 +511,9 @@ export async function getFinanceReport(rangeInput?: string): Promise<FinanceRepo
   const netRevenueUsd = round(grossRevenueUsd - stripeFeesUsd);
   const cogsUsd = cogs.totalUsd;
   const grossProfitUsd = round(netRevenueUsd - cogsUsd);
-  const freeCreditsUsd = credits.totalUsd;
+  // Operating profit only absorbs real CAC give-aways; internal admin grants are a
+  // memo (and consumed credits already surface as COGS — avoid double-counting).
+  const freeCreditsUsd = credits.cacUsd;
   const operatingProfitUsd = round(grossProfitUsd - freeCreditsUsd);
 
   return {
