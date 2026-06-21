@@ -20,6 +20,7 @@ export interface FinanceReportData {
     refundedUsd: number;
     netUsd: number;
     charges: number;
+    customers: number;
     estFeesUsd: number;
     projectedPeriodUsd: number;
   };
@@ -42,8 +43,10 @@ export interface FinanceReportData {
   freeCredits: {
     available: boolean;
     note?: string;
+    cacUsd: number;
+    internalUsd: number;
     totalUsd: number;
-    byType: { type: string; usd: number }[];
+    byType: { type: string; usd: number; cac: boolean }[];
   };
   subscriptions: {
     available: boolean;
@@ -147,7 +150,12 @@ export function buildFinanceReportHtml(r: FinanceReportData): string {
     )
     .join('');
 
-  const creditRows = r.freeCredits.byType
+  const cacCreditRows = r.freeCredits.byType
+    .filter((c) => c.cac)
+    .map((c) => `<tr><td>${esc(c.type)}</td><td class="num">${usd(c.usd)}</td></tr>`)
+    .join('');
+  const internalCreditRows = r.freeCredits.byType
+    .filter((c) => !c.cac)
     .map((c) => `<tr><td>${esc(c.type)}</td><td class="num">${usd(c.usd)}</td></tr>`)
     .join('');
 
@@ -169,7 +177,7 @@ export function buildFinanceReportHtml(r: FinanceReportData): string {
     ['Net revenue', r.pnl.netRevenueUsd, 'sub'],
     [`COGS — providers + infra${r.cogs.estimate ? ' (est.)' : ''}`, -r.pnl.cogsUsd, 'out'],
     ['Gross profit', r.pnl.grossProfitUsd, 'sub'],
-    ['Free credits given (CAC)', -r.pnl.freeCreditsUsd, 'out'],
+    ['Real CAC credits (welcome/promo/referral)', -r.pnl.freeCreditsUsd, 'out'],
     ['Operating profit', r.pnl.operatingProfitUsd, 'total'],
   ]
     .map(([label, val, kind]) => {
@@ -264,9 +272,11 @@ export function buildFinanceReportHtml(r: FinanceReportData): string {
       ? `<div class="kpis">
           ${kpiCard('Gross', usd(r.captured.grossUsd))}
           ${kpiCard('Refunded', usd(r.captured.refundedUsd), undefined, r.captured.refundedUsd > 0 ? 'neg' : undefined)}
-          ${kpiCard('Net captured', usd(r.captured.netUsd), `${r.captured.charges} charges`, 'pos')}
+          ${kpiCard('Net captured', usd(r.captured.netUsd), `${r.captured.charges} charges · ${r.captured.customers} customers`, 'pos')}
           ${kpiCard('Projected ' + r.range, usd(r.captured.projectedPeriodUsd))}
-        </div>`
+        </div>
+        <p class="est">Resolved by customer: Stripe charges don&#39;t inherit subscription metadata, so this sums succeeded charges of the ${r.captured.customers} customers tagged <code>metadata.product=leadprime</code>.</p>
+        ${r.captured.customers === 0 ? '<p class="est">⚠ No tagged customers found — verify customers carry metadata.product=leadprime, or the period had no LeadPrime customers.</p>' : ''}`
       : `<p class="muted">Unavailable — ${esc(r.captured.note || 'no data')}</p>`
   }
 
@@ -295,11 +305,18 @@ export function buildFinanceReportHtml(r: FinanceReportData): string {
       : `<p class="muted">Unavailable — ${esc(r.subscriptions.note || 'no data')}</p>`
   }
 
-  <h2>Free credits given (CAC)</h2>
+  <h2>Free credits given</h2>
   ${
     r.freeCredits.available
       ? r.freeCredits.byType.length
-        ? `<table><thead><tr><th>Type</th><th class="num">USD</th></tr></thead><tbody>${creditRows}<tr class="pnl-total"><td>Total</td><td class="num">${usd(r.freeCredits.totalUsd)}</td></tr></tbody></table>`
+        ? `<div class="kpis">
+            ${kpiCard('Real CAC', usd(r.freeCredits.cacUsd), 'in operating profit', r.freeCredits.cacUsd > 0 ? 'warn' : 'pos')}
+            ${kpiCard('Internal grants', usd(r.freeCredits.internalUsd), 'excluded from P&L')}
+            ${kpiCard('Total given', usd(r.freeCredits.totalUsd))}
+          </div>
+          ${cacCreditRows ? `<table style="margin-top:12px"><thead><tr><th>Real CAC (welcome/promo/referral)</th><th class="num">USD</th></tr></thead><tbody>${cacCreditRows}<tr class="pnl-total"><td>CAC subtotal</td><td class="num">${usd(r.freeCredits.cacUsd)}</td></tr></tbody></table>` : ''}
+          ${internalCreditRows ? `<table style="margin-top:12px"><thead><tr><th>Internal grants (admin — not CAC)</th><th class="num">USD</th></tr></thead><tbody>${internalCreditRows}<tr class="pnl-total"><td>Internal subtotal</td><td class="num">${usd(r.freeCredits.internalUsd)}</td></tr></tbody></table>` : ''}
+          <p class="est">Only real CAC reduces operating profit. Internal admin grants are manual top-ups to our own / comped accounts; when any free credit is consumed its provider cost already appears under COGS, so the grant is not subtracted again.</p>`
         : `<p class="muted">No free credits granted in this period.</p>`
       : `<p class="muted">Unavailable — ${esc(r.freeCredits.note || 'no data')}</p>`
   }

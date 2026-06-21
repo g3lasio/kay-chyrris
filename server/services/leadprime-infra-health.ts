@@ -137,6 +137,9 @@ export interface WorkerRunRow {
   lastError: string | null;
   /** true when this worker polls more often than the auto-suspend window. */
   keepsComputeAwake: boolean;
+  /** false when observedIntervalMs is a one-off burst (≪ configured), e.g. a
+   *  post-deploy restart fired every worker at once — not the steady cadence. */
+  observedReliable: boolean;
 }
 
 export interface InfraHealth {
@@ -470,7 +473,14 @@ async function getWorkerHeartbeats(pool: Pool, notes: string[]): Promise<Detecto
     const rows: WorkerRunRow[] = result.rows.map((r) => {
       const observed = r.observed_interval_ms != null ? Number(r.observed_interval_ms) : null;
       const configured = r.configured_interval_ms != null ? Number(r.configured_interval_ms) : null;
-      const effective = observed ?? configured;
+      // observed_interval_ms is a SINGLE sample (gap between the two most recent
+      // runs). A redeploy fires every worker at once, so the next gap can be far
+      // below the configured cadence for ALL of them — a burst, not a fast loop.
+      // Treat observed as unreliable when it's well under the configured interval
+      // and fall back to the configured schedule for the keeps-awake verdict.
+      const observedReliable =
+        observed != null && (configured == null || observed >= configured * 0.5);
+      const effective = observedReliable ? observed : configured;
       return {
         workerName: r.worker_name,
         lastRunAt: r.last_run_started_at ? new Date(r.last_run_started_at).toISOString() : null,
@@ -480,6 +490,7 @@ async function getWorkerHeartbeats(pool: Pool, notes: string[]): Promise<Detecto
         totalRuns: Number(r.total_runs) || 0,
         lastError: r.last_error ?? null,
         keepsComputeAwake: effective != null && effective < AUTOSUSPEND_MS,
+        observedReliable: observed == null ? true : observedReliable,
       };
     });
     return { available: true, rows };

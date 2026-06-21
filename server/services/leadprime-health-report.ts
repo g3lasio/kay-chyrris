@@ -73,6 +73,10 @@ export interface HealthReport {
     monthCostUsd: number; // current month-to-date (from live detector)
     projectedMonthCostUsd: number;
     days: { date: string; activeHours: number; computeHours: number; alwaysOn: boolean }[];
+    // When the consumption API is unavailable (plan-gated 403), we can't read $,
+    // but worker cadence still tells us whether compute is likely pinned 24/7.
+    // Honest verdict only — no fabricated dollar figure.
+    riskVerdict?: { level: 'low' | 'elevated' | 'high' | 'unknown'; reason: string };
   };
 
   costPerUser: {
@@ -95,6 +99,7 @@ export interface HealthReport {
       lastRunAt: string | null;
       totalRuns: number;
       keepsComputeAwake: boolean;
+      observedReliable: boolean;
       lastError: string | null;
     }[];
   };
@@ -236,9 +241,32 @@ export async function getHealthReport(rangeInput?: string): Promise<HealthReport
       lastRunAt: w.lastRunAt,
       totalRuns: w.totalRuns,
       keepsComputeAwake: w.keepsComputeAwake,
+      observedReliable: w.observedReliable,
       lastError: w.lastError,
     }));
     pollers.keepingComputeAwake = pollers.workers.filter((w) => w.keepsComputeAwake).length;
+  }
+
+  // When the Neon consumption API is plan-gated, fall back to an honest risk
+  // verdict from worker cadence (no fabricated dollar figure).
+  if (!neonOut.available) {
+    const mins = pollers.autosuspendMinutes;
+    if (!pollers.available) {
+      neonOut.riskVerdict = {
+        level: 'unknown',
+        reason: 'Neon consumption API unavailable and no worker heartbeats — compute cost cannot be assessed.',
+      };
+    } else if (pollers.keepingComputeAwake > 0) {
+      neonOut.riskVerdict = {
+        level: 'high',
+        reason: `${pollers.keepingComputeAwake} worker(s) poll faster than the ${mins}-min auto-suspend window — compute is likely pinned 24/7. Widen those intervals, or enable the Neon Scale consumption API for exact $.`,
+      };
+    } else {
+      neonOut.riskVerdict = {
+        level: 'low',
+        reason: `No worker polls faster than the ${mins}-min suspend window, so compute should idle-suspend between bursts. Exact $ needs the Neon Scale consumption API.`,
+      };
+    }
   }
 
   const liveActivity: HealthReport['liveActivity'] = infra?.liveActivity
