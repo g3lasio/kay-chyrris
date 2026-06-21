@@ -25,6 +25,9 @@ import {
   Repeat,
   UserMinus,
   ArrowUpRight,
+  Telescope,
+  Siren,
+  ShieldAlert,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -177,6 +180,51 @@ interface FinanceByUser {
   totalLifetimeRevenueUsd: number;
   totalCreditsGrantedUsd: number;
   movements: MrrMovements;
+  notes: string[];
+}
+
+interface ForecastBlock {
+  available: boolean;
+  note?: string;
+  activeMrrUsd: number;
+  arrUsd: number;
+  netNewMrrUsd: number;
+  nextMonthMrrUsd: number;
+  projectedRevenueUsd: number | null;
+  projectedCogsUsd: number | null;
+  projectedOpProfitUsd: number | null;
+}
+interface Anomaly {
+  metric: string;
+  currentProjectedUsd: number;
+  priorMonthUsd: number;
+  changePct: number | null;
+  severity: 'ok' | 'warn' | 'alarm';
+  note: string;
+}
+interface AtRiskAccount {
+  contractorId: string;
+  name: string;
+  email: string;
+  status: string;
+  reason: 'dunning' | 'cancel_scheduled';
+  mrrUsd: number;
+}
+interface RevenueAtRisk {
+  available: boolean;
+  note?: string;
+  dunningMrrUsd: number;
+  dunningCount: number;
+  cancelScheduledMrrUsd: number;
+  cancelScheduledCount: number;
+  totalAtRiskMrrUsd: number;
+  accounts: AtRiskAccount[];
+}
+interface FinanceForecast {
+  generatedAt: string;
+  forecast: ForecastBlock;
+  anomalies: Anomaly[];
+  atRisk: RevenueAtRisk;
   notes: string[];
 }
 
@@ -334,13 +382,16 @@ export default function LeadPrimeFinance() {
   const financeQ = trpc.leadprime.financeOverview.useQuery(undefined, { refetchInterval: 120000 });
   const breakdownQ = trpc.leadprime.financeBreakdown.useQuery(undefined, { refetchInterval: 120000 });
   const byUserQ = trpc.leadprime.financeByUser.useQuery(undefined, { refetchInterval: 120000 });
+  const forecastQ = trpc.leadprime.financeForecast.useQuery(undefined, { refetchInterval: 120000 });
   const fin = financeQ.data?.data as FinanceOverview | null | undefined;
   const bd = breakdownQ.data?.data as FinanceBreakdown | null | undefined;
   const bu = byUserQ.data?.data as FinanceByUser | null | undefined;
+  const fc = forecastQ.data?.data as FinanceForecast | null | undefined;
   const finErr = financeQ.data?.success === false ? financeQ.data?.error : null;
   const bdErr = breakdownQ.data?.success === false ? breakdownQ.data?.error : null;
   const buErr = byUserQ.data?.success === false ? byUserQ.data?.error : null;
-  const loading = financeQ.isFetching || breakdownQ.isFetching || byUserQ.isFetching;
+  const fcErr = forecastQ.data?.success === false ? forecastQ.data?.error : null;
+  const loading = financeQ.isFetching || breakdownQ.isFetching || byUserQ.isFetching || forecastQ.isFetching;
 
   const pnl = fin?.pnl;
   const opProfit = pnl?.operatingProfitUsd ?? 0;
@@ -353,6 +404,8 @@ export default function LeadPrimeFinance() {
   const noStripe = fin?.stripeKeySource == null;
   const wf = fin ? buildWaterfall(fin.waterfall) : [];
   const mv = bu?.movements;
+  const fcast = fc?.forecast;
+  const atRisk = fc?.atRisk;
 
   return (
     <div className="space-y-6">
@@ -382,6 +435,7 @@ export default function LeadPrimeFinance() {
               financeQ.refetch();
               breakdownQ.refetch();
               byUserQ.refetch();
+              forecastQ.refetch();
             }}
             disabled={loading}
           >
@@ -431,6 +485,15 @@ export default function LeadPrimeFinance() {
         </Card>
       )}
 
+      {fcErr && (
+        <Card className="border-rose-500/40">
+          <CardContent className="flex items-center gap-2 pt-6 text-rose-400">
+            <AlertTriangle className="h-4 w-4" />
+            <span>Forecast: {fcErr}</span>
+          </CardContent>
+        </Card>
+      )}
+
       <Tabs value={tab} onValueChange={setTab} className="space-y-6">
         <TabsList className="bg-slate-900/60">
           <TabsTrigger value="overview">
@@ -444,6 +507,10 @@ export default function LeadPrimeFinance() {
           <TabsTrigger value="users">
             <Users className="mr-1.5 h-3.5 w-3.5" />
             By User &amp; Churn
+          </TabsTrigger>
+          <TabsTrigger value="forecast">
+            <Telescope className="mr-1.5 h-3.5 w-3.5" />
+            Forecast &amp; Risk
           </TabsTrigger>
         </TabsList>
 
@@ -1021,6 +1088,166 @@ export default function LeadPrimeFinance() {
                 <div className="mb-1 text-[11px] uppercase tracking-widest text-slate-500">Diagnostics</div>
                 <ul className="space-y-0.5 text-xs text-slate-500">
                   {bu.notes.map((n, i) => (
+                    <li key={i}>· {n}</li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
+        <TabsContent value="forecast" className="space-y-6">
+          {/* Forecast command deck */}
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <StatTile
+              icon={Telescope}
+              label="Proj. revenue (EOM)"
+              value={usd(fcast?.projectedRevenueUsd)}
+              sub="month-end captured run-rate"
+              tone={!fcast?.projectedRevenueUsd ? 'muted' : 'ok'}
+            />
+            <StatTile
+              icon={(fcast?.projectedOpProfitUsd ?? 0) >= 0 ? TrendingUp : TrendingDown}
+              label="Proj. op. profit (EOM)"
+              value={usd(fcast?.projectedOpProfitUsd)}
+              sub="after fees, COGS & credits"
+              tone={fcast?.projectedOpProfitUsd == null ? 'muted' : fcast.projectedOpProfitUsd >= 0 ? 'ok' : 'alarm'}
+            />
+            <StatTile
+              icon={ArrowUpRight}
+              label="Next-month MRR"
+              value={usd(fcast?.nextMonthMrrUsd)}
+              sub={fcast ? `${usd0(fcast.activeMrrUsd)} active ${fcast.netNewMrrUsd >= 0 ? '+' : ''}${usd0(fcast.netNewMrrUsd)} net` : 'active + net-new'}
+              tone={!fcast?.available ? 'muted' : (fcast.netNewMrrUsd ?? 0) >= 0 ? 'ok' : 'warn'}
+            />
+            <StatTile
+              icon={ShieldAlert}
+              label="Revenue at risk"
+              value={usd(atRisk?.totalAtRiskMrrUsd)}
+              sub={atRisk ? `${atRisk.dunningCount} dunning · ${atRisk.cancelScheduledCount} cancelling` : 'MRR'}
+              tone={!atRisk?.available ? 'muted' : (atRisk.totalAtRiskMrrUsd ?? 0) > 0 ? 'alarm' : 'ok'}
+            />
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            {/* Forecast detail */}
+            <GlowCard title="Forecast" icon={Telescope} tone={!fcast?.available ? 'muted' : 'ok'}>
+              <Row label="Active MRR" value={usd(fcast?.activeMrrUsd)} tone="ok" />
+              <Row label="ARR run-rate" value={usd(fcast?.arrUsd)} tone="ok" />
+              <Row label="Net-new MRR (this month)" value={usd(fcast?.netNewMrrUsd)} tone={(fcast?.netNewMrrUsd ?? 0) >= 0 ? 'ok' : 'alarm'} />
+              <Row label="Next-month MRR (pace)" value={usd(fcast?.nextMonthMrrUsd)} tone="ok" strong />
+              <Row label="Projected revenue (EOM)" value={usd(fcast?.projectedRevenueUsd)} />
+              <Row label="Projected COGS (EOM)" value={usd(fcast?.projectedCogsUsd)} tone="warn" />
+              <Row label="Projected op. profit (EOM)" value={usd(fcast?.projectedOpProfitUsd)} tone={(fcast?.projectedOpProfitUsd ?? 0) >= 0 ? 'ok' : 'alarm'} strong />
+              <p className="mt-2 text-[11px] text-slate-500">
+                EOM = end-of-month projection from current pace. Next-month MRR extrapolates this month's net movement.
+              </p>
+            </GlowCard>
+
+            {/* Anomaly alerts */}
+            <GlowCard
+              title="Anomaly alerts — month over month"
+              icon={Siren}
+              tone={(fc?.anomalies ?? []).some((a) => a.severity === 'alarm') ? 'alarm' : (fc?.anomalies ?? []).some((a) => a.severity === 'warn') ? 'warn' : 'ok'}
+            >
+              <div className="space-y-2">
+                {(fc?.anomalies ?? []).map((a) => (
+                  <div
+                    key={a.metric}
+                    className={`rounded-lg border px-3 py-2 ${toneRing[a.severity]}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-slate-200">{a.metric}</span>
+                      <span className={`font-mono text-xs ${toneText[a.severity]}`}>
+                        {a.changePct == null ? '—' : `${a.changePct >= 0 ? '+' : ''}${a.changePct}%`}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-slate-400">{a.note}</div>
+                  </div>
+                ))}
+                {(!fc || fc.anomalies.length === 0) && (
+                  <div className="py-4 text-center text-xs text-slate-500">No series available for anomaly detection.</div>
+                )}
+              </div>
+              <p className="mt-2 text-[11px] text-slate-500">
+                Compares this month's projected pace vs last month's actual. ▲/▼ ≥40% = watch, ≥80% = alarm.
+              </p>
+            </GlowCard>
+          </div>
+
+          {/* Revenue at risk — dunning book */}
+          <Card className="bg-slate-950/60 backdrop-blur border-slate-700/60">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-sm font-semibold tracking-wide text-slate-200">
+                <ShieldAlert className="h-4 w-4 text-rose-400" />
+                Revenue at risk — dunning &amp; cancellations
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="mb-3 flex flex-wrap gap-4 text-xs">
+                <span className="text-slate-400">
+                  Failing payment: <span className="font-mono text-rose-400">{usd(atRisk?.dunningMrrUsd)}</span> ({atRisk?.dunningCount ?? 0})
+                </span>
+                <span className="text-slate-400">
+                  Cancel scheduled: <span className="font-mono text-amber-400">{usd(atRisk?.cancelScheduledMrrUsd)}</span> ({atRisk?.cancelScheduledCount ?? 0})
+                </span>
+                <span className="text-slate-400">
+                  Total at risk: <span className="font-mono text-rose-400">{usd(atRisk?.totalAtRiskMrrUsd)}</span>
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-700/60 text-left text-slate-500">
+                      <th className="py-1.5 pr-3 font-medium">User</th>
+                      <th className="py-1.5 pr-3 font-medium">Reason</th>
+                      <th className="py-1.5 pr-3 font-medium">Status</th>
+                      <th className="py-1.5 text-right font-medium">MRR at risk</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(atRisk?.accounts ?? []).map((a) => (
+                      <tr key={a.contractorId} className="border-b border-slate-800/40">
+                        <td className="py-1.5 pr-3">
+                          <div className="text-slate-200">{a.name}</div>
+                          <div className="text-[10px] text-slate-500">{a.email}</div>
+                        </td>
+                        <td className="py-1.5 pr-3">
+                          <Pill tone={a.reason === 'dunning' ? 'alarm' : 'warn'}>
+                            {a.reason === 'dunning' ? 'payment failing' : 'cancelling'}
+                          </Pill>
+                        </td>
+                        <td className="py-1.5 pr-3 text-slate-400">{a.status}</td>
+                        <td className={`py-1.5 text-right font-mono ${a.reason === 'dunning' ? 'text-rose-400' : 'text-amber-400'}`}>{usd(a.mrrUsd)}</td>
+                      </tr>
+                    ))}
+                    {(!atRisk || atRisk.accounts.length === 0) && (
+                      <tr>
+                        <td colSpan={4} className="py-6 text-center text-slate-500">
+                          {atRisk?.available === false ? atRisk.note || 'Subscriptions unavailable.' : 'No revenue at risk — clean book.'}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {(atRisk?.dunningMrrUsd ?? 0) > 0 && (
+                <ActionHint tone="alarm">
+                  <div>
+                    <strong>{usd(atRisk?.dunningMrrUsd)}</strong> of MRR has a failing payment. Trigger dunning / update the
+                    card before Stripe auto-cancels the subscription.
+                  </div>
+                </ActionHint>
+              )}
+            </CardContent>
+          </Card>
+
+          {fc?.notes && fc.notes.length > 0 && (
+            <Card className="border-slate-700/60 bg-slate-950/40">
+              <CardContent className="pt-5">
+                <div className="mb-1 text-[11px] uppercase tracking-widest text-slate-500">Diagnostics</div>
+                <ul className="space-y-0.5 text-xs text-slate-500">
+                  {fc.notes.map((n, i) => (
                     <li key={i}>· {n}</li>
                   ))}
                 </ul>

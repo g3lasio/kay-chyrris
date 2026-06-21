@@ -696,6 +696,20 @@ export const appRouter = router({
         }
       }),
 
+    // Read-only finance forecast — month-end MRR/revenue/profit projection,
+    // month-over-month anomaly alerts, and the revenue-at-risk dunning book.
+    financeForecast: protectedProcedure
+      .query(async () => {
+        try {
+          const { getFinanceForecast } = await import('./services/leadprime-finance');
+          const data = await getFinanceForecast();
+          return { success: true, data };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error fetching finance forecast:', error);
+          return { success: false, error: error.message, data: null };
+        }
+      }),
+
     // Get all LeadPrime users with wallet balances
     getUsers: protectedProcedure
       .input(z.object({

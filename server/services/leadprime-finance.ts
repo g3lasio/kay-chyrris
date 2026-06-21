@@ -831,3 +831,225 @@ export async function getFinanceByUser(): Promise<FinanceByUser> {
   out.users = users.slice(0, USER_LIST_CAP);
   return out;
 }
+
+// ── Phase 4: forecast + anomaly alerts + revenue-at-risk (dunning) ───────────────
+
+/**
+ * Forward-looking view. The forecast reuses month-end projections from
+ * getFinanceOverview (Stripe captured + COGS) and the local subscription MRR
+ * run-rate. Anomalies compare this month's PROJECTED pace against last month's
+ * full actual for local series (usage revenue, free credits) — no provider/Stripe
+ * history needed. Revenue-at-risk is the dunning + cancel-scheduled book straight
+ * from the local subscriptions lifecycle. Read-only; everything degrades.
+ */
+
+// Stripe/subscription dunning states (payment failing / not yet collected).
+const DUNNING_STATUSES = new Set(['past_due', 'unpaid', 'incomplete']);
+
+export interface ForecastBlock {
+  available: boolean;
+  note?: string;
+  activeMrrUsd: number;
+  arrUsd: number;
+  netNewMrrUsd: number;
+  nextMonthMrrUsd: number; // active + net-new (this month's pace)
+  projectedRevenueUsd: number | null; // month-end captured (from overview)
+  projectedCogsUsd: number | null;
+  projectedOpProfitUsd: number | null;
+}
+
+export interface Anomaly {
+  metric: string;
+  currentProjectedUsd: number;
+  priorMonthUsd: number;
+  changePct: number | null;
+  severity: 'ok' | 'warn' | 'alarm';
+  note: string;
+}
+
+export interface AtRiskAccount {
+  contractorId: string;
+  name: string;
+  email: string;
+  status: string;
+  reason: 'dunning' | 'cancel_scheduled';
+  mrrUsd: number;
+}
+
+export interface RevenueAtRisk {
+  available: boolean;
+  note?: string;
+  dunningMrrUsd: number;
+  dunningCount: number;
+  cancelScheduledMrrUsd: number;
+  cancelScheduledCount: number;
+  totalAtRiskMrrUsd: number;
+  accounts: AtRiskAccount[];
+}
+
+export interface FinanceForecast {
+  generatedAt: string;
+  forecast: ForecastBlock;
+  anomalies: Anomaly[];
+  atRisk: RevenueAtRisk;
+  notes: string[];
+}
+
+/** Month-over-month series: current MTD vs prior full month for one numeric column. */
+async function momSeries(
+  pool: Pool,
+  table: string,
+  valueExpr: string,
+  whereExtra: string
+): Promise<{ cur: number; prev: number } | null> {
+  try {
+    const r = await pool.query(
+      `SELECT
+         COALESCE(SUM(${valueExpr}) FILTER (WHERE created_at >= date_trunc('month', now())), 0) AS cur,
+         COALESCE(SUM(${valueExpr}) FILTER (
+           WHERE created_at >= date_trunc('month', now()) - interval '1 month'
+             AND created_at <  date_trunc('month', now())), 0) AS prev
+         FROM ${table}
+        WHERE created_at >= date_trunc('month', now()) - interval '1 month'${whereExtra}`
+    );
+    const row = r.rows[0] || {};
+    return { cur: Number(row.cur || 0), prev: Number(row.prev || 0) };
+  } catch (err: any) {
+    if (isMissingSchema(err)) return null;
+    throw err;
+  }
+}
+
+function makeAnomaly(metric: string, curMtd: number, prev: number): Anomaly {
+  const projected = round(project(curMtd));
+  let changePct: number | null = null;
+  let severity: Anomaly['severity'] = 'ok';
+  let note = `Projected ${usdNote(projected)} vs ${usdNote(prev)} last month`;
+  if (prev > 1) {
+    changePct = round(((projected - prev) / prev) * 100, 1);
+    const mag = Math.abs(changePct);
+    if (mag >= 80) severity = 'alarm';
+    else if (mag >= 40) severity = 'warn';
+    const dir = changePct >= 0 ? 'up' : 'down';
+    note = `${dir === 'up' ? '▲' : '▼'} ${Math.abs(changePct)}% ${dir} — projected ${usdNote(projected)} vs ${usdNote(prev)} last month`;
+  } else if (projected > 1) {
+    severity = 'warn';
+    note = `New this month — projected ${usdNote(projected)} (no prior-month baseline)`;
+  }
+  return { metric, currentProjectedUsd: projected, priorMonthUsd: round(prev), changePct, severity, note };
+}
+
+function usdNote(n: number): string {
+  return `$${n.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+}
+
+export async function getFinanceForecast(): Promise<FinanceForecast> {
+  const notes: string[] = [];
+  const pool = getLeadPrimePool();
+
+  // ── Forecast: local MRR run-rate + month-end projections from the overview ──
+  const movements = await getMrrMovements(pool, notes);
+  const forecast: ForecastBlock = {
+    available: movements.available,
+    activeMrrUsd: movements.activeMrrUsd,
+    arrUsd: round(movements.activeMrrUsd * 12),
+    netNewMrrUsd: movements.netNewMrrUsd,
+    nextMonthMrrUsd: round(movements.activeMrrUsd + movements.netNewMrrUsd),
+    projectedRevenueUsd: null,
+    projectedCogsUsd: null,
+    projectedOpProfitUsd: null,
+  };
+  if (!movements.available) forecast.note = movements.note;
+  try {
+    const overview = await getFinanceOverview();
+    if (overview.captured.available) forecast.projectedRevenueUsd = overview.captured.projectedMonthUsd;
+    if (overview.cogs.available) forecast.projectedCogsUsd = overview.cogs.projectedMonthUsd;
+    forecast.projectedOpProfitUsd = round(project(overview.pnl.operatingProfitUsd));
+    forecast.available = true;
+  } catch (err: any) {
+    notes.push(`forecast.overview: ${err.message}`);
+  }
+
+  // ── Anomalies: month-over-month on local series ─────────────────────────────
+  const anomalies: Anomaly[] = [];
+  try {
+    const usage = await momSeries(pool, 'usage_events', 'cost', '');
+    if (usage) anomalies.push(makeAnomaly('Usage revenue', usage.cur, usage.prev));
+    else notes.push('anomaly.usage: usage_events not available');
+  } catch (err: any) {
+    notes.push(`anomaly.usage: ${err.message}`);
+  }
+  try {
+    const creditList = Array.from(CREDIT_TYPES).map((t) => `'${t}'`).join(',');
+    const credits = await momSeries(
+      pool,
+      'wallet_transactions',
+      'amount_cents / 100.0',
+      ` AND amount_cents > 0 AND type IN (${creditList})`
+    );
+    if (credits) anomalies.push(makeAnomaly('Free credits (CAC)', credits.cur, credits.prev));
+    else notes.push('anomaly.credits: wallet_transactions not available');
+  } catch (err: any) {
+    notes.push(`anomaly.credits: ${err.message}`);
+  }
+
+  // ── Revenue at risk: dunning + cancel-scheduled book (local) ────────────────
+  const atRisk: RevenueAtRisk = {
+    available: false,
+    dunningMrrUsd: 0,
+    dunningCount: 0,
+    cancelScheduledMrrUsd: 0,
+    cancelScheduledCount: 0,
+    totalAtRiskMrrUsd: 0,
+    accounts: [],
+  };
+  try {
+    const r = await pool.query(
+      `SELECT s.contractor_id, s.status, s.base_price_cents, s.cancel_at_period_end,
+              c.name, c.email
+         FROM subscriptions s
+         LEFT JOIN contractors c ON c.id = s.contractor_id
+        WHERE s.status IN ('past_due','unpaid','incomplete')
+           OR (s.cancel_at_period_end = true AND s.status IN ('active','trialing'))`
+    );
+    let dunningMrr = 0;
+    let cancelMrr = 0;
+    for (const row of r.rows) {
+      const status = String(row.status);
+      const mrrUsd = round(Number(row.base_price_cents || 0) / 100);
+      const reason: AtRiskAccount['reason'] = DUNNING_STATUSES.has(status) ? 'dunning' : 'cancel_scheduled';
+      if (reason === 'dunning') {
+        dunningMrr += mrrUsd;
+        atRisk.dunningCount += 1;
+      } else {
+        cancelMrr += mrrUsd;
+        atRisk.cancelScheduledCount += 1;
+      }
+      atRisk.accounts.push({
+        contractorId: String(row.contractor_id),
+        name: row.name ? String(row.name) : '—',
+        email: row.email ? String(row.email) : '—',
+        status,
+        reason,
+        mrrUsd,
+      });
+    }
+    atRisk.dunningMrrUsd = round(dunningMrr);
+    atRisk.cancelScheduledMrrUsd = round(cancelMrr);
+    atRisk.totalAtRiskMrrUsd = round(dunningMrr + cancelMrr);
+    atRisk.accounts.sort((a, b) => b.mrrUsd - a.mrrUsd);
+    atRisk.available = true;
+  } catch (err: any) {
+    if (isMissingSchema(err)) atRisk.note = 'subscriptions not available';
+    else atRisk.note = err.message;
+    notes.push(`atRisk: ${atRisk.note}`);
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    forecast,
+    anomalies,
+    atRisk,
+    notes,
+  };
+}
