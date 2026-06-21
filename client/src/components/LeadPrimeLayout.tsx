@@ -44,7 +44,7 @@ const menuItems = [
   { icon: Wallet, label: "Credits", path: "/leadprime/credits" },
   { icon: Users, label: "Users Intelligence", path: "/leadprime/users" },
   { icon: Bug, label: "System Issues", path: "/leadprime/system-issues" },
-  { icon: ShieldCheck, label: "Billing Health", path: "/leadprime/billing-health" },
+  { icon: ShieldCheck, label: "System Health", path: "/leadprime/health" },
 ];
 
 const SIDEBAR_WIDTH_KEY = "leadprime-sidebar-width";
