@@ -132,6 +132,8 @@ interface ProviderSpend {
   resetAt?: string | null;
   accountStatus?: string | null;
   paymentIssue: boolean;
+  keyIssue: boolean;
+  configured: boolean;
   severity: 'ok' | 'watch' | 'alarm' | 'unknown';
   billedToUsersUsd: number;
   marginUsd: number | null;
@@ -327,7 +329,7 @@ export default function LeadPrimeSystemHealth() {
   const workerTone: Tone = !infra?.workers.available ? 'muted' : awakeWorkers.length > 0 ? 'alarm' : errorWorkers.length > 0 ? 'warn' : 'ok';
 
   // Service-spend rollups
-  const spendIssues = (spend?.providers ?? []).filter((p) => p.paymentIssue);
+  const spendIssues = (spend?.providers ?? []).filter((p) => p.paymentIssue || p.keyIssue);
   const spendNearLimit = (spend?.providers ?? []).filter((p) => (p.usagePct ?? 0) >= 0.9);
   const marginUsd = spend?.totals.marginUsd ?? 0;
   const marginTone: Tone = !spend ? 'muted' : spendIssues.length > 0 ? 'alarm' : marginUsd < 0 ? 'warn' : 'ok';
@@ -630,13 +632,35 @@ export default function LeadPrimeSystemHealth() {
               return (
                 <GlowCard key={p.provider} title={p.label} icon={Icon} tone={tone}>
                   {!p.available ? (
-                    <div className="text-sm text-slate-400">
-                      <p>{p.note}</p>
-                      <ActionHint tone="warn">
-                        <p className="font-semibold text-slate-200">To enable (your part):</p>
-                        <p>Set <span className="font-mono">{fix.envVar}</span> on the kay-chyrris service. Get it from {fix.where}.</p>
-                      </ActionHint>
-                    </div>
+                    p.configured ? (
+                      // Key IS set but the API rejected us → real alert, not "off".
+                      <div className="text-sm text-slate-400">
+                        <p className="text-rose-300">{p.note}</p>
+                        <ActionHint tone="alarm">
+                          {p.keyIssue ? (
+                            <>
+                              <p className="font-semibold text-slate-200">API key rejected (expired, revoked, or wrong scope).</p>
+                              <p>Rotate <span className="font-mono">{fix.envVar}</span> at {fix.where} and update it on the kay-chyrris service. For Anthropic/OpenAI make sure it's an <b>Admin/Organization</b> key, not a normal API key.</p>
+                            </>
+                          ) : p.paymentIssue ? (
+                            <>
+                              <p className="font-semibold text-slate-200">Payment required — the account is likely out of credit.</p>
+                              <p>Top up / fix billing at {fix.where.split(' →')[0]} before this provider starts failing live calls.</p>
+                            </>
+                          ) : (
+                            <p>This provider's API is unreachable right now. If it persists, check the key and the provider's status page.</p>
+                          )}
+                        </ActionHint>
+                      </div>
+                    ) : (
+                      <div className="text-sm text-slate-400">
+                        <p>{p.note}</p>
+                        <ActionHint tone="warn">
+                          <p className="font-semibold text-slate-200">To enable (your part):</p>
+                          <p>Set <span className="font-mono">{fix.envVar}</span> on the kay-chyrris service. Get it from {fix.where}.</p>
+                        </ActionHint>
+                      </div>
+                    )
                   ) : (
                     <div className="space-y-2 text-sm">
                       <div className="flex items-center justify-between">

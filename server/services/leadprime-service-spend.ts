@@ -64,7 +64,9 @@ export interface ProviderSpend {
   resetAt?: string | null; // ISO when the allowance resets
   /** Health. */
   accountStatus?: string | null;
-  paymentIssue: boolean; // suspended / past-due / 402
+  paymentIssue: boolean; // suspended / past-due / 402 (out of credit)
+  keyIssue: boolean; // key present but rejected: 401/403 → expired / revoked / wrong scope
+  configured: boolean; // env key was set (distinguishes "off" from "broken")
   severity: Severity;
   /** ROI (from usage_events). */
   billedToUsersUsd: number;
@@ -113,6 +115,24 @@ function daysInThisMonth(): number {
 }
 function project(monthSoFar: number): number {
   return (monthSoFar / daysElapsedThisMonth()) * daysInThisMonth();
+}
+
+/**
+ * Classify a failed provider HTTP response into the operator-facing alert kind:
+ *   - 401/403 → key expired / revoked / wrong scope (keyIssue)
+ *   - 402     → out of credit / payment required (paymentIssue)
+ *   - 429/5xx → transient (neither flag; just a note)
+ * Sets severity 'alarm' for key/payment problems so they bubble to the deck.
+ */
+function applyHttpError(base: ProviderSpend, status: number, body: string, label: string, notes: string[]): ProviderSpend {
+  base.keyIssue = status === 401 || status === 403;
+  base.paymentIssue = status === 402;
+  if (base.keyIssue) base.note = `${label} API ${status}: key expired/invalid or missing permission`;
+  else if (base.paymentIssue) base.note = `${label} API ${status}: payment required — likely out of credit`;
+  else base.note = `${label} API ${status}: ${body.slice(0, 120)}`;
+  base.severity = base.keyIssue || base.paymentIssue ? 'alarm' : 'unknown';
+  notes.push(`${label.toLowerCase()}: ${base.note}`);
+  return base;
 }
 
 /** Map a usage_events.event_type to the provider that ultimately incurs the cost. */
@@ -204,6 +224,8 @@ async function getAnthropicSpend(billedUsd: number, notes: string[]): Promise<Pr
     projectedMonthUsd: null,
     todaySpendUsd: null,
     paymentIssue: false,
+    keyIssue: false,
+    configured: false,
     severity: 'unknown',
     billedToUsersUsd: billedUsd,
     marginUsd: null,
@@ -215,6 +237,7 @@ async function getAnthropicSpend(billedUsd: number, notes: string[]): Promise<Pr
     notes.push(`anthropic: ${base.note}`);
     return base;
   }
+  base.configured = true;
   const params = new URLSearchParams({
     starting_at: monthStart().toISOString(),
     ending_at: new Date().toISOString(),
@@ -234,10 +257,7 @@ async function getAnthropicSpend(billedUsd: number, notes: string[]): Promise<Pr
     );
     if (!resp.ok) {
       const body = await resp.text().catch(() => '');
-      base.note = `Anthropic API ${resp.status}: ${body.slice(0, 120)}`;
-      base.paymentIssue = resp.status === 402;
-      notes.push(`anthropic: ${base.note}`);
-      return base;
+      return applyHttpError(base, resp.status, body, 'Anthropic', notes);
     }
     const json: any = await resp.json();
     const buckets: any[] = Array.isArray(json?.data) ? json.data : [];
@@ -276,6 +296,8 @@ async function getOpenAiSpend(billedUsd: number, notes: string[]): Promise<Provi
     projectedMonthUsd: null,
     todaySpendUsd: null,
     paymentIssue: false,
+    keyIssue: false,
+    configured: false,
     severity: 'unknown',
     billedToUsersUsd: billedUsd,
     marginUsd: null,
@@ -287,6 +309,7 @@ async function getOpenAiSpend(billedUsd: number, notes: string[]): Promise<Provi
     notes.push(`openai: ${base.note}`);
     return base;
   }
+  base.configured = true;
   const params = new URLSearchParams({
     start_time: String(Math.floor(monthStart().getTime() / 1000)),
     bucket_width: '1d',
@@ -299,10 +322,7 @@ async function getOpenAiSpend(billedUsd: number, notes: string[]): Promise<Provi
     });
     if (!resp.ok) {
       const body = await resp.text().catch(() => '');
-      base.note = `OpenAI API ${resp.status}: ${body.slice(0, 120)}`;
-      base.paymentIssue = resp.status === 402;
-      notes.push(`openai: ${base.note}`);
-      return base;
+      return applyHttpError(base, resp.status, body, 'OpenAI', notes);
     }
     const json: any = await resp.json();
     const buckets: any[] = Array.isArray(json?.data) ? json.data : [];
@@ -341,6 +361,8 @@ async function getTwilioSpend(billedUsd: number, notes: string[]): Promise<Provi
     projectedMonthUsd: null,
     todaySpendUsd: null,
     paymentIssue: false,
+    keyIssue: false,
+    configured: false,
     severity: 'unknown',
     billedToUsersUsd: billedUsd,
     marginUsd: null,
@@ -353,6 +375,7 @@ async function getTwilioSpend(billedUsd: number, notes: string[]): Promise<Provi
     notes.push(`twilio: ${base.note}`);
     return base;
   }
+  base.configured = true;
   const auth = 'Basic ' + Buffer.from(`${sid}:${token}`).toString('base64');
   const headers = { Authorization: auth, Accept: 'application/json' };
   const root = `https://api.twilio.com/2010-04-01/Accounts/${sid}`;
@@ -365,10 +388,7 @@ async function getTwilioSpend(billedUsd: number, notes: string[]): Promise<Provi
     );
     if (!usageResp.ok) {
       const body = await usageResp.text().catch(() => '');
-      base.note = `Twilio API ${usageResp.status}: ${body.slice(0, 120)}`;
-      base.paymentIssue = usageResp.status === 402;
-      notes.push(`twilio: ${base.note}`);
-      return base;
+      return applyHttpError(base, usageResp.status, body, 'Twilio', notes);
     }
     const usageJson: any = await usageResp.json();
     const recs: any[] = Array.isArray(usageJson?.usage_records) ? usageJson.usage_records : [];
@@ -431,6 +451,8 @@ async function getElevenLabsSpend(billedUsd: number, notes: string[]): Promise<P
     projectedMonthUsd: null,
     todaySpendUsd: null,
     paymentIssue: false,
+    keyIssue: false,
+    configured: false,
     severity: 'unknown',
     billedToUsersUsd: billedUsd,
     marginUsd: null,
@@ -442,6 +464,7 @@ async function getElevenLabsSpend(billedUsd: number, notes: string[]): Promise<P
     notes.push(`elevenlabs: ${base.note}`);
     return base;
   }
+  base.configured = true;
   try {
     const resp = await fetch('https://api.elevenlabs.io/v1/user/subscription', {
       headers: { 'xi-api-key': key, Accept: 'application/json' },
@@ -449,10 +472,7 @@ async function getElevenLabsSpend(billedUsd: number, notes: string[]): Promise<P
     });
     if (!resp.ok) {
       const body = await resp.text().catch(() => '');
-      base.note = `ElevenLabs API ${resp.status}: ${body.slice(0, 120)}`;
-      base.paymentIssue = resp.status === 402;
-      notes.push(`elevenlabs: ${base.note}`);
-      return base;
+      return applyHttpError(base, resp.status, body, 'ElevenLabs', notes);
     }
     const sub: any = await resp.json();
     const used = Number(sub?.character_count ?? 0);
