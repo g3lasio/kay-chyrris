@@ -4,6 +4,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ReportExporter } from '@/components/ReportExporter';
+import { buildHealthReportHtml, type HealthReportData } from '@/lib/healthReportHtml';
 import {
   RefreshCw,
   AlertTriangle,
@@ -295,6 +297,7 @@ function Pill({ tone, children }: { tone: Tone; children: React.ReactNode }) {
 
 export default function LeadPrimeSystemHealth() {
   const [tab, setTab] = useState('infra');
+  const utils = trpc.useUtils();
 
   const billingQ = trpc.leadprime.billingHealth.useQuery(undefined, { refetchInterval: 60000 });
   const infraQ = trpc.leadprime.infraHealth.useQuery(undefined, { refetchInterval: 60000 });
@@ -358,10 +361,21 @@ export default function LeadPrimeSystemHealth() {
             background-worker cadence. Surfaces problems and the fix. Never moves money, never mutates data.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={refreshAll} disabled={loading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <ReportExporter<HealthReportData>
+            fileBase="leadprime-system-health"
+            fetchReport={async (range) => {
+              const res = await utils.leadprime.healthReport.fetch({ range });
+              if (!res.success || !res.data) throw new Error(res.error || 'Report unavailable');
+              return res.data as HealthReportData;
+            }}
+            buildHtml={(data) => buildHealthReportHtml(data)}
+          />
+          <Button variant="outline" size="sm" onClick={refreshAll} disabled={loading}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {(billingErr || infraErr || spendErr) && (

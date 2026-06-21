@@ -710,6 +710,23 @@ export const appRouter = router({
         }
       }),
 
+    // Read-only system-health period report — week / month / quarter. Bundles the
+    // live health detectors (Neon consumption sliced to the window, cost-per-user,
+    // pollers/workers, live activity, hot queries, provider spend, billing leaks)
+    // into one exportable (HTML/PDF) snapshot. NEVER mutates anything.
+    healthReport: protectedProcedure
+      .input(z.object({ range: z.enum(['week', 'month', 'quarter']).default('month') }).optional())
+      .query(async ({ input }) => {
+        try {
+          const { getHealthReport } = await import('./services/leadprime-health-report');
+          const data = await getHealthReport(input?.range);
+          return { success: true, data };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error fetching health report:', error);
+          return { success: false, error: error.message, data: null };
+        }
+      }),
+
     // Read-only finance period report — week / month / quarter. Bounds every
     // money query to the chosen window for an exportable (HTML/PDF) snapshot:
     // captured revenue, usage by product & category, free credits (CAC),
