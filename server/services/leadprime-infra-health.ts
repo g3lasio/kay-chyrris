@@ -154,6 +154,52 @@ export interface InfraHealth {
 
 const NEON_API_BASE = 'https://console.neon.tech/api/v2';
 
+/** Resolved once and cached — org-scoped API keys require org_id on consumption. */
+let cachedNeonOrgId: string | null = null;
+
+/**
+ * Org-scoped Neon API keys must pass `org_id` to the consumption endpoint. Rather
+ * than force the operator to set NEON_ORG_ID by hand, auto-resolve it from the
+ * project (its `org_id`), falling back to the account's organizations list.
+ * Returns undefined for personal keys (which don't need org_id).
+ */
+async function resolveNeonOrgId(apiKey: string, projectId: string): Promise<string | undefined> {
+  if (process.env.NEON_ORG_ID) return process.env.NEON_ORG_ID;
+  if (cachedNeonOrgId) return cachedNeonOrgId;
+  const headers = { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' };
+
+  // 1) The project itself usually carries its org_id.
+  try {
+    const r = await fetch(`${NEON_API_BASE}/projects/${projectId}`, {
+      headers,
+      signal: AbortSignal.timeout(8000),
+    });
+    if (r.ok) {
+      const j: any = await r.json();
+      const orgId = j?.project?.org_id;
+      if (orgId) return (cachedNeonOrgId = orgId);
+    }
+  } catch {
+    /* fall through */
+  }
+
+  // 2) Otherwise take the first organization the key can see.
+  try {
+    const r = await fetch(`${NEON_API_BASE}/users/me/organizations`, {
+      headers,
+      signal: AbortSignal.timeout(8000),
+    });
+    if (r.ok) {
+      const j: any = await r.json();
+      const orgs = Array.isArray(j?.organizations) ? j.organizations : Array.isArray(j) ? j : [];
+      if (orgs[0]?.id) return (cachedNeonOrgId = orgs[0].id);
+    }
+  } catch {
+    /* personal key — no org_id needed */
+  }
+  return undefined;
+}
+
 /**
  * Pull daily consumption for the configured Neon project. Read-only GET.
  * Requires NEON_API_KEY and NEON_PROJECT_ID. NEON_ORG_ID optional (org keys).
@@ -188,7 +234,8 @@ async function getNeonConsumption(notes: string[]): Promise<NeonConsumption> {
     granularity: 'daily',
     'project_ids[]': projectId,
   });
-  if (process.env.NEON_ORG_ID) params.set('org_id', process.env.NEON_ORG_ID);
+  const orgId = await resolveNeonOrgId(apiKey, projectId);
+  if (orgId) params.set('org_id', orgId);
 
   let json: any;
   try {
