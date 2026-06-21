@@ -640,6 +640,18 @@ export const appRouter = router({
         }
       }),
 
+    serviceSpend: protectedProcedure
+      .query(async () => {
+        try {
+          const { getServiceSpend } = await import('./services/leadprime-service-spend');
+          const data = await getServiceSpend();
+          return { success: true, data };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error fetching service spend:', error);
+          return { success: false, error: error.message, data: null };
+        }
+      }),
+
     // Get all LeadPrime users with wallet balances
     getUsers: protectedProcedure
       .input(z.object({

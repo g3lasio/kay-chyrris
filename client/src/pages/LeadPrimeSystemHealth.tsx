@@ -22,6 +22,14 @@ import {
   Timer,
   Zap,
   Lightbulb,
+  Coins,
+  TrendingUp,
+  CreditCard,
+  PlugZap,
+  Bot,
+  Mic,
+  Phone,
+  AudioLines,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -108,10 +116,55 @@ interface InfraHealth {
   notes: string[];
 }
 
+type ProviderId = 'anthropic' | 'openai' | 'twilio' | 'elevenlabs';
+
+interface ProviderSpend {
+  provider: ProviderId;
+  label: string;
+  available: boolean;
+  note?: string;
+  monthSpendUsd: number | null;
+  projectedMonthUsd: number | null;
+  todaySpendUsd: number | null;
+  planTier?: string | null;
+  usagePct?: number | null;
+  limitLabel?: string | null;
+  resetAt?: string | null;
+  accountStatus?: string | null;
+  paymentIssue: boolean;
+  severity: 'ok' | 'watch' | 'alarm' | 'unknown';
+  billedToUsersUsd: number;
+  marginUsd: number | null;
+  marginPct: number | null;
+}
+
+interface ServiceSpend {
+  generatedAt: string;
+  providers: ProviderSpend[];
+  totals: { monthSpendUsd: number; billedToUsersUsd: number; marginUsd: number; marginPct: number | null };
+  topConsumers: { contractorId: string; billedUsd: number; events: number }[];
+  notes: string[];
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 const usd = (n: number) => `$${n.toFixed(2)}`;
+const pct = (f: number | null | undefined) => (f == null ? '—' : `${Math.round(f * 100)}%`);
+
+const PROVIDER_ICON: Record<ProviderId, any> = {
+  anthropic: Bot,
+  openai: Mic,
+  twilio: Phone,
+  elevenlabs: AudioLines,
+};
+/** Where each provider's key/limit is managed — for the "fix it" hint. */
+const PROVIDER_FIX: Record<ProviderId, { envVar: string; where: string }> = {
+  anthropic: { envVar: 'ANTHROPIC_ADMIN_KEY', where: 'console.anthropic.com → Settings → Admin keys' },
+  openai: { envVar: 'OPENAI_ADMIN_KEY', where: 'platform.openai.com → Settings → Organization → Admin keys' },
+  twilio: { envVar: 'TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN', where: 'console.twilio.com (Account Info)' },
+  elevenlabs: { envVar: 'ELEVENLABS_API_KEY', where: 'elevenlabs.io → Profile → API key' },
+};
 
 function fmtInterval(ms: number | null): string {
   if (ms == null) return '—';
@@ -243,11 +296,14 @@ export default function LeadPrimeSystemHealth() {
 
   const billingQ = trpc.leadprime.billingHealth.useQuery(undefined, { refetchInterval: 60000 });
   const infraQ = trpc.leadprime.infraHealth.useQuery(undefined, { refetchInterval: 60000 });
+  const spendQ = trpc.leadprime.serviceSpend.useQuery(undefined, { refetchInterval: 120000 });
 
   const billing = billingQ.data?.data as BillingHealth | null | undefined;
   const infra = infraQ.data?.data as InfraHealth | null | undefined;
+  const spend = spendQ.data?.data as ServiceSpend | null | undefined;
   const billingErr = billingQ.data?.success === false ? billingQ.data?.error : null;
   const infraErr = infraQ.data?.success === false ? infraQ.data?.error : null;
+  const spendErr = spendQ.data?.success === false ? spendQ.data?.error : null;
 
   // Billing rollups
   const negCount = billing?.negativeBalances.count ?? 0;
@@ -270,11 +326,21 @@ export default function LeadPrimeSystemHealth() {
   const neonTone: Tone = !neon?.available ? 'muted' : neon.alwaysOnDays > 0 ? 'alarm' : neon.projectedMonthCostUsd > 50 ? 'warn' : 'ok';
   const workerTone: Tone = !infra?.workers.available ? 'muted' : awakeWorkers.length > 0 ? 'alarm' : errorWorkers.length > 0 ? 'warn' : 'ok';
 
+  // Service-spend rollups
+  const spendIssues = (spend?.providers ?? []).filter((p) => p.paymentIssue);
+  const spendNearLimit = (spend?.providers ?? []).filter((p) => (p.usagePct ?? 0) >= 0.9);
+  const marginUsd = spend?.totals.marginUsd ?? 0;
+  const marginTone: Tone = !spend ? 'muted' : spendIssues.length > 0 ? 'alarm' : marginUsd < 0 ? 'warn' : 'ok';
+
+  const sevTone = (s: ProviderSpend['severity']): Tone =>
+    s === 'alarm' ? 'alarm' : s === 'watch' ? 'warn' : s === 'ok' ? 'ok' : 'muted';
+
   const refreshAll = () => {
     billingQ.refetch();
     infraQ.refetch();
+    spendQ.refetch();
   };
-  const loading = billingQ.isFetching || infraQ.isFetching;
+  const loading = billingQ.isFetching || infraQ.isFetching || spendQ.isFetching;
 
   return (
     <div className="space-y-6">
@@ -296,18 +362,19 @@ export default function LeadPrimeSystemHealth() {
         </Button>
       </div>
 
-      {(billingErr || infraErr) && (
+      {(billingErr || infraErr || spendErr) && (
         <Card className="border-rose-500/40">
           <CardContent className="flex items-center gap-2 pt-6 text-rose-400">
             <AlertTriangle className="h-4 w-4" />
             {billingErr && <span>Billing: {billingErr}. </span>}
-            {infraErr && <span>Infra: {infraErr}.</span>}
+            {infraErr && <span>Infra: {infraErr}. </span>}
+            {spendErr && <span>Spend: {spendErr}.</span>}
           </CardContent>
         </Card>
       )}
 
       {/* Command deck — cross-domain KPI tiles */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-7">
         <StatTile
           icon={neonTone === 'alarm' ? Zap : Cpu}
           label="Neon / mo (proj.)"
@@ -350,11 +417,25 @@ export default function LeadPrimeSystemHealth() {
           sub={hotHammer.length > 0 ? `${hotHammer.length} hammering` : 'top by calls'}
           tone={hotHammer.length > 0 ? 'warn' : 'ok'}
         />
+        <StatTile
+          icon={spendIssues.length > 0 ? CreditCard : Coins}
+          label="Service margin"
+          value={spend ? usd(marginUsd) : '—'}
+          sub={
+            spendIssues.length > 0
+              ? `${spendIssues.length} provider issue${spendIssues.length > 1 ? 's' : ''}`
+              : spend
+                ? `${usd(spend.totals.billedToUsersUsd)} billed − ${usd(spend.totals.monthSpendUsd)} cost`
+                : 'API keys off'
+          }
+          tone={marginTone}
+        />
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="bg-slate-900/60">
           <TabsTrigger value="infra">Infra &amp; Cost</TabsTrigger>
+          <TabsTrigger value="services">Services &amp; Spend</TabsTrigger>
           <TabsTrigger value="workers">Workers &amp; Crons</TabsTrigger>
           <TabsTrigger value="billing">Billing &amp; Wallet</TabsTrigger>
         </TabsList>
@@ -520,6 +601,136 @@ export default function LeadPrimeSystemHealth() {
                 )}
               </div>
             )}
+          </GlowCard>
+        </TabsContent>
+
+        {/* ───────────────────────── SERVICES & SPEND ───────────────────────── */}
+        <TabsContent value="services" className="space-y-4 pt-4">
+          {/* Margin summary strip */}
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatTile icon={CreditCard} label="Provider cost / mo" value={spend ? usd(spend.totals.monthSpendUsd) : '—'} sub="actual, reported by APIs" tone="muted" />
+            <StatTile icon={TrendingUp} label="Billed to users" value={spend ? usd(spend.totals.billedToUsersUsd) : '—'} sub="usage_events MTD" tone="ok" />
+            <StatTile icon={Coins} label="Margin" value={spend ? usd(marginUsd) : '—'} sub={spend?.totals.marginPct != null ? `${pct(spend.totals.marginPct)} over cost` : 'revenue − cost'} tone={marginTone} />
+            <StatTile icon={PlugZap} label="Provider alerts" value={spend ? String(spendIssues.length + spendNearLimit.length) : '—'} sub="payment / near-limit" tone={spendIssues.length > 0 ? 'alarm' : spendNearLimit.length > 0 ? 'warn' : 'ok'} />
+          </div>
+
+          {spend && marginUsd < 0 && spendIssues.length === 0 && (
+            <ActionHint tone="warn">
+              <p className="font-semibold text-slate-200">You're spending more on providers than you bill users this month ({usd(-marginUsd)} in the red).</p>
+              <p>Either pricing/markup is too low for the active usage mix, or internal/admin usage isn't billed. Check the per-provider margins below and the top consumers.</p>
+            </ActionHint>
+          )}
+
+          {/* Per-provider cards */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {(spend?.providers ?? []).map((p) => {
+              const Icon = PROVIDER_ICON[p.provider];
+              const tone = sevTone(p.severity);
+              const fix = PROVIDER_FIX[p.provider];
+              return (
+                <GlowCard key={p.provider} title={p.label} icon={Icon} tone={tone}>
+                  {!p.available ? (
+                    <div className="text-sm text-slate-400">
+                      <p>{p.note}</p>
+                      <ActionHint tone="warn">
+                        <p className="font-semibold text-slate-200">To enable (your part):</p>
+                        <p>Set <span className="font-mono">{fix.envVar}</span> on the kay-chyrris service. Get it from {fix.where}.</p>
+                      </ActionHint>
+                    </div>
+                  ) : (
+                    <div className="space-y-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          {p.planTier && <Pill tone="muted">{p.planTier}</Pill>}
+                          {p.accountStatus && <Pill tone={p.paymentIssue ? 'alarm' : 'ok'}>{p.accountStatus}</Pill>}
+                        </div>
+                        {p.monthSpendUsd != null && (
+                          <span className="font-mono text-2xl font-bold text-slate-100">{usd(p.monthSpendUsd)}<span className="text-xs font-normal text-slate-500"> /mo</span></span>
+                        )}
+                      </div>
+
+                      {/* Plan / credit usage bar */}
+                      {p.usagePct != null && (
+                        <div>
+                          <div className="flex justify-between text-xs text-slate-400">
+                            <span>{p.limitLabel ?? 'plan usage'}</span>
+                            <span className={`font-mono ${toneText[tone]}`}>{pct(p.usagePct)}</span>
+                          </div>
+                          <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-800">
+                            <div
+                              className={`h-full rounded-full ${tone === 'alarm' ? 'bg-rose-500' : tone === 'warn' ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                              style={{ width: `${Math.min(100, Math.round((p.usagePct ?? 0) * 100))}%` }}
+                            />
+                          </div>
+                          {p.resetAt && <p className="mt-1 text-[11px] text-slate-500">resets {new Date(p.resetAt).toLocaleDateString()}</p>}
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-3 gap-2 pt-1 text-center text-xs">
+                        <div className="rounded-lg border border-slate-800 bg-slate-900/50 py-2">
+                          <div className="font-mono text-slate-200">{p.todaySpendUsd != null ? usd(p.todaySpendUsd) : '—'}</div>
+                          <div className="text-slate-500">today</div>
+                        </div>
+                        <div className="rounded-lg border border-slate-800 bg-slate-900/50 py-2">
+                          <div className={`font-mono ${toneText[tone]}`}>{p.projectedMonthUsd != null ? usd(p.projectedMonthUsd) : '—'}</div>
+                          <div className="text-slate-500">projected</div>
+                        </div>
+                        <div className="rounded-lg border border-slate-800 bg-slate-900/50 py-2">
+                          <div className={`font-mono ${p.marginUsd == null ? 'text-slate-400' : p.marginUsd < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>{p.marginUsd != null ? usd(p.marginUsd) : '—'}</div>
+                          <div className="text-slate-500">margin</div>
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-slate-500">Billed to users: <span className="font-mono text-slate-400">{usd(p.billedToUsersUsd)}</span>{p.marginPct != null && <> · margin {pct(p.marginPct)}</>}</p>
+
+                      {p.paymentIssue && (
+                        <ActionHint tone="alarm">
+                          <p className="font-semibold text-slate-200">Account status “{p.accountStatus}” — likely payment / billing problem.</p>
+                          <p>This provider may be failing right now. Check the billing page at {fix.where.split(' →')[0]} and resolve the charge.</p>
+                        </ActionHint>
+                      )}
+                      {!p.paymentIssue && (p.usagePct ?? 0) >= 0.9 && (
+                        <ActionHint tone="alarm">
+                          <p className="font-semibold text-slate-200">{pct(p.usagePct)} of the plan allowance used.</p>
+                          <p>Upgrade the plan or it will throttle/fail before the reset{p.resetAt ? ` on ${new Date(p.resetAt).toLocaleDateString()}` : ''}.</p>
+                        </ActionHint>
+                      )}
+                      {!p.paymentIssue && p.marginUsd != null && p.marginUsd < 0 && (
+                        <ActionHint tone="warn">
+                          <p>Costs more ({usd(p.monthSpendUsd ?? 0)}) than it bills ({usd(p.billedToUsersUsd)}). This service isn't paying for itself — review markup or internal usage.</p>
+                        </ActionHint>
+                      )}
+                    </div>
+                  )}
+                </GlowCard>
+              );
+            })}
+          </div>
+
+          {/* Top consumers */}
+          <GlowCard title="Top consumers this month (billed)" icon={TrendingUp} tone="muted">
+            {!spend || spend.topConsumers.length === 0 ? (
+              <p className="text-sm text-slate-400">No billable usage recorded this month.</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-800 text-left text-xs uppercase tracking-wider text-slate-500">
+                    <th className="py-2 pr-4">Contractor</th>
+                    <th className="py-2 pr-4 text-right">Events</th>
+                    <th className="py-2 pr-4 text-right">Billed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {spend.topConsumers.map((c) => (
+                    <tr key={c.contractorId} className="border-b border-slate-800/50">
+                      <td className="py-2 pr-4 font-mono text-xs text-slate-300">{c.contractorId}</td>
+                      <td className="py-2 pr-4 text-right text-slate-400">{c.events}</td>
+                      <td className="py-2 pr-4 text-right font-mono text-emerald-400">{usd(c.billedUsd)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <p className="mt-3 text-[11px] text-slate-500">Helps separate “my usage” from “users’ usage”: a single dominant contractor (or your own admin account) at the top means most spend is internal, not customer-driven.</p>
           </GlowCard>
         </TabsContent>
 
@@ -734,7 +945,7 @@ export default function LeadPrimeSystemHealth() {
       </Tabs>
 
       {/* Degradation notes */}
-      {((infra?.notes.length ?? 0) > 0 || (billing?.notes.length ?? 0) > 0) && (
+      {((infra?.notes.length ?? 0) > 0 || (billing?.notes.length ?? 0) > 0 || (spend?.notes.length ?? 0) > 0) && (
         <Card className="border-slate-700/60">
           <CardHeader>
             <CardTitle className="text-sm text-slate-400">Detector notes</CardTitle>
@@ -743,6 +954,7 @@ export default function LeadPrimeSystemHealth() {
             <ul className="list-disc space-y-1 pl-4 text-xs text-slate-500">
               {infra?.notes.map((n, i) => <li key={`i${i}`}>{n}</li>)}
               {billing?.notes.map((n, i) => <li key={`b${i}`}>{n}</li>)}
+              {spend?.notes.map((n, i) => <li key={`s${i}`}>{n}</li>)}
             </ul>
           </CardContent>
         </Card>
