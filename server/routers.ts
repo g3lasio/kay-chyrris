@@ -611,6 +611,20 @@ export const appRouter = router({
   // ─── LEADPRIME CREDIT MANAGEMENT ──────────────────────────────────────────
   leadprime: router({
 
+    // Read-only billing health monitor — surfaces money leaks / double-charges.
+    // NEVER moves money; runs only SELECTs against the LeadPrime billing tables.
+    billingHealth: protectedProcedure
+      .query(async () => {
+        try {
+          const { getBillingHealth } = await import('./services/leadprime-billing-health');
+          const data = await getBillingHealth();
+          return { success: true, data };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error fetching billing health:', error);
+          return { success: false, error: error.message, data: null };
+        }
+      }),
+
     // Get all LeadPrime users with wallet balances
     getUsers: protectedProcedure
       .input(z.object({
