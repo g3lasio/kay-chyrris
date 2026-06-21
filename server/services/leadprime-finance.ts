@@ -561,3 +561,273 @@ export async function getFinanceBreakdown(): Promise<FinanceBreakdown> {
     notes,
   };
 }
+
+// ── Phase 3: by user + LTV / breakeven + MRR movements & churn ───────────────────
+
+/**
+ * Per-user economics & subscription lifecycle. ALL local (LeadPrime DB) — no
+ * Stripe pagination needed: the `subscriptions` table mirrors the lifecycle
+ * (status, base_price_cents, created_at, canceled_at, cancel_at_period_end) and
+ * `wallet_transactions` records both real-money top-ups and free credits.
+ *
+ * Money flow → how LTV is derived (no double counting):
+ *   - Usage (usage_events.cost) is paid out of the prepaid wallet, NOT new cash.
+ *   - Real cash in = subscription license + real-money wallet top-ups.
+ *   - lifetimeRevenueUsd (LTV-to-date, cash) = real top-ups + subscription paid.
+ *     subscriptionPaidUsd = monthsActive × base price — an APPROXIMATION
+ *     (ignores upgrades/proration/refunds; capped at cancellation).
+ *   - creditsGrantedUsd (CAC) = free credits given (same set as Phase-1 freeCredits).
+ *   - This is revenue-side LTV minus CAC; per-user COGS is NOT separable from
+ *     provider totals, so it is NOT subtracted here (documented in `note`).
+ */
+
+// Real-money wallet top-ups (cash revenue), distinct from free CAC credits.
+const REAL_MONEY_TYPES = new Set([
+  'purchase',
+  'stripe_purchase',
+  'stripe_recharge',
+  'subscription_recharge',
+  'recharge',
+]);
+
+export interface UserSlice {
+  contractorId: string;
+  name: string;
+  email: string;
+  tradeType: string | null;
+  createdAt: string | null;
+  plan: string | null;
+  status: string | null;
+  monthsActive: number;
+  mrrUsd: number; // current flat-license run-rate (active only)
+  usageMtdUsd: number; // usage consumed this month
+  lifetimeUsageUsd: number; // usage consumed all-time
+  cashTopupsUsd: number; // real-money wallet top-ups all-time
+  subscriptionPaidUsd: number; // monthsActive × base price (approx)
+  lifetimeRevenueUsd: number; // cashTopups + subscriptionPaid (LTV to date)
+  creditsGrantedUsd: number; // free credits given all-time (CAC)
+  netLifetimeUsd: number; // lifetimeRevenue − credits
+  brokeEven: boolean;
+}
+
+export interface MrrMovements {
+  available: boolean;
+  note?: string;
+  activeSubscriptions: number;
+  activeMrrUsd: number;
+  newCount: number;
+  newMrrUsd: number;
+  churnedCount: number;
+  churnedMrrUsd: number;
+  netNewMrrUsd: number;
+  atRiskCount: number;
+  atRiskMrrUsd: number;
+  /** MTD logo churn proxy = churned / (active + churned). */
+  logoChurnRatePct: number | null;
+}
+
+export interface FinanceByUser {
+  generatedAt: string;
+  available: boolean;
+  note?: string;
+  users: UserSlice[]; // top users by lifetime revenue (capped)
+  totalUsers: number;
+  payingUsers: number;
+  brokeEvenUsers: number;
+  avgLtvUsd: number;
+  avgCacUsd: number;
+  ltvCacRatio: number | null;
+  totalLifetimeRevenueUsd: number;
+  totalCreditsGrantedUsd: number;
+  movements: MrrMovements;
+  notes: string[];
+}
+
+const USER_LIST_CAP = 100;
+
+async function getMrrMovements(pool: Pool, notes: string[]): Promise<MrrMovements> {
+  const out: MrrMovements = {
+    available: false,
+    activeSubscriptions: 0,
+    activeMrrUsd: 0,
+    newCount: 0,
+    newMrrUsd: 0,
+    churnedCount: 0,
+    churnedMrrUsd: 0,
+    netNewMrrUsd: 0,
+    atRiskCount: 0,
+    atRiskMrrUsd: 0,
+    logoChurnRatePct: null,
+  };
+  try {
+    const r = await pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE status IN ('active','trialing'))                                          AS active_count,
+         COALESCE(SUM(base_price_cents) FILTER (WHERE status IN ('active','trialing')),0)                 AS active_cents,
+         COUNT(*) FILTER (WHERE created_at >= date_trunc('month', now()) AND status IN ('active','trialing')) AS new_count,
+         COALESCE(SUM(base_price_cents) FILTER (WHERE created_at >= date_trunc('month', now()) AND status IN ('active','trialing')),0) AS new_cents,
+         COUNT(*) FILTER (WHERE canceled_at >= date_trunc('month', now()))                                AS churned_count,
+         COALESCE(SUM(base_price_cents) FILTER (WHERE canceled_at >= date_trunc('month', now())),0)       AS churned_cents,
+         COUNT(*) FILTER (WHERE cancel_at_period_end = true AND status IN ('active','trialing'))          AS atrisk_count,
+         COALESCE(SUM(base_price_cents) FILTER (WHERE cancel_at_period_end = true AND status IN ('active','trialing')),0) AS atrisk_cents
+       FROM subscriptions`
+    );
+    const row = r.rows[0] || {};
+    const activeCount = Number(row.active_count || 0);
+    const churnedCount = Number(row.churned_count || 0);
+    out.available = true;
+    out.activeSubscriptions = activeCount;
+    out.activeMrrUsd = round(Number(row.active_cents || 0) / 100);
+    out.newCount = Number(row.new_count || 0);
+    out.newMrrUsd = round(Number(row.new_cents || 0) / 100);
+    out.churnedCount = churnedCount;
+    out.churnedMrrUsd = round(Number(row.churned_cents || 0) / 100);
+    out.netNewMrrUsd = round(out.newMrrUsd - out.churnedMrrUsd);
+    out.atRiskCount = Number(row.atrisk_count || 0);
+    out.atRiskMrrUsd = round(Number(row.atrisk_cents || 0) / 100);
+    const denom = activeCount + churnedCount;
+    out.logoChurnRatePct = denom > 0 ? round((churnedCount / denom) * 100, 1) : null;
+  } catch (err: any) {
+    if (isMissingSchema(err)) out.note = 'subscriptions not available';
+    else out.note = err.message;
+    notes.push(`movements: ${out.note}`);
+  }
+  return out;
+}
+
+export async function getFinanceByUser(): Promise<FinanceByUser> {
+  const notes: string[] = [];
+  const pool = getLeadPrimePool();
+
+  const movements = await getMrrMovements(pool, notes);
+
+  const out: FinanceByUser = {
+    generatedAt: new Date().toISOString(),
+    available: false,
+    users: [],
+    totalUsers: 0,
+    payingUsers: 0,
+    brokeEvenUsers: 0,
+    avgLtvUsd: 0,
+    avgCacUsd: 0,
+    ltvCacRatio: null,
+    totalLifetimeRevenueUsd: 0,
+    totalCreditsGrantedUsd: 0,
+    movements,
+    notes,
+  };
+
+  let rows: any[] = [];
+  try {
+    const creditList = Array.from(CREDIT_TYPES).map((t) => `'${t}'`).join(',');
+    const moneyList = Array.from(REAL_MONEY_TYPES).map((t) => `'${t}'`).join(',');
+    const r = await pool.query(
+      `WITH sub AS (
+         SELECT contractor_id, status, plan_name, base_price_cents, created_at,
+                EXTRACT(EPOCH FROM (COALESCE(canceled_at, now()) - created_at)) / 2629800.0 AS months_active
+           FROM subscriptions
+       ),
+       usage_mtd AS (
+         SELECT contractor_id, SUM(cost) AS usd FROM usage_events
+          WHERE created_at >= date_trunc('month', now()) GROUP BY contractor_id
+       ),
+       usage_life AS (
+         SELECT contractor_id, SUM(cost) AS usd FROM usage_events GROUP BY contractor_id
+       ),
+       topups AS (
+         SELECT contractor_id, SUM(amount_cents) AS cents FROM wallet_transactions
+          WHERE amount_cents > 0 AND type IN (${moneyList}) GROUP BY contractor_id
+       ),
+       credits AS (
+         SELECT contractor_id, SUM(amount_cents) AS cents FROM wallet_transactions
+          WHERE amount_cents > 0 AND type IN (${creditList}) GROUP BY contractor_id
+       )
+       SELECT c.id, c.name, c.email, c.trade_type, c.created_at,
+              s.status, s.plan_name, s.base_price_cents, s.months_active,
+              COALESCE(um.usd,0)  AS usage_mtd,
+              COALESCE(ul.usd,0)  AS usage_life,
+              COALESCE(t.cents,0) AS topups_cents,
+              COALESCE(cr.cents,0) AS credits_cents
+         FROM contractors c
+         LEFT JOIN sub s         ON s.contractor_id  = c.id
+         LEFT JOIN usage_mtd um  ON um.contractor_id = c.id
+         LEFT JOIN usage_life ul ON ul.contractor_id = c.id
+         LEFT JOIN topups t      ON t.contractor_id  = c.id
+         LEFT JOIN credits cr    ON cr.contractor_id = c.id
+        WHERE s.contractor_id  IS NOT NULL
+           OR ul.contractor_id IS NOT NULL
+           OR t.contractor_id  IS NOT NULL
+           OR cr.contractor_id IS NOT NULL`
+    );
+    rows = r.rows;
+  } catch (err: any) {
+    if (isMissingSchema(err)) out.note = 'contractors/usage_events/wallet not available';
+    else out.note = err.message;
+    notes.push(`byUser: ${out.note}`);
+    return out;
+  }
+
+  const users: UserSlice[] = [];
+  let totalLifetimeRevenue = 0;
+  let totalCredits = 0;
+  let paying = 0;
+  let brokeEven = 0;
+  let cacSum = 0;
+  let cacCount = 0;
+
+  for (const row of rows) {
+    const basePriceUsd = Number(row.base_price_cents || 0) / 100;
+    const status = row.status ? String(row.status) : null;
+    const isActive = status === 'active' || status === 'trialing';
+    const monthsActive = Math.max(0, round(Number(row.months_active || 0), 1));
+    const cyclesPaid = row.status ? Math.max(1, Math.round(monthsActive)) : 0;
+    const subscriptionPaidUsd = round(cyclesPaid * basePriceUsd);
+    const cashTopupsUsd = round(Number(row.topups_cents || 0) / 100);
+    const creditsGrantedUsd = round(Number(row.credits_cents || 0) / 100);
+    const lifetimeUsageUsd = round(Number(row.usage_life || 0));
+    const usageMtdUsd = round(Number(row.usage_mtd || 0));
+    const lifetimeRevenueUsd = round(subscriptionPaidUsd + cashTopupsUsd);
+    const netLifetimeUsd = round(lifetimeRevenueUsd - creditsGrantedUsd);
+
+    totalLifetimeRevenue += lifetimeRevenueUsd;
+    totalCredits += creditsGrantedUsd;
+    if (lifetimeRevenueUsd > 0) paying += 1;
+    if (netLifetimeUsd > 0) brokeEven += 1;
+    cacSum += creditsGrantedUsd;
+    cacCount += 1;
+
+    users.push({
+      contractorId: String(row.id),
+      name: row.name ? String(row.name) : '—',
+      email: row.email ? String(row.email) : '—',
+      tradeType: row.trade_type ? String(row.trade_type) : null,
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+      plan: row.plan_name ? String(row.plan_name) : null,
+      status,
+      monthsActive,
+      mrrUsd: isActive ? round(basePriceUsd) : 0,
+      usageMtdUsd,
+      lifetimeUsageUsd,
+      cashTopupsUsd,
+      subscriptionPaidUsd,
+      lifetimeRevenueUsd,
+      creditsGrantedUsd,
+      netLifetimeUsd,
+      brokeEven: netLifetimeUsd > 0,
+    });
+  }
+
+  users.sort((a, b) => b.lifetimeRevenueUsd - a.lifetimeRevenueUsd);
+
+  out.available = true;
+  out.totalUsers = users.length;
+  out.payingUsers = paying;
+  out.brokeEvenUsers = brokeEven;
+  out.totalLifetimeRevenueUsd = round(totalLifetimeRevenue);
+  out.totalCreditsGrantedUsd = round(totalCredits);
+  out.avgLtvUsd = paying > 0 ? round(totalLifetimeRevenue / paying) : 0;
+  out.avgCacUsd = cacCount > 0 ? round(cacSum / cacCount) : 0;
+  out.ltvCacRatio = out.avgCacUsd > 0 ? round(out.avgLtvUsd / out.avgCacUsd, 2) : null;
+  out.users = users.slice(0, USER_LIST_CAP);
+  return out;
+}
