@@ -682,6 +682,20 @@ export const appRouter = router({
         }
       }),
 
+    // Read-only finance by-user — per-contractor LTV/breakeven (revenue vs free
+    // credits/CAC) + MRR movements & churn from the local subscriptions lifecycle.
+    financeByUser: protectedProcedure
+      .query(async () => {
+        try {
+          const { getFinanceByUser } = await import('./services/leadprime-finance');
+          const data = await getFinanceByUser();
+          return { success: true, data };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error fetching finance by-user:', error);
+          return { success: false, error: error.message, data: null };
+        }
+      }),
+
     // Get all LeadPrime users with wallet balances
     getUsers: protectedProcedure
       .input(z.object({

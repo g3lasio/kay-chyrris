@@ -21,6 +21,10 @@ import {
   Layers,
   PlugZap,
   PieChart as PieIcon,
+  Users,
+  Repeat,
+  UserMinus,
+  ArrowUpRight,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -123,6 +127,56 @@ interface FinanceBreakdown {
   byProduct: ProductSlice[];
   byCategory: CategorySlice[];
   byProvider: ProviderRevenueSlice[];
+  notes: string[];
+}
+
+interface UserSlice {
+  contractorId: string;
+  name: string;
+  email: string;
+  tradeType: string | null;
+  createdAt: string | null;
+  plan: string | null;
+  status: string | null;
+  monthsActive: number;
+  mrrUsd: number;
+  usageMtdUsd: number;
+  lifetimeUsageUsd: number;
+  cashTopupsUsd: number;
+  subscriptionPaidUsd: number;
+  lifetimeRevenueUsd: number;
+  creditsGrantedUsd: number;
+  netLifetimeUsd: number;
+  brokeEven: boolean;
+}
+interface MrrMovements {
+  available: boolean;
+  note?: string;
+  activeSubscriptions: number;
+  activeMrrUsd: number;
+  newCount: number;
+  newMrrUsd: number;
+  churnedCount: number;
+  churnedMrrUsd: number;
+  netNewMrrUsd: number;
+  atRiskCount: number;
+  atRiskMrrUsd: number;
+  logoChurnRatePct: number | null;
+}
+interface FinanceByUser {
+  generatedAt: string;
+  available: boolean;
+  note?: string;
+  users: UserSlice[];
+  totalUsers: number;
+  payingUsers: number;
+  brokeEvenUsers: number;
+  avgLtvUsd: number;
+  avgCacUsd: number;
+  ltvCacRatio: number | null;
+  totalLifetimeRevenueUsd: number;
+  totalCreditsGrantedUsd: number;
+  movements: MrrMovements;
   notes: string[];
 }
 
@@ -279,11 +333,14 @@ export default function LeadPrimeFinance() {
   const [tab, setTab] = useState('overview');
   const financeQ = trpc.leadprime.financeOverview.useQuery(undefined, { refetchInterval: 120000 });
   const breakdownQ = trpc.leadprime.financeBreakdown.useQuery(undefined, { refetchInterval: 120000 });
+  const byUserQ = trpc.leadprime.financeByUser.useQuery(undefined, { refetchInterval: 120000 });
   const fin = financeQ.data?.data as FinanceOverview | null | undefined;
   const bd = breakdownQ.data?.data as FinanceBreakdown | null | undefined;
+  const bu = byUserQ.data?.data as FinanceByUser | null | undefined;
   const finErr = financeQ.data?.success === false ? financeQ.data?.error : null;
   const bdErr = breakdownQ.data?.success === false ? breakdownQ.data?.error : null;
-  const loading = financeQ.isFetching || breakdownQ.isFetching;
+  const buErr = byUserQ.data?.success === false ? byUserQ.data?.error : null;
+  const loading = financeQ.isFetching || breakdownQ.isFetching || byUserQ.isFetching;
 
   const pnl = fin?.pnl;
   const opProfit = pnl?.operatingProfitUsd ?? 0;
@@ -295,6 +352,7 @@ export default function LeadPrimeFinance() {
 
   const noStripe = fin?.stripeKeySource == null;
   const wf = fin ? buildWaterfall(fin.waterfall) : [];
+  const mv = bu?.movements;
 
   return (
     <div className="space-y-6">
@@ -323,6 +381,7 @@ export default function LeadPrimeFinance() {
             onClick={() => {
               financeQ.refetch();
               breakdownQ.refetch();
+              byUserQ.refetch();
             }}
             disabled={loading}
           >
@@ -363,6 +422,15 @@ export default function LeadPrimeFinance() {
         </Card>
       )}
 
+      {buErr && (
+        <Card className="border-rose-500/40">
+          <CardContent className="flex items-center gap-2 pt-6 text-rose-400">
+            <AlertTriangle className="h-4 w-4" />
+            <span>By user: {buErr}</span>
+          </CardContent>
+        </Card>
+      )}
+
       <Tabs value={tab} onValueChange={setTab} className="space-y-6">
         <TabsList className="bg-slate-900/60">
           <TabsTrigger value="overview">
@@ -372,6 +440,10 @@ export default function LeadPrimeFinance() {
           <TabsTrigger value="breakdown">
             <Layers className="mr-1.5 h-3.5 w-3.5" />
             By Product &amp; Provider
+          </TabsTrigger>
+          <TabsTrigger value="users">
+            <Users className="mr-1.5 h-3.5 w-3.5" />
+            By User &amp; Churn
           </TabsTrigger>
         </TabsList>
 
@@ -796,6 +868,159 @@ export default function LeadPrimeFinance() {
                 <div className="mb-1 text-[11px] uppercase tracking-widest text-slate-500">Diagnostics</div>
                 <ul className="space-y-0.5 text-xs text-slate-500">
                   {bd.notes.map((n, i) => (
+                    <li key={i}>· {n}</li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
+        <TabsContent value="users" className="space-y-6">
+          {/* Movements & LTV command deck */}
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <StatTile
+              icon={mv && mv.netNewMrrUsd >= 0 ? ArrowUpRight : TrendingDown}
+              label="Net new MRR"
+              value={usd(mv?.netNewMrrUsd)}
+              sub={mv ? `+${usd0(mv.newMrrUsd)} new · −${usd0(mv.churnedMrrUsd)} churned` : 'this month'}
+              tone={!mv?.available ? 'muted' : (mv.netNewMrrUsd ?? 0) >= 0 ? 'ok' : 'alarm'}
+            />
+            <StatTile
+              icon={Repeat}
+              label="Active MRR"
+              value={usd(mv?.activeMrrUsd)}
+              sub={mv ? `${mv.activeSubscriptions} subscriptions` : 'recurring'}
+              tone={!mv?.available ? 'muted' : (mv.activeMrrUsd ?? 0) > 0 ? 'ok' : 'muted'}
+            />
+            <StatTile
+              icon={ArrowUpRight}
+              label="LTV : CAC"
+              value={bu?.ltvCacRatio != null ? `${bu.ltvCacRatio}×` : '—'}
+              sub={bu ? `${usd0(bu.avgLtvUsd)} LTV · ${usd0(bu.avgCacUsd)} CAC` : 'lifetime'}
+              tone={!bu?.available ? 'muted' : (bu.ltvCacRatio ?? 0) >= 3 ? 'ok' : (bu.ltvCacRatio ?? 0) >= 1 ? 'warn' : 'alarm'}
+            />
+            <StatTile
+              icon={Users}
+              label="Broke-even users"
+              value={bu ? `${bu.brokeEvenUsers}/${bu.payingUsers || bu.totalUsers}` : '—'}
+              sub={bu ? `${bu.totalUsers} with activity` : 'revenue > credits'}
+              tone={!bu?.available ? 'muted' : bu.brokeEvenUsers > 0 ? 'ok' : 'warn'}
+            />
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            {/* MRR movements & churn */}
+            <GlowCard
+              title="MRR movements & churn (MTD)"
+              icon={Repeat}
+              tone={!mv?.available ? 'muted' : (mv.churnedMrrUsd ?? 0) > 0 || (mv.atRiskMrrUsd ?? 0) > 0 ? 'warn' : 'ok'}
+            >
+              <Row label="New MRR" value={`+${usd(mv?.newMrrUsd)}`} tone="ok" />
+              <Row label={`Churned MRR (${mv?.churnedCount ?? 0})`} value={`−${usd(mv?.churnedMrrUsd)}`} tone={(mv?.churnedMrrUsd ?? 0) > 0 ? 'alarm' : 'muted'} />
+              <Row label="Net new MRR" value={usd(mv?.netNewMrrUsd)} tone={(mv?.netNewMrrUsd ?? 0) >= 0 ? 'ok' : 'alarm'} strong />
+              <Row label={`At risk — cancels at period end (${mv?.atRiskCount ?? 0})`} value={usd(mv?.atRiskMrrUsd)} tone={(mv?.atRiskMrrUsd ?? 0) > 0 ? 'warn' : 'muted'} />
+              <Row label="Logo churn (MTD proxy)" value={pctTxt(mv?.logoChurnRatePct)} tone={(mv?.logoChurnRatePct ?? 0) > 0 ? 'warn' : 'muted'} />
+              {(mv?.atRiskMrrUsd ?? 0) > 0 && (
+                <ActionHint tone="warn">
+                  <div>
+                    <strong>{usd(mv?.atRiskMrrUsd)}</strong> of MRR is set to cancel at period end. Reach out before the period closes to save it.
+                  </div>
+                </ActionHint>
+              )}
+              {!mv?.available && (
+                <p className="mt-2 text-[11px] text-slate-500">{mv?.note || 'Subscriptions table unavailable.'}</p>
+              )}
+              <p className="mt-2 text-[11px] text-slate-500">
+                Expansion/contraction (plan changes) needs historical snapshots and is not shown.
+              </p>
+            </GlowCard>
+
+            {/* LTV / CAC / breakeven */}
+            <GlowCard title="Lifetime value & breakeven" icon={Coins} tone={!bu?.available ? 'muted' : 'ok'}>
+              <Row label="Avg LTV (to date, cash)" value={usd(bu?.avgLtvUsd)} tone="ok" />
+              <Row label="Avg CAC (free credits)" value={usd(bu?.avgCacUsd)} tone={(bu?.avgCacUsd ?? 0) > 0 ? 'warn' : 'muted'} />
+              <Row label="LTV : CAC" value={bu?.ltvCacRatio != null ? `${bu.ltvCacRatio}×` : '—'} tone={(bu?.ltvCacRatio ?? 0) >= 3 ? 'ok' : (bu?.ltvCacRatio ?? 0) >= 1 ? 'warn' : 'alarm'} strong />
+              <Row label="Paying users" value={String(bu?.payingUsers ?? 0)} />
+              <Row label="Broke-even users" value={`${bu?.brokeEvenUsers ?? 0} / ${bu?.totalUsers ?? 0}`} tone={(bu?.brokeEvenUsers ?? 0) > 0 ? 'ok' : 'muted'} />
+              <Row label="Total lifetime revenue" value={usd(bu?.totalLifetimeRevenueUsd)} tone="ok" strong />
+              <Row label="Total credits given (CAC)" value={usd(bu?.totalCreditsGrantedUsd)} tone={(bu?.totalCreditsGrantedUsd ?? 0) > 0 ? 'warn' : 'muted'} />
+              <p className="mt-2 text-[11px] text-slate-500">
+                LTV-to-date = subscription license paid (≈ months active × base price) + real-money wallet top-ups.
+                Usage is funded by prepaid credits (not added, to avoid double counting). Per-user COGS is not
+                separable from provider totals, so it is not subtracted.
+              </p>
+            </GlowCard>
+          </div>
+
+          {/* Per-user table */}
+          <Card className="bg-slate-950/60 backdrop-blur border-slate-700/60">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-sm font-semibold tracking-wide text-slate-200">
+                <Users className="h-4 w-4 text-cyan-400" />
+                Users — revenue vs credits (top {bu?.users.length ?? 0} by lifetime revenue)
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-700/60 text-left text-slate-500">
+                      <th className="py-1.5 pr-3 font-medium">User</th>
+                      <th className="py-1.5 pr-3 font-medium">Plan</th>
+                      <th className="py-1.5 pr-3 font-medium">Status</th>
+                      <th className="py-1.5 pr-3 text-right font-medium">MRR</th>
+                      <th className="py-1.5 pr-3 text-right font-medium">Usage MTD</th>
+                      <th className="py-1.5 pr-3 text-right font-medium">Lifetime rev</th>
+                      <th className="py-1.5 pr-3 text-right font-medium">Credits (CAC)</th>
+                      <th className="py-1.5 text-right font-medium">Net</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(bu?.users ?? []).map((u) => {
+                      const st = u.status;
+                      const stTone: Tone =
+                        st === 'active' ? 'ok' : st === 'trialing' ? 'warn' : st === 'past_due' || st === 'unpaid' ? 'alarm' : 'muted';
+                      return (
+                        <tr key={u.contractorId} className="border-b border-slate-800/40">
+                          <td className="py-1.5 pr-3">
+                            <div className="flex items-center gap-1.5 text-slate-200">
+                              {!u.brokeEven && u.creditsGrantedUsd > 0 && <UserMinus className="h-3 w-3 text-amber-400" />}
+                              {u.name}
+                            </div>
+                            <div className="text-[10px] text-slate-500">{u.email}</div>
+                          </td>
+                          <td className="py-1.5 pr-3 text-slate-400">{u.plan ?? '—'}</td>
+                          <td className="py-1.5 pr-3">
+                            {st ? <Pill tone={stTone}>{st}</Pill> : <span className="text-slate-600">—</span>}
+                          </td>
+                          <td className="py-1.5 pr-3 text-right font-mono text-slate-300">{u.mrrUsd > 0 ? usd(u.mrrUsd) : '—'}</td>
+                          <td className="py-1.5 pr-3 text-right font-mono text-slate-400">{u.usageMtdUsd > 0 ? usd(u.usageMtdUsd) : '—'}</td>
+                          <td className="py-1.5 pr-3 text-right font-mono text-emerald-400">{usd(u.lifetimeRevenueUsd)}</td>
+                          <td className="py-1.5 pr-3 text-right font-mono text-amber-400">{u.creditsGrantedUsd > 0 ? usd(u.creditsGrantedUsd) : '—'}</td>
+                          <td className={`py-1.5 text-right font-mono ${u.netLifetimeUsd >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{usd(u.netLifetimeUsd)}</td>
+                        </tr>
+                      );
+                    })}
+                    {(!bu || bu.users.length === 0) && (
+                      <tr>
+                        <td colSpan={8} className="py-6 text-center text-slate-500">
+                          {buErr ? 'Failed to load users.' : 'No users with economic activity yet.'}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+
+          {bu?.notes && bu.notes.length > 0 && (
+            <Card className="border-slate-700/60 bg-slate-950/40">
+              <CardContent className="pt-5">
+                <div className="mb-1 text-[11px] uppercase tracking-widest text-slate-500">Diagnostics</div>
+                <ul className="space-y-0.5 text-xs text-slate-500">
+                  {bu.notes.map((n, i) => (
                     <li key={i}>· {n}</li>
                   ))}
                 </ul>
