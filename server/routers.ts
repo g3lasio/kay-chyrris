@@ -625,6 +625,21 @@ export const appRouter = router({
         }
       }),
 
+    // Read-only infra & cost health — Neon compute consumption, cost-per-user
+    // ratio, hot queries, live activity, and worker heartbeats. NEVER mutates
+    // anything; only SELECTs system catalogs + GETs the Neon consumption API.
+    infraHealth: protectedProcedure
+      .query(async () => {
+        try {
+          const { getInfraHealth } = await import('./services/leadprime-infra-health');
+          const data = await getInfraHealth();
+          return { success: true, data };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error fetching infra health:', error);
+          return { success: false, error: error.message, data: null };
+        }
+      }),
+
     // Get all LeadPrime users with wallet balances
     getUsers: protectedProcedure
       .input(z.object({

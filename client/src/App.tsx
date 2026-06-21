@@ -21,7 +21,7 @@ import LeadPrimeDashboard from "./pages/LeadPrimeDashboard";
 import LeadPrimeCreditsAdmin from "./pages/LeadPrimeCreditsAdmin";
 import LeadPrimeUsersIntelligence from "./pages/LeadPrimeUsersIntelligence";
 import SystemIssues from "./pages/SystemIssues";
-import LeadPrimeBillingHealth from "./pages/LeadPrimeBillingHealth";
+import LeadPrimeSystemHealth from "./pages/LeadPrimeSystemHealth";
 
 function Router() {
   return (
@@ -139,12 +139,16 @@ function Router() {
         </ProtectedRoute>
       </Route>
 
-      <Route path="/leadprime/billing-health">
+      <Route path="/leadprime/health">
         <ProtectedRoute>
           <LeadPrimeLayout>
-            <LeadPrimeBillingHealth />
+            <LeadPrimeSystemHealth />
           </LeadPrimeLayout>
         </ProtectedRoute>
+      </Route>
+
+      <Route path="/leadprime/billing-health">
+        <Redirect to="/leadprime/health" />
       </Route>
 
       <Route path="/404" component={NotFound} />
