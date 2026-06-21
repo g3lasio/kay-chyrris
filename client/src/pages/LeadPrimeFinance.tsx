@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   RefreshCw,
   AlertTriangle,
@@ -16,6 +18,9 @@ import {
   Gift,
   KeyRound,
   Lightbulb,
+  Layers,
+  PlugZap,
+  PieChart as PieIcon,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -26,6 +31,8 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip as RTooltip,
+  PieChart,
+  Pie,
 } from 'recharts';
 
 // ── Types (mirror server/services/leadprime-finance.ts) ───────────────────────
@@ -81,6 +88,41 @@ interface FinanceOverview {
     operatingMarginPct: number | null;
   };
   waterfall: { label: string; deltaUsd: number; kind: 'in' | 'out' | 'total' }[];
+  notes: string[];
+}
+
+type Category = 'Messaging' | 'Voice & Phone' | 'AI' | 'Website' | 'Documents' | 'Other';
+interface ProductSlice {
+  eventType: string;
+  label: string;
+  color: string;
+  category: Category;
+  provider: 'anthropic' | 'openai' | 'twilio' | 'elevenlabs' | 'internal';
+  billedUsd: number;
+  events: number;
+  contractors: number;
+  quantity: number;
+  sharePct: number;
+}
+interface CategorySlice {
+  category: Category;
+  billedUsd: number;
+  sharePct: number;
+}
+interface ProviderRevenueSlice {
+  provider: string;
+  label: string;
+  available: boolean;
+  billedUsd: number;
+  actualUsd: number | null;
+  marginUsd: number | null;
+}
+interface FinanceBreakdown {
+  generatedAt: string;
+  totalBilledUsd: number;
+  byProduct: ProductSlice[];
+  byCategory: CategorySlice[];
+  byProvider: ProviderRevenueSlice[];
   notes: string[];
 }
 
@@ -200,6 +242,15 @@ const WF_COLOR: Record<'in' | 'out' | 'total', string> = {
   total: '#22d3ee', // cyan
 };
 
+const CATEGORY_COLOR: Record<Category, string> = {
+  Messaging: '#22d3ee', // cyan
+  'Voice & Phone': '#a78bfa', // violet
+  AI: '#34d399', // emerald
+  Website: '#fbbf24', // amber
+  Documents: '#fb7185', // rose
+  Other: '#94a3b8', // slate
+};
+
 function buildWaterfall(steps: FinanceOverview['waterfall']) {
   let cum = 0;
   return steps.map((s) => {
@@ -225,10 +276,14 @@ function buildWaterfall(steps: FinanceOverview['waterfall']) {
 // ── Page ────────────────────────────────────────────────────────────────────────
 
 export default function LeadPrimeFinance() {
+  const [tab, setTab] = useState('overview');
   const financeQ = trpc.leadprime.financeOverview.useQuery(undefined, { refetchInterval: 120000 });
+  const breakdownQ = trpc.leadprime.financeBreakdown.useQuery(undefined, { refetchInterval: 120000 });
   const fin = financeQ.data?.data as FinanceOverview | null | undefined;
+  const bd = breakdownQ.data?.data as FinanceBreakdown | null | undefined;
   const finErr = financeQ.data?.success === false ? financeQ.data?.error : null;
-  const loading = financeQ.isFetching;
+  const bdErr = breakdownQ.data?.success === false ? breakdownQ.data?.error : null;
+  const loading = financeQ.isFetching || breakdownQ.isFetching;
 
   const pnl = fin?.pnl;
   const opProfit = pnl?.operatingProfitUsd ?? 0;
@@ -262,7 +317,15 @@ export default function LeadPrimeFinance() {
               {fin.stripeKeySource === 'leadprime' ? 'LeadPrime Stripe key' : 'Shared Stripe key'}
             </Pill>
           )}
-          <Button variant="outline" size="sm" onClick={() => financeQ.refetch()} disabled={loading}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              financeQ.refetch();
+              breakdownQ.refetch();
+            }}
+            disabled={loading}
+          >
             <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
@@ -291,6 +354,28 @@ export default function LeadPrimeFinance() {
         </Card>
       )}
 
+      {bdErr && (
+        <Card className="border-rose-500/40">
+          <CardContent className="flex items-center gap-2 pt-6 text-rose-400">
+            <AlertTriangle className="h-4 w-4" />
+            <span>Breakdown: {bdErr}</span>
+          </CardContent>
+        </Card>
+      )}
+
+      <Tabs value={tab} onValueChange={setTab} className="space-y-6">
+        <TabsList className="bg-slate-900/60">
+          <TabsTrigger value="overview">
+            <Coins className="mr-1.5 h-3.5 w-3.5" />
+            P&amp;L Overview
+          </TabsTrigger>
+          <TabsTrigger value="breakdown">
+            <Layers className="mr-1.5 h-3.5 w-3.5" />
+            By Product &amp; Provider
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview" className="space-y-6">
       {/* Command deck — P&L KPI tiles */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
         <StatTile
@@ -483,6 +568,242 @@ export default function LeadPrimeFinance() {
           </GlowCard>
         </div>
       </div>
+
+        </TabsContent>
+
+        <TabsContent value="breakdown" className="space-y-6">
+          {/* Top tiles */}
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <StatTile
+              icon={Wallet}
+              label="Usage revenue MTD"
+              value={usd(bd?.totalBilledUsd)}
+              sub={bd ? `${bd.byProduct.length} services billed` : '—'}
+              tone={bd && bd.totalBilledUsd > 0 ? 'ok' : 'muted'}
+            />
+            <StatTile
+              icon={PieIcon}
+              label="Top service"
+              value={bd?.byProduct[0] ? bd.byProduct[0].label : '—'}
+              sub={bd?.byProduct[0] ? `${usd(bd.byProduct[0].billedUsd)} · ${bd.byProduct[0].sharePct}%` : 'no usage'}
+              tone={bd?.byProduct[0] ? 'ok' : 'muted'}
+            />
+            <StatTile
+              icon={Layers}
+              label="Top category"
+              value={bd?.byCategory[0] ? bd.byCategory[0].category : '—'}
+              sub={bd?.byCategory[0] ? `${usd(bd.byCategory[0].billedUsd)} · ${bd.byCategory[0].sharePct}%` : '—'}
+              tone={bd?.byCategory[0] ? 'ok' : 'muted'}
+            />
+            <StatTile
+              icon={PlugZap}
+              label="Provider ROI"
+              value={
+                bd
+                  ? usd(
+                      bd.byProvider.reduce((s, p) => s + (p.marginUsd ?? 0), 0),
+                    )
+                  : '—'
+              }
+              sub="billed − provider cost"
+              tone={
+                !bd
+                  ? 'muted'
+                  : bd.byProvider.reduce((s, p) => s + (p.marginUsd ?? 0), 0) >= 0
+                    ? 'ok'
+                    : 'alarm'
+              }
+            />
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-5">
+            {/* By product bar chart */}
+            <Card className="lg:col-span-3 bg-slate-950/60 backdrop-blur border-slate-700/60">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-sm font-semibold tracking-wide text-slate-200">
+                  <Layers className="h-4 w-4 text-cyan-400" />
+                  Revenue by service (MTD)
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {bd && bd.byProduct.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={Math.max(220, bd.byProduct.length * 34)}>
+                    <BarChart data={bd.byProduct} layout="vertical" margin={{ top: 4, right: 16, left: 8, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
+                      <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 11 }} tickFormatter={(v) => `$${v}`} />
+                      <YAxis
+                        type="category"
+                        dataKey="label"
+                        width={110}
+                        tick={{ fill: '#94a3b8', fontSize: 11 }}
+                      />
+                      <RTooltip
+                        cursor={{ fill: '#1e293b40' }}
+                        contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }}
+                        formatter={(v: any, _n: any, p: any) => [usd(Number(v)), `${p?.payload?.sharePct}% · ${p?.payload?.contractors} users`]}
+                      />
+                      <Bar dataKey="billedUsd" radius={[0, 3, 3, 0]}>
+                        {bd.byProduct.map((d, i) => (
+                          <Cell key={i} fill={d.color} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="py-12 text-center text-sm text-slate-500">No usage billed this month.</div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* By category pie */}
+            <GlowCard title="By category" icon={PieIcon} tone="muted">
+              {bd && bd.byCategory.length > 0 ? (
+                <>
+                  <ResponsiveContainer width="100%" height={180}>
+                    <PieChart>
+                      <Pie
+                        data={bd.byCategory}
+                        dataKey="billedUsd"
+                        nameKey="category"
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={42}
+                        outerRadius={70}
+                        paddingAngle={2}
+                      >
+                        {bd.byCategory.map((c, i) => (
+                          <Cell key={i} fill={CATEGORY_COLOR[c.category]} />
+                        ))}
+                      </Pie>
+                      <RTooltip
+                        contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }}
+                        formatter={(v: any, n: any) => [usd(Number(v)), n]}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="mt-2 space-y-0.5">
+                    {bd.byCategory.map((c) => (
+                      <div key={c.category} className="flex items-center justify-between py-0.5 text-xs">
+                        <span className="flex items-center gap-1.5 text-slate-400">
+                          <span className="h-2 w-2 rounded-full" style={{ background: CATEGORY_COLOR[c.category] }} />
+                          {c.category}
+                        </span>
+                        <span className="font-mono text-slate-300">{usd(c.billedUsd)} <span className="text-slate-600">· {c.sharePct}%</span></span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="py-8 text-center text-sm text-slate-500">No data.</div>
+              )}
+            </GlowCard>
+          </div>
+
+          {/* Per-service table */}
+          <Card className="bg-slate-950/60 backdrop-blur border-slate-700/60">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-sm font-semibold tracking-wide text-slate-200">
+                <Receipt className="h-4 w-4 text-cyan-400" />
+                Service detail
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-700/60 text-left text-slate-500">
+                      <th className="py-1.5 pr-3 font-medium">Service</th>
+                      <th className="py-1.5 pr-3 font-medium">Category</th>
+                      <th className="py-1.5 pr-3 font-medium">Provider</th>
+                      <th className="py-1.5 pr-3 text-right font-medium">Revenue</th>
+                      <th className="py-1.5 pr-3 text-right font-medium">Share</th>
+                      <th className="py-1.5 pr-3 text-right font-medium">Qty</th>
+                      <th className="py-1.5 pr-3 text-right font-medium">Events</th>
+                      <th className="py-1.5 text-right font-medium">Users</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(bd?.byProduct ?? []).map((p) => (
+                      <tr key={p.eventType} className="border-b border-slate-800/40">
+                        <td className="py-1.5 pr-3">
+                          <span className="flex items-center gap-1.5 text-slate-200">
+                            <span className="h-2 w-2 rounded-full" style={{ background: p.color }} />
+                            {p.label}
+                          </span>
+                        </td>
+                        <td className="py-1.5 pr-3 text-slate-400">{p.category}</td>
+                        <td className="py-1.5 pr-3 text-slate-500">{p.provider}</td>
+                        <td className="py-1.5 pr-3 text-right font-mono text-emerald-400">{usd(p.billedUsd)}</td>
+                        <td className="py-1.5 pr-3 text-right font-mono text-slate-400">{p.sharePct}%</td>
+                        <td className="py-1.5 pr-3 text-right font-mono text-slate-400">{p.quantity}</td>
+                        <td className="py-1.5 pr-3 text-right font-mono text-slate-500">{p.events}</td>
+                        <td className="py-1.5 text-right font-mono text-slate-500">{p.contractors}</td>
+                      </tr>
+                    ))}
+                    {(!bd || bd.byProduct.length === 0) && (
+                      <tr>
+                        <td colSpan={8} className="py-6 text-center text-slate-500">No usage billed this month.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Provider ROI */}
+          <GlowCard title="Provider ROI — billed vs actual cost" icon={PlugZap} tone="muted">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-700/60 text-left text-slate-500">
+                    <th className="py-1.5 pr-3 font-medium">Provider</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Billed to users</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Actual cost</th>
+                    <th className="py-1.5 text-right font-medium">Margin</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(bd?.byProvider ?? []).map((p) => (
+                    <tr key={p.provider} className="border-b border-slate-800/40">
+                      <td className="py-1.5 pr-3 text-slate-200">{p.label}</td>
+                      <td className="py-1.5 pr-3 text-right font-mono text-slate-300">{usd(p.billedUsd)}</td>
+                      <td className="py-1.5 pr-3 text-right font-mono text-slate-400">
+                        {p.actualUsd == null ? <span className="text-slate-600">—</span> : usd(p.actualUsd)}
+                      </td>
+                      <td className={`py-1.5 text-right font-mono ${p.marginUsd == null ? 'text-slate-600' : p.marginUsd >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {p.marginUsd == null ? '—' : usd(p.marginUsd)}
+                      </td>
+                    </tr>
+                  ))}
+                  {(!bd || bd.byProvider.length === 0) && (
+                    <tr>
+                      <td colSpan={4} className="py-6 text-center text-slate-500">Provider data unavailable.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-[11px] text-slate-500">
+              Actual cost needs provider keys (Anthropic/OpenAI Admin, Twilio, ElevenLabs). Internal-only services
+              (emails, website, LeadSign) have no external provider line.
+            </p>
+          </GlowCard>
+
+          {bd?.notes && bd.notes.length > 0 && (
+            <Card className="border-slate-700/60 bg-slate-950/40">
+              <CardContent className="pt-5">
+                <div className="mb-1 text-[11px] uppercase tracking-widest text-slate-500">Diagnostics</div>
+                <ul className="space-y-0.5 text-xs text-slate-500">
+                  {bd.notes.map((n, i) => (
+                    <li key={i}>· {n}</li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+      </Tabs>
 
       {fin?.notes && fin.notes.length > 0 && (
         <Card className="border-slate-700/60 bg-slate-950/40">

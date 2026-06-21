@@ -668,6 +668,20 @@ export const appRouter = router({
         }
       }),
 
+    // Read-only finance breakdown — revenue sliced by product/feature
+    // (usage_events.cost MTD), by category, and by provider with ROI margin.
+    financeBreakdown: protectedProcedure
+      .query(async () => {
+        try {
+          const { getFinanceBreakdown } = await import('./services/leadprime-finance');
+          const data = await getFinanceBreakdown();
+          return { success: true, data };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error fetching finance breakdown:', error);
+          return { success: false, error: error.message, data: null };
+        }
+      }),
+
     // Get all LeadPrime users with wallet balances
     getUsers: protectedProcedure
       .input(z.object({

@@ -393,3 +393,171 @@ export async function getFinanceOverview(): Promise<FinanceOverview> {
     notes,
   };
 }
+
+// ── Phase 2: revenue by product/feature & by provider ───────────────────────────
+
+/**
+ * Per-feature metadata mirrors LeadPrime's own SERVICE_DISPLAY_CONFIG
+ * (backend usageTrackingService) so the admin labels/colors match the product.
+ * `category` groups features for the higher-level slice; `provider` is the
+ * external service that ultimately incurs cost (for the by-provider ROI view).
+ */
+type Category = 'Messaging' | 'Voice & Phone' | 'AI' | 'Website' | 'Documents' | 'Other';
+interface ServiceMeta {
+  label: string;
+  color: string;
+  category: Category;
+  provider: 'anthropic' | 'openai' | 'twilio' | 'elevenlabs' | 'internal';
+}
+const SERVICE_META: Record<string, ServiceMeta> = {
+  sms: { label: 'SMS', color: '#3B82F6', category: 'Messaging', provider: 'twilio' },
+  mms: { label: 'MMS', color: '#F472B6', category: 'Messaging', provider: 'twilio' },
+  emails: { label: 'Emails', color: '#10B981', category: 'Messaging', provider: 'internal' },
+  voice: { label: 'Human Voice', color: '#8B5CF6', category: 'Voice & Phone', provider: 'twilio' },
+  ai_voice: { label: 'AI Voice Agent', color: '#7C3AED', category: 'Voice & Phone', provider: 'twilio' },
+  phones: { label: 'Phone Numbers', color: '#22C55E', category: 'Voice & Phone', provider: 'twilio' },
+  phone_number: { label: 'Phone Numbers', color: '#22C55E', category: 'Voice & Phone', provider: 'twilio' },
+  ai: { label: 'AI Requests', color: '#F97316', category: 'AI', provider: 'anthropic' },
+  global_chat: { label: 'AI Agent (Chat)', color: '#A78BFA', category: 'AI', provider: 'anthropic' },
+  web_search: { label: 'Web Search', color: '#FBBF24', category: 'AI', provider: 'anthropic' },
+  document_gen: { label: 'Documents (AI)', color: '#818CF8', category: 'AI', provider: 'anthropic' },
+  website_deploy: { label: 'Website Deploy', color: '#34D399', category: 'Website', provider: 'anthropic' },
+  website_modify: { label: 'Website Edits', color: '#6EE7B7', category: 'Website', provider: 'anthropic' },
+  website_hosting: { label: 'Website Hosting', color: '#5EEAD4', category: 'Website', provider: 'internal' },
+  website: { label: 'Website', color: '#34D399', category: 'Website', provider: 'internal' },
+  leadsign: { label: 'LeadSign', color: '#06B6D4', category: 'Documents', provider: 'internal' },
+  leads: { label: 'Leads', color: '#EAB308', category: 'Other', provider: 'internal' },
+  storage: { label: 'Storage', color: '#6B7280', category: 'Other', provider: 'internal' },
+  users: { label: 'Users', color: '#EC4899', category: 'Other', provider: 'internal' },
+  pm_units: { label: 'PM Units', color: '#94A3B8', category: 'Other', provider: 'internal' },
+  pm_unit: { label: 'PM Units', color: '#94A3B8', category: 'Other', provider: 'internal' },
+};
+function metaFor(eventType: string): ServiceMeta {
+  return (
+    SERVICE_META[eventType] || {
+      label: eventType,
+      color: '#64748B',
+      category: 'Other',
+      provider: 'internal',
+    }
+  );
+}
+
+export interface ProductSlice {
+  eventType: string;
+  label: string;
+  color: string;
+  category: Category;
+  provider: ServiceMeta['provider'];
+  billedUsd: number;
+  events: number;
+  contractors: number;
+  quantity: number;
+  sharePct: number; // % of total billed usage revenue
+}
+export interface CategorySlice {
+  category: Category;
+  billedUsd: number;
+  sharePct: number;
+}
+export interface ProviderRevenueSlice {
+  provider: string;
+  label: string;
+  available: boolean;
+  billedUsd: number; // what we charge users for usage mapped to this provider
+  actualUsd: number | null; // what the provider actually costs (null = unknown)
+  marginUsd: number | null;
+}
+export interface FinanceBreakdown {
+  generatedAt: string;
+  totalBilledUsd: number; // sum of usage_events.cost this month
+  byProduct: ProductSlice[];
+  byCategory: CategorySlice[];
+  byProvider: ProviderRevenueSlice[];
+  notes: string[];
+}
+
+export async function getFinanceBreakdown(): Promise<FinanceBreakdown> {
+  const notes: string[] = [];
+  const pool = getLeadPrimePool();
+
+  const byProduct: ProductSlice[] = [];
+  let totalBilledUsd = 0;
+
+  try {
+    const r = await pool.query(
+      `SELECT event_type,
+              SUM(cost)::numeric        AS usd,
+              SUM(quantity)::numeric    AS qty,
+              COUNT(*)::int             AS events,
+              COUNT(DISTINCT contractor_id)::int AS contractors
+         FROM usage_events
+        WHERE created_at >= date_trunc('month', now())
+        GROUP BY event_type`
+    );
+    for (const row of r.rows) {
+      const eventType = String(row.event_type);
+      const meta = metaFor(eventType);
+      const billedUsd = round(Number(row.usd || 0));
+      totalBilledUsd += billedUsd;
+      byProduct.push({
+        eventType,
+        label: meta.label,
+        color: meta.color,
+        category: meta.category,
+        provider: meta.provider,
+        billedUsd,
+        events: Number(row.events || 0),
+        contractors: Number(row.contractors || 0),
+        quantity: round(Number(row.qty || 0), 2),
+        sharePct: 0,
+      });
+    }
+  } catch (err: any) {
+    if (isMissingSchema(err)) notes.push('byProduct: usage_events not available');
+    else notes.push(`byProduct: ${err.message}`);
+  }
+
+  totalBilledUsd = round(totalBilledUsd);
+  for (const p of byProduct) {
+    p.sharePct = totalBilledUsd > 0 ? round((p.billedUsd / totalBilledUsd) * 100, 1) : 0;
+  }
+  byProduct.sort((a, b) => b.billedUsd - a.billedUsd);
+
+  // Category rollup
+  const catMap = new Map<Category, number>();
+  for (const p of byProduct) catMap.set(p.category, (catMap.get(p.category) || 0) + p.billedUsd);
+  const byCategory: CategorySlice[] = Array.from(catMap.entries())
+    .map(([category, usd]) => ({
+      category,
+      billedUsd: round(usd),
+      sharePct: totalBilledUsd > 0 ? round((usd / totalBilledUsd) * 100, 1) : 0,
+    }))
+    .sort((a, b) => b.billedUsd - a.billedUsd);
+
+  // Provider revenue + ROI (reuse the corrected service-spend billed/actual).
+  let byProvider: ProviderRevenueSlice[] = [];
+  try {
+    const { getServiceSpend } = await import('./leadprime-service-spend');
+    const spend = await getServiceSpend();
+    byProvider = spend.providers.map((p) => ({
+      provider: p.provider,
+      label: p.label,
+      available: p.available,
+      billedUsd: round(p.billedToUsersUsd),
+      actualUsd: p.monthSpendUsd != null ? round(p.monthSpendUsd) : null,
+      marginUsd: p.marginUsd != null ? round(p.marginUsd) : null,
+    }));
+  } catch (err: any) {
+    notes.push(`byProvider: ${err.message}`);
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    totalBilledUsd,
+    byProduct,
+    byCategory,
+    byProvider,
+    notes,
+  };
+}
