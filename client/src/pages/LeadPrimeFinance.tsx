@@ -4,6 +4,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ReportExporter } from '@/components/ReportExporter';
+import { buildFinanceReportHtml, type FinanceReportData } from '@/lib/financeReportHtml';
 import {
   RefreshCw,
   AlertTriangle,
@@ -379,6 +381,7 @@ function buildWaterfall(steps: FinanceOverview['waterfall']) {
 
 export default function LeadPrimeFinance() {
   const [tab, setTab] = useState('overview');
+  const utils = trpc.useUtils();
   const financeQ = trpc.leadprime.financeOverview.useQuery(undefined, { refetchInterval: 120000 });
   const breakdownQ = trpc.leadprime.financeBreakdown.useQuery(undefined, { refetchInterval: 120000 });
   const byUserQ = trpc.leadprime.financeByUser.useQuery(undefined, { refetchInterval: 120000 });
@@ -428,6 +431,15 @@ export default function LeadPrimeFinance() {
               {fin.stripeKeySource === 'leadprime' ? 'LeadPrime Stripe key' : 'Shared Stripe key'}
             </Pill>
           )}
+          <ReportExporter<FinanceReportData>
+            fileBase="leadprime-finance"
+            fetchReport={async (range) => {
+              const res = await utils.leadprime.financeReport.fetch({ range });
+              if (!res.success || !res.data) throw new Error(res.error || 'Report unavailable');
+              return res.data as FinanceReportData;
+            }}
+            buildHtml={(data) => buildFinanceReportHtml(data)}
+          />
           <Button
             variant="outline"
             size="sm"

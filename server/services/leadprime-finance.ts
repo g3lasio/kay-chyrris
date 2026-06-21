@@ -29,7 +29,7 @@ import { Pool } from 'pg';
 let financeStripe: Stripe | null = null;
 let stripeKeySource: 'leadprime' | 'shared' | null = null;
 
-function getStripe(): Stripe | null {
+export function getStripe(): Stripe | null {
   if (financeStripe) return financeStripe;
   const lpKey = process.env.LEADPRIME_STRIPE_SECRET_KEY;
   const sharedKey = process.env.STRIPE_SECRET_KEY;
@@ -39,18 +39,21 @@ function getStripe(): Stripe | null {
   financeStripe = new Stripe(key, { apiVersion: '2025-12-15.clover', typescript: true });
   return financeStripe;
 }
+export function getStripeKeySource(): 'leadprime' | 'shared' | null {
+  return stripeKeySource;
+}
 
 // Only LeadPrime-tagged objects. Stripe search query language.
-const LP_FILTER = "metadata['product']:'leadprime'";
+export const LP_FILTER = "metadata['product']:'leadprime'";
 
 // Stripe processing fee estimate (USD). Stripe standard = 2.9% + $0.30.
-const FEE_PCT = Number(process.env.STRIPE_FEE_PCT ?? 2.9) / 100;
-const FEE_FIXED = Number(process.env.STRIPE_FEE_FIXED_CENTS ?? 30) / 100;
+export const FEE_PCT = Number(process.env.STRIPE_FEE_PCT ?? 2.9) / 100;
+export const FEE_FIXED = Number(process.env.STRIPE_FEE_FIXED_CENTS ?? 30) / 100;
 
 // ── DB pool ─────────────────────────────────────────────────────────────────────
 
 let financePool: Pool | null = null;
-function getLeadPrimePool(): Pool {
+export function getLeadPrimePool(): Pool {
   if (!financePool) {
     const url = process.env.LEADPRIME_DATABASE_URL;
     if (!url) throw new Error('LEADPRIME_DATABASE_URL environment variable is not set');
@@ -67,7 +70,7 @@ function getLeadPrimePool(): Pool {
 }
 
 const MISSING_SCHEMA_CODES = new Set(['42P01', '42703', '42501']);
-function isMissingSchema(err: any): boolean {
+export function isMissingSchema(err: any): boolean {
   return !!err && MISSING_SCHEMA_CODES.has(err.code);
 }
 
@@ -86,7 +89,7 @@ function daysInThisMonth(): number {
 function project(monthSoFar: number): number {
   return (monthSoFar / daysElapsedThisMonth()) * daysInThisMonth();
 }
-function round(n: number, d = 2): number {
+export function round(n: number, d = 2): number {
   const f = 10 ** d;
   return Math.round(n * f) / f;
 }
@@ -402,14 +405,14 @@ export async function getFinanceOverview(): Promise<FinanceOverview> {
  * `category` groups features for the higher-level slice; `provider` is the
  * external service that ultimately incurs cost (for the by-provider ROI view).
  */
-type Category = 'Messaging' | 'Voice & Phone' | 'AI' | 'Website' | 'Documents' | 'Other';
-interface ServiceMeta {
+export type Category = 'Messaging' | 'Voice & Phone' | 'AI' | 'Website' | 'Documents' | 'Other';
+export interface ServiceMeta {
   label: string;
   color: string;
   category: Category;
   provider: 'anthropic' | 'openai' | 'twilio' | 'elevenlabs' | 'internal';
 }
-const SERVICE_META: Record<string, ServiceMeta> = {
+export const SERVICE_META: Record<string, ServiceMeta> = {
   sms: { label: 'SMS', color: '#3B82F6', category: 'Messaging', provider: 'twilio' },
   mms: { label: 'MMS', color: '#F472B6', category: 'Messaging', provider: 'twilio' },
   emails: { label: 'Emails', color: '#10B981', category: 'Messaging', provider: 'internal' },
@@ -432,7 +435,7 @@ const SERVICE_META: Record<string, ServiceMeta> = {
   pm_units: { label: 'PM Units', color: '#94A3B8', category: 'Other', provider: 'internal' },
   pm_unit: { label: 'PM Units', color: '#94A3B8', category: 'Other', provider: 'internal' },
 };
-function metaFor(eventType: string): ServiceMeta {
+export function metaFor(eventType: string): ServiceMeta {
   return (
     SERVICE_META[eventType] || {
       label: eventType,
