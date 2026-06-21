@@ -710,6 +710,23 @@ export const appRouter = router({
         }
       }),
 
+    // Read-only finance period report — week / month / quarter. Bounds every
+    // money query to the chosen window for an exportable (HTML/PDF) snapshot:
+    // captured revenue, usage by product & category, free credits (CAC),
+    // subscription movements, at-risk book, COGS and full P&L. NEVER moves money.
+    financeReport: protectedProcedure
+      .input(z.object({ range: z.enum(['week', 'month', 'quarter']).default('month') }).optional())
+      .query(async ({ input }) => {
+        try {
+          const { getFinanceReport } = await import('./services/leadprime-finance-report');
+          const data = await getFinanceReport(input?.range);
+          return { success: true, data };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error fetching finance report:', error);
+          return { success: false, error: error.message, data: null };
+        }
+      }),
+
     // Get all LeadPrime users with wallet balances
     getUsers: protectedProcedure
       .input(z.object({
