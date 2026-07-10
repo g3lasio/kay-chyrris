@@ -8,7 +8,7 @@
  * - Per-user actions: edit contact, grant credits, delete
  * - Batch delete: select multiple users and delete at once
  */
-import { Fragment, useState, useMemo } from 'react';
+import { Fragment, useState, useMemo, useEffect } from 'react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,7 +19,7 @@ import {
   Users, Search, RefreshCw, Loader2, TrendingUp, DollarSign,
   Activity, Building2, Shield, ChevronUp, ChevronDown,
   Pencil, Trash2, Gift, X, Check, AlertTriangle, BadgeCheck,
-  Phone, Mail, MapPin, Calendar, Briefcase, Star,
+  Phone, Mail, MapPin, Calendar, Briefcase, Star, Server,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -103,6 +103,11 @@ export default function LeadPrimeUsersIntelligence() {
   const [grantAmount, setGrantAmount] = useState('');
   const [grantDesc, setGrantDesc] = useState('Admin grant');
 
+  // Managed hosting modal state
+  const [hostingUser, setHostingUser] = useState<EnrichedUser | null>(null);
+  const [hostingEnabled, setHostingEnabled] = useState(false);
+  const [hostingAmount, setHostingAmount] = useState('');
+
   // Delete confirm state (single)
   const [deleteUser, setDeleteUser] = useState<EnrichedUser | null>(null);
 
@@ -159,6 +164,34 @@ export default function LeadPrimeUsersIntelligence() {
     },
     onError: (e) => toast.error(e.message),
   });
+
+  // Managed hosting: read current config when a user's hosting modal opens.
+  const hostingQuery = trpc.leadprime.getHosting.useQuery(
+    { contractorId: hostingUser?.id ?? '' },
+    { enabled: !!hostingUser, staleTime: 0 },
+  );
+  const setHosting = trpc.leadprime.setHosting.useMutation({
+    onSuccess: () => {
+      toast.success('Hosting settings saved');
+      setHostingUser(null);
+      utils.leadprime.getEnrichedUsers.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  function openHosting(u: EnrichedUser) {
+    setHostingUser(u);
+    setHostingEnabled(false);
+    setHostingAmount('');
+  }
+
+  // Prime the modal fields from the fetched config when it loads.
+  useEffect(() => {
+    if (hostingUser && hostingQuery.data) {
+      setHostingEnabled(hostingQuery.data.enabled);
+      setHostingAmount(hostingQuery.data.monthlyCents ? (hostingQuery.data.monthlyCents / 100).toFixed(2) : '');
+    }
+  }, [hostingUser, hostingQuery.data]);
 
   const deleteUsersMutation = trpc.leadprime.deleteUsers.useMutation({
     onSuccess: (result: any) => {
@@ -476,6 +509,9 @@ export default function LeadPrimeUsersIntelligence() {
                             <button onClick={() => setGrantUser(u)} className="p-1.5 rounded hover:bg-accent transition-colors" title="Grant credits">
                               <Gift className="h-3.5 w-3.5 text-muted-foreground hover:text-emerald-400" />
                             </button>
+                            <button onClick={() => openHosting(u)} className="p-1.5 rounded hover:bg-accent transition-colors" title="Managed hosting">
+                              <Server className="h-3.5 w-3.5 text-muted-foreground hover:text-cyan-400" />
+                            </button>
                             <button onClick={() => setDeleteUser(u)} className="p-1.5 rounded hover:bg-accent transition-colors" title="Delete user">
                               <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-red-400" />
                             </button>
@@ -631,6 +667,70 @@ export default function LeadPrimeUsersIntelligence() {
                 {grantCredits.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Gift className="h-4 w-4 mr-1" />} Grant
               </Button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Managed Hosting Modal */}
+      {hostingUser && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-background border border-border rounded-xl p-6 w-full max-w-md space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold flex items-center gap-2"><Server className="h-4 w-4 text-cyan-400" /> Website Hosting — {hostingUser.name}</h2>
+              <button onClick={() => setHostingUser(null)}><X className="h-4 w-4" /></button>
+            </div>
+
+            {hostingQuery.isLoading ? (
+              <div className="py-6 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+            ) : (
+              <>
+                {/* Status summary from the current config */}
+                <div className="rounded-lg border border-border p-3 text-sm space-y-1.5">
+                  <div className="flex justify-between"><span className="text-muted-foreground">Status</span>
+                    <span className={
+                      hostingQuery.data?.status === 'active' ? 'text-emerald-400 font-medium' :
+                      hostingQuery.data?.status === 'suspended' ? 'text-amber-400 font-medium' : 'text-muted-foreground'
+                    }>{hostingQuery.data?.status ?? 'inactive'}</span>
+                  </div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Total charged to date</span>
+                    <span className="text-foreground font-medium">${((hostingQuery.data?.totalChargedCents ?? 0) / 100).toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Last charged</span>
+                    <span className="text-foreground">{hostingQuery.data?.lastChargedAt ? fmtDate(hostingQuery.data.lastChargedAt) : '—'}</span>
+                  </div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Next charge</span>
+                    <span className="text-foreground">{hostingQuery.data?.nextChargeAt ? fmtDate(hostingQuery.data.nextChargeAt) : '—'}</span>
+                  </div>
+                </div>
+
+                {/* Controls */}
+                <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                  <input type="checkbox" checked={hostingEnabled} onChange={e => setHostingEnabled(e.target.checked)} className="h-4 w-4 accent-cyan-500" />
+                  Hosting enabled (bill this contractor monthly)
+                </label>
+                <div>
+                  <Label>Monthly amount ($)</Label>
+                  <Input type="number" min="0" step="0.01" placeholder="0.00" value={hostingAmount} onChange={e => setHostingAmount(e.target.value)} disabled={!hostingEnabled} />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Charged from the contractor's credit wallet by LeadPrime's daily billing sweep. Enabling starts billing on the next sweep; disabling stops future charges.
+                  </p>
+                </div>
+
+                <div className="flex gap-2 justify-end">
+                  <Button variant="outline" onClick={() => setHostingUser(null)}>Cancel</Button>
+                  <Button
+                    disabled={setHosting.isPending || (hostingEnabled && (!hostingAmount || parseFloat(hostingAmount) <= 0))}
+                    onClick={() => setHosting.mutate({
+                      contractorId: hostingUser.id,
+                      enabled: hostingEnabled,
+                      monthlyDollars: hostingEnabled ? parseFloat(hostingAmount || '0') : 0,
+                    })}
+                  >
+                    {setHosting.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 mr-1" />} Save
+                  </Button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

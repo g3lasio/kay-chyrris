@@ -820,6 +820,41 @@ export const appRouter = router({
         }
       }),
 
+    // ── Managed website hosting (per-contractor monthly fee) ──────────────────
+    // Read a contractor's hosting config + lifetime amount charged.
+    getHosting: protectedProcedure
+      .input(z.object({ contractorId: z.string().min(1) }))
+      .query(async ({ input }) => {
+        try {
+          const { getHostingConfig } = await import('./services/leadprime-db');
+          return await getHostingConfig(input.contractorId);
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error reading hosting config:', error);
+          throw new Error(`Failed to read hosting config: ${error.message}`);
+        }
+      }),
+
+    // Enable/disable hosting and set the monthly price for a contractor. The
+    // actual monthly charge runs from LeadPrime's cron — this only saves config.
+    setHosting: protectedProcedure
+      .input(z.object({
+        contractorId: z.string().min(1),
+        enabled: z.boolean(),
+        monthlyDollars: z.number().min(0).max(1000),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        try {
+          const { setHostingConfig } = await import('./services/leadprime-db');
+          const adminEmail = (ctx.user as any)?.email ?? 'admin';
+          const monthlyCents = Math.round(input.monthlyDollars * 100);
+          const config = await setHostingConfig(input.contractorId, input.enabled, monthlyCents, adminEmail);
+          return { success: true, config };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error saving hosting config:', error);
+          throw new Error(`Failed to save hosting config: ${error.message}`);
+        }
+      }),
+
     // Get wallet transaction history
     getTransactions: protectedProcedure
       .input(z.object({

@@ -1146,3 +1146,124 @@ export async function updateSystemIssueStatus(
     throw err;
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Managed website hosting (Chyrris-built sites) — per-contractor monthly fee.
+//
+// Config lives in the `contractor_hosting` table on the SAME LeadPrime Neon DB
+// (migration 231 in g3lasio/leadprime). The admin toggles it on/off and sets the
+// monthly price here; LeadPrime's own daily cron (hostingBillingService) performs
+// the actual wallet deduction (type 'managed_hosting'). We only read/write config
+// and read the charge history — we never move money from the admin.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface HostingConfig {
+  contractorId: string;
+  enabled: boolean;
+  monthlyCents: number;
+  status: string;            // active | suspended | inactive
+  nextChargeAt: string | null;
+  lastChargedAt: string | null;
+  updatedBy: string | null;
+  totalChargedCents: number; // lifetime sum of managed_hosting charges
+}
+
+/** Read a contractor's managed-hosting config + lifetime amount charged. */
+export async function getHostingConfig(contractorId: string): Promise<HostingConfig> {
+  const pool = getLeadPrimePool();
+
+  const cfg = await pool.query(
+    `SELECT enabled, monthly_cents, status, next_charge_at, last_charged_at, updated_by
+     FROM contractor_hosting WHERE contractor_id = $1`,
+    [contractorId]
+  );
+
+  // Lifetime charged = sum of the (negative) managed_hosting debits, as a positive.
+  const charged = await pool.query(
+    `SELECT COALESCE(SUM(ABS(amount_cents)), 0) AS total
+     FROM wallet_transactions
+     WHERE contractor_id = $1 AND type = 'managed_hosting'`,
+    [contractorId]
+  );
+  const totalChargedCents = parseInt(charged.rows[0]?.total, 10) || 0;
+
+  const row = cfg.rows[0];
+  if (!row) {
+    return {
+      contractorId, enabled: false, monthlyCents: 0, status: 'inactive',
+      nextChargeAt: null, lastChargedAt: null, updatedBy: null, totalChargedCents,
+    };
+  }
+  return {
+    contractorId,
+    enabled: row.enabled === true,
+    monthlyCents: parseInt(row.monthly_cents, 10) || 0,
+    status: row.status || 'inactive',
+    nextChargeAt: row.next_charge_at instanceof Date ? row.next_charge_at.toISOString() : row.next_charge_at,
+    lastChargedAt: row.last_charged_at instanceof Date ? row.last_charged_at.toISOString() : row.last_charged_at,
+    updatedBy: row.updated_by || null,
+    totalChargedCents,
+  };
+}
+
+/**
+ * Enable/disable hosting and set the monthly price for a contractor.
+ * - Enabling (with amount > 0): schedules the first charge for the next daily
+ *   sweep only if it wasn't already enabled (re-saving an active config keeps its
+ *   existing next_charge_at, so the billing date never silently resets).
+ * - Disabling: status → 'inactive', next_charge_at → NULL (the sweep skips it),
+ *   but monthly_cents is preserved so re-enabling remembers the price.
+ * Money is never moved here — LeadPrime's cron does the actual deduction.
+ */
+export async function setHostingConfig(
+  contractorId: string,
+  enabled: boolean,
+  monthlyCents: number,
+  updatedBy: string
+): Promise<HostingConfig> {
+  const pool = getLeadPrimePool();
+
+  const existing = await pool.query(
+    `SELECT enabled, next_charge_at FROM contractor_hosting WHERE contractor_id = $1`,
+    [contractorId]
+  );
+  const wasEnabled = existing.rows[0]?.enabled === true;
+  const existingNext = existing.rows[0]?.next_charge_at ?? null;
+
+  const shouldBill = enabled && monthlyCents > 0;
+
+  if (shouldBill) {
+    // Keep the existing schedule if already enabled; otherwise start billing now
+    // (next daily sweep picks it up). NOW() is resolved in SQL below.
+    const keepSchedule = wasEnabled && existingNext != null;
+    await pool.query(
+      `INSERT INTO contractor_hosting
+         (contractor_id, enabled, monthly_cents, status, next_charge_at, updated_by, updated_at)
+       VALUES ($1, true, $2, 'active', NOW(), $3, NOW())
+       ON CONFLICT (contractor_id) DO UPDATE SET
+         enabled        = true,
+         monthly_cents  = EXCLUDED.monthly_cents,
+         status         = CASE WHEN contractor_hosting.status = 'suspended' THEN 'suspended' ELSE 'active' END,
+         next_charge_at = ${keepSchedule ? 'contractor_hosting.next_charge_at' : 'NOW()'},
+         updated_by     = EXCLUDED.updated_by,
+         updated_at     = NOW()`,
+      [contractorId, Math.round(monthlyCents), updatedBy]
+    );
+  } else {
+    await pool.query(
+      `INSERT INTO contractor_hosting
+         (contractor_id, enabled, monthly_cents, status, next_charge_at, updated_by, updated_at)
+       VALUES ($1, false, $2, 'inactive', NULL, $3, NOW())
+       ON CONFLICT (contractor_id) DO UPDATE SET
+         enabled        = false,
+         monthly_cents  = EXCLUDED.monthly_cents,
+         status         = 'inactive',
+         next_charge_at = NULL,
+         updated_by     = EXCLUDED.updated_by,
+         updated_at     = NOW()`,
+      [contractorId, Math.round(monthlyCents), updatedBy]
+    );
+  }
+
+  return getHostingConfig(contractorId);
+}
