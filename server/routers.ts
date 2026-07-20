@@ -770,7 +770,7 @@ export const appRouter = router({
     grantCredits: protectedProcedure
       .input(z.object({
         contractorId: z.string().min(1),
-        amountDollars: z.number().min(0.01).max(1000),
+        amountDollars: z.number().min(0.01).max(1200), // raised from 1000 to match $1,200 tier cap (Decisión #5)
         description: z.string().min(3),
         note: z.string().optional(),
       }))
@@ -797,7 +797,7 @@ export const appRouter = router({
     grantCreditsBatch: protectedProcedure
       .input(z.object({
         contractorIds: z.array(z.string()).min(1).max(500),
-        amountDollars: z.number().min(0.01).max(1000),
+        amountDollars: z.number().min(0.01).max(1200), // raised from 1000 to match $1,200 tier cap (Decisión #5)
         description: z.string().min(3),
         note: z.string().optional(),
       }))
@@ -1065,6 +1065,62 @@ export const appRouter = router({
           return await deleteLeadPrimeUsers(input.contractorIds);
         } catch (error: any) {
           throw new Error(`Failed to batch delete users: ${error.message}`);
+        }
+      }),
+
+    // ── Subscription config (Fases 3-4 — Kai→config→worker pattern) ────────────
+    // Kai NEVER moves money or tier. It only writes INTENT to
+    // contractor_subscription_config; the LeadPrime worker executes every 5 min.
+
+    // Read a contractor's subscription state + billing history.
+    getSubscriptionConfig: protectedProcedure
+      .input(z.object({ contractorId: z.string().min(1) }))
+      .query(async ({ input }) => {
+        try {
+          const { getSubscriptionConfig } = await import('./services/leadprime-db');
+          return await getSubscriptionConfig(input.contractorId);
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error reading subscription config:', error);
+          throw new Error(`Failed to read subscription config: ${error.message}`);
+        }
+      }),
+
+    // Write subscription intent (UPSERT → status='pending'). Worker executes.
+    // NEVER writes status='applied', applied_at, checkout_url, or
+    // contract_end_processed_at (all worker-owned fields).
+    setSubscriptionConfig: protectedProcedure
+      .input(z.object({
+        contractorId: z.string().min(1),
+        targetTier: z.enum(['network_elite', 'chyrris_growth', 'chyrris_legacy']),
+        billingMode: z.enum(['stripe_ach', 'comp_no_charge']),
+        monthlyCreditsCents: z.number().int().min(0).max(120000).nullable(), // tope $1,200 (Decisión #5)
+        enableLegacyProjects: z.boolean(),
+        contractEndAt: z.string().nullable(), // ISO date string or null
+        onContractEnd: z.enum(['downgrade_to_elite', 'cancel']).default('downgrade_to_elite'),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        try {
+          const { setSubscriptionConfig } = await import('./services/leadprime-db');
+          const updatedBy = (ctx.user as any)?.email ?? 'admin';
+          const result = await setSubscriptionConfig({ ...input, updatedBy });
+          return { success: true, config: result };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error saving subscription config:', error);
+          throw new Error(`Failed to save subscription config: ${error.message}`);
+        }
+      }),
+
+    // Read the last 50 tier change log entries for a contractor (audit trail).
+    getTierChangeLog: protectedProcedure
+      .input(z.object({ contractorId: z.string().min(1) }))
+      .query(async ({ input }) => {
+        try {
+          const { getTierChangeLog } = await import('./services/leadprime-db');
+          const log = await getTierChangeLog(input.contractorId);
+          return { success: true, data: log };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error reading tier change log:', error);
+          return { success: false, error: error.message, data: [] };
         }
       }),
 

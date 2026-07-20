@@ -1267,3 +1267,246 @@ export async function setHostingConfig(
 
   return getHostingConfig(contractorId);
 }
+
+// ─── SUBSCRIPTION CONFIG (Fases 3-4 — Kai→config→worker pattern) ─────────────
+//
+// Kai NEVER moves money or tier directly. It writes an INTENT to
+// contractor_subscription_config (migration 251 in g3lasio/leadprime). The
+// LeadPrime worker (subscriptionConfigWorker, every 5 min) executes via the
+// single applyTierChange gate.
+//
+// Fields Kai writes: target_tier, billing_mode, monthly_credits_cents,
+//   enable_legacy_projects, contract_end_at, on_contract_end, status='pending',
+//   enabled=true, updated_by, updated_at.
+// Fields Kai NEVER writes: status='applied', applied_at, checkout_url,
+//   contract_end_processed_at (all owned by the worker).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SubscriptionConfig {
+  contractorId: string;
+  // From subscriptions table
+  planName: string | null;
+  subStatus: string | null;
+  serviceLevel: string | null;
+  // From contractor_feature_flags
+  legacyRealEstate: boolean;
+  // From contractor_subscription_config
+  targetTier: string | null;
+  billingMode: string | null;
+  monthlyCreditsCents: number | null;
+  enableLegacyProjects: boolean;
+  contractEndAt: string | null;
+  onContractEnd: string;
+  contractEndProcessedAt: string | null;
+  status: string | null;
+  enabled: boolean;
+  checkoutUrl: string | null;
+  checkoutCreatedAt: string | null;
+  lastError: string | null;
+  updatedBy: string | null;
+  appliedAt: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  // Billing history
+  invoices: Array<{
+    stripeInvoiceId: string | null;
+    amountDue: number;
+    amountPaid: number;
+    status: string;
+    paidAt: string | null;
+    createdAt: string;
+  }>;
+  achHolds: Array<{
+    stripeInvoiceId: string | null;
+    tier: string | null;
+    amountCents: number;
+    status: string;
+    retryCount: number;
+    holdExpiresAt: string | null;
+  }>;
+}
+
+/** Read a contractor's subscription config, subscription status, feature flags,
+ *  and billing history (invoices + ACH holds). */
+export async function getSubscriptionConfig(contractorId: string): Promise<SubscriptionConfig> {
+  const pool = getLeadPrimePool();
+
+  // Main query: subscriptions + config + feature flags
+  const mainRes = await pool.query(
+    `SELECT
+       csc.target_tier,
+       csc.billing_mode,
+       csc.monthly_credits_cents,
+       csc.enable_legacy_projects,
+       csc.contract_end_at,
+       csc.on_contract_end,
+       csc.contract_end_processed_at,
+       csc.status,
+       csc.enabled,
+       csc.checkout_url,
+       csc.checkout_created_at,
+       csc.last_error,
+       csc.updated_by,
+       csc.applied_at,
+       csc.created_at,
+       csc.updated_at,
+       s.plan_name,
+       s.status AS sub_status,
+       s.service_level,
+       COALESCE(f.legacy_real_estate, false) AS legacy_real_estate
+     FROM subscriptions s
+     LEFT JOIN contractor_subscription_config csc USING (contractor_id)
+     LEFT JOIN contractor_feature_flags f USING (contractor_id)
+     WHERE s.contractor_id = $1`,
+    [contractorId]
+  );
+
+  const row = mainRes.rows[0];
+
+  // Billing history: invoices
+  const invoicesRes = await pool.query(
+    `SELECT stripe_invoice_id, amount_due, amount_paid, status, paid_at, created_at
+     FROM invoices
+     WHERE contractor_id = $1
+     ORDER BY created_at DESC LIMIT 24`,
+    [contractorId]
+  );
+
+  // Billing history: ACH holds
+  const holdsRes = await pool.query(
+    `SELECT stripe_invoice_id, tier, amount_cents, status, retry_count, hold_expires_at
+     FROM ach_payment_holds
+     WHERE contractor_id = $1
+     ORDER BY created_at DESC LIMIT 24`,
+    [contractorId]
+  );
+
+  const toIso = (v: any) => (v instanceof Date ? v.toISOString() : v ?? null);
+
+  return {
+    contractorId,
+    planName: row?.plan_name ?? null,
+    subStatus: row?.sub_status ?? null,
+    serviceLevel: row?.service_level ?? null,
+    legacyRealEstate: row?.legacy_real_estate === true,
+    targetTier: row?.target_tier ?? null,
+    billingMode: row?.billing_mode ?? null,
+    monthlyCreditsCents: row?.monthly_credits_cents != null ? parseInt(row.monthly_credits_cents, 10) : null,
+    enableLegacyProjects: row?.enable_legacy_projects === true,
+    contractEndAt: toIso(row?.contract_end_at),
+    onContractEnd: row?.on_contract_end ?? 'downgrade_to_elite',
+    contractEndProcessedAt: toIso(row?.contract_end_processed_at),
+    status: row?.status ?? null,
+    enabled: row?.enabled === true,
+    checkoutUrl: row?.checkout_url ?? null,
+    checkoutCreatedAt: toIso(row?.checkout_created_at),
+    lastError: row?.last_error ?? null,
+    updatedBy: row?.updated_by ?? null,
+    appliedAt: toIso(row?.applied_at),
+    createdAt: toIso(row?.created_at),
+    updatedAt: toIso(row?.updated_at),
+    invoices: invoicesRes.rows.map(r => ({
+      stripeInvoiceId: r.stripe_invoice_id ?? null,
+      amountDue: parseInt(r.amount_due, 10) || 0,
+      amountPaid: parseInt(r.amount_paid, 10) || 0,
+      status: r.status,
+      paidAt: toIso(r.paid_at),
+      createdAt: toIso(r.created_at) ?? '',
+    })),
+    achHolds: holdsRes.rows.map(r => ({
+      stripeInvoiceId: r.stripe_invoice_id ?? null,
+      tier: r.tier ?? null,
+      amountCents: parseInt(r.amount_cents, 10) || 0,
+      status: r.status,
+      retryCount: parseInt(r.retry_count, 10) || 0,
+      holdExpiresAt: toIso(r.hold_expires_at),
+    })),
+  };
+}
+
+export interface SetSubscriptionConfigInput {
+  contractorId: string;
+  targetTier: 'network_elite' | 'chyrris_growth' | 'chyrris_legacy';
+  billingMode: 'stripe_ach' | 'comp_no_charge';
+  monthlyCreditsCents: number | null;  // null = use catalog default; max 120000
+  enableLegacyProjects: boolean;
+  contractEndAt: string | null;        // ISO string or null
+  onContractEnd: 'downgrade_to_elite' | 'cancel';
+  updatedBy: string;
+}
+
+/** Write subscription intent to contractor_subscription_config.
+ *  UPSERT with status='pending', enabled=true. NEVER writes status='applied',
+ *  applied_at, checkout_url, or contract_end_processed_at (worker-owned). */
+export async function setSubscriptionConfig(input: SetSubscriptionConfigInput): Promise<SubscriptionConfig> {
+  const pool = getLeadPrimePool();
+
+  const creditsCap = 120000; // $1,200 — Decisión #5
+  const credits = input.monthlyCreditsCents != null
+    ? Math.min(Math.max(0, Math.round(input.monthlyCreditsCents)), creditsCap)
+    : null;
+
+  await pool.query(
+    `INSERT INTO contractor_subscription_config
+       (contractor_id, target_tier, billing_mode, monthly_credits_cents,
+        enable_legacy_projects, contract_end_at, on_contract_end,
+        status, enabled, updated_by, updated_at, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', true, $8, NOW(), NOW())
+     ON CONFLICT (contractor_id) DO UPDATE SET
+       target_tier            = EXCLUDED.target_tier,
+       billing_mode           = EXCLUDED.billing_mode,
+       monthly_credits_cents  = EXCLUDED.monthly_credits_cents,
+       enable_legacy_projects = EXCLUDED.enable_legacy_projects,
+       contract_end_at        = EXCLUDED.contract_end_at,
+       on_contract_end        = EXCLUDED.on_contract_end,
+       status                 = 'pending',
+       enabled                = true,
+       updated_by             = EXCLUDED.updated_by,
+       updated_at             = NOW()`,
+    [
+      input.contractorId,
+      input.targetTier,
+      input.billingMode,
+      credits,
+      input.enableLegacyProjects,
+      input.contractEndAt ? new Date(input.contractEndAt) : null,
+      input.onContractEnd,
+      input.updatedBy,
+    ]
+  );
+
+  return getSubscriptionConfig(input.contractorId);
+}
+
+export interface TierChangeLogEntry {
+  id: number;
+  contractorId: string;
+  fromTier: string | null;
+  toTier: string;
+  changedBy: string | null;
+  reason: string | null;
+  metadata: Record<string, any> | null;
+  createdAt: string;
+}
+
+/** Read the last 50 tier change log entries for a contractor (audit trail). */
+export async function getTierChangeLog(contractorId: string): Promise<TierChangeLogEntry[]> {
+  const pool = getLeadPrimePool();
+  const res = await pool.query(
+    `SELECT id, contractor_id, from_tier, to_tier, changed_by, reason, metadata, created_at
+     FROM tier_change_log
+     WHERE contractor_id = $1
+     ORDER BY id DESC LIMIT 50`,
+    [contractorId]
+  );
+  return res.rows.map(r => ({
+    id: r.id,
+    contractorId: r.contractor_id,
+    fromTier: r.from_tier ?? null,
+    toTier: r.to_tier,
+    changedBy: r.changed_by ?? null,
+    reason: r.reason ?? null,
+    metadata: r.metadata ?? null,
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
+  }));
+}

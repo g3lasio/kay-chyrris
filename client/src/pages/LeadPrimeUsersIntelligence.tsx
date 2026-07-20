@@ -20,6 +20,7 @@ import {
   Activity, Building2, Shield, ChevronUp, ChevronDown,
   Pencil, Trash2, Gift, X, Check, AlertTriangle, BadgeCheck,
   Phone, Mail, MapPin, Calendar, Briefcase, Star, Server,
+  CreditCard, Copy, CheckCheck, History,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -108,6 +109,17 @@ export default function LeadPrimeUsersIntelligence() {
   const [hostingEnabled, setHostingEnabled] = useState(false);
   const [hostingAmount, setHostingAmount] = useState('');
 
+  // Subscription config modal state
+  const [subUser, setSubUser] = useState<EnrichedUser | null>(null);
+  const [subTargetTier, setSubTargetTier] = useState<'network_elite' | 'chyrris_growth' | 'chyrris_legacy'>('network_elite');
+  const [subBillingMode, setSubBillingMode] = useState<'stripe_ach' | 'comp_no_charge'>('comp_no_charge');
+  const [subCreditsCents, setSubCreditsCents] = useState<string>('');
+  const [subEnableLegacy, setSubEnableLegacy] = useState(false);
+  const [subContractEnd, setSubContractEnd] = useState('');
+  const [subOnContractEnd, setSubOnContractEnd] = useState<'downgrade_to_elite' | 'cancel'>('downgrade_to_elite');
+  const [subShowLog, setSubShowLog] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState(false);
+
   // Delete confirm state (single)
   const [deleteUser, setDeleteUser] = useState<EnrichedUser | null>(null);
 
@@ -164,6 +176,49 @@ export default function LeadPrimeUsersIntelligence() {
     },
     onError: (e) => toast.error(e.message),
   });
+
+  // Subscription config: read current config + billing history when modal opens.
+  const subConfigQuery = trpc.leadprime.getSubscriptionConfig.useQuery(
+    { contractorId: subUser?.id ?? '' },
+    { enabled: !!subUser, staleTime: 0 },
+  );
+  const subTierLogQuery = trpc.leadprime.getTierChangeLog.useQuery(
+    { contractorId: subUser?.id ?? '' },
+    { enabled: !!subUser && subShowLog, staleTime: 0 },
+  );
+  const setSubConfig = trpc.leadprime.setSubscriptionConfig.useMutation({
+    onSuccess: () => {
+      toast.success('Suscripción guardada — el worker la aplicará en los próximos 5 min');
+      utils.leadprime.getSubscriptionConfig.invalidate({ contractorId: subUser?.id ?? '' });
+      utils.leadprime.getEnrichedUsers.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  function openSub(u: EnrichedUser) {
+    setSubUser(u);
+    setSubTargetTier('network_elite');
+    setSubBillingMode('comp_no_charge');
+    setSubCreditsCents('');
+    setSubEnableLegacy(false);
+    setSubContractEnd('');
+    setSubOnContractEnd('downgrade_to_elite');
+    setSubShowLog(false);
+    setCopiedUrl(false);
+  }
+
+  // Prime subscription form fields from fetched config when it loads.
+  useEffect(() => {
+    if (subUser && subConfigQuery.data) {
+      const d = subConfigQuery.data;
+      if (d.targetTier) setSubTargetTier(d.targetTier as any);
+      if (d.billingMode) setSubBillingMode(d.billingMode as any);
+      setSubCreditsCents(d.monthlyCreditsCents != null ? String(d.monthlyCreditsCents) : '');
+      setSubEnableLegacy(d.enableLegacyProjects);
+      setSubContractEnd(d.contractEndAt ? d.contractEndAt.slice(0, 10) : '');
+      setSubOnContractEnd((d.onContractEnd as any) ?? 'downgrade_to_elite');
+    }
+  }, [subUser, subConfigQuery.data]);
 
   // Managed hosting: read current config when a user's hosting modal opens.
   const hostingQuery = trpc.leadprime.getHosting.useQuery(
@@ -512,6 +567,9 @@ export default function LeadPrimeUsersIntelligence() {
                             <button onClick={() => openHosting(u)} className="p-1.5 rounded hover:bg-accent transition-colors" title="Managed hosting">
                               <Server className="h-3.5 w-3.5 text-muted-foreground hover:text-cyan-400" />
                             </button>
+                            <button onClick={() => openSub(u)} className="p-1.5 rounded hover:bg-accent transition-colors" title="Suscripción">
+                              <CreditCard className="h-3.5 w-3.5 text-muted-foreground hover:text-violet-400" />
+                            </button>
                             <button onClick={() => setDeleteUser(u)} className="p-1.5 rounded hover:bg-accent transition-colors" title="Delete user">
                               <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-red-400" />
                             </button>
@@ -727,6 +785,251 @@ export default function LeadPrimeUsersIntelligence() {
                     })}
                   >
                     {setHosting.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 mr-1" />} Save
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Subscription Config Modal */}
+      {subUser && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-background border border-border rounded-xl p-6 w-full max-w-lg space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold flex items-center gap-2"><CreditCard className="h-4 w-4 text-violet-400" /> Suscripción — {subUser.name}</h2>
+              <button onClick={() => setSubUser(null)}><X className="h-4 w-4" /></button>
+            </div>
+
+            {subConfigQuery.isLoading ? (
+              <div className="py-6 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+            ) : (
+              <>
+                {/* ── Estado actual (solo lectura) ──────────────────────────────────── */}
+                <div className="rounded-lg border border-border p-3 text-sm space-y-1.5">
+                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Estado actual</div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Plan</span>
+                    <span className="font-medium">{subConfigQuery.data?.planName ?? '—'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Servicio</span>
+                    <span>{subConfigQuery.data?.serviceLevel ?? '—'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Sub status</span>
+                    {subBadge(subConfigQuery.data?.subStatus ?? null)}
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Legacy Projects</span>
+                    <span>{subConfigQuery.data?.legacyRealEstate ? '✅ activo' : '—'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Balance</span>
+                    <span className="font-mono">${subUser.balanceDollars}</span>
+                  </div>
+                  {/* Config status badge */}
+                  {subConfigQuery.data?.status && (
+                    <div className="flex justify-between items-center">
+                      <span className="text-muted-foreground">Config status</span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                        subConfigQuery.data.status === 'applied' ? 'bg-green-500/20 text-green-300 border border-green-500/30' :
+                        subConfigQuery.data.status === 'pending' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' :
+                        'bg-red-500/20 text-red-300 border border-red-500/30'
+                      }`}>{subConfigQuery.data.status}</span>
+                    </div>
+                  )}
+                  {subConfigQuery.data?.status === 'error' && subConfigQuery.data.lastError && (
+                    <div className="text-xs text-red-400 mt-1 break-all">{subConfigQuery.data.lastError}</div>
+                  )}
+                  {/* ACH checkout URL */}
+                  {subConfigQuery.data?.billingMode === 'stripe_ach' && subConfigQuery.data.checkoutUrl && (
+                    <div className="mt-2 pt-2 border-t border-border">
+                      <div className="text-xs text-muted-foreground mb-1">Link ACH (enviar al contratista)</div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs text-primary truncate flex-1">{subConfigQuery.data.checkoutUrl}</span>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(subConfigQuery.data!.checkoutUrl!);
+                            setCopiedUrl(true);
+                            setTimeout(() => setCopiedUrl(false), 2000);
+                          }}
+                          className="p-1 rounded hover:bg-accent transition-colors shrink-0"
+                          title="Copiar URL"
+                        >
+                          {copiedUrl ? <CheckCheck className="h-3.5 w-3.5 text-green-400" /> : <Copy className="h-3.5 w-3.5 text-muted-foreground" />}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* ── Billing history ───────────────────────────────────────────── */}
+                {((subConfigQuery.data?.invoices?.length ?? 0) > 0 || (subConfigQuery.data?.achHolds?.length ?? 0) > 0) && (
+                  <div className="rounded-lg border border-border p-3 text-xs space-y-2">
+                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Historial de cobros</div>
+                    {subConfigQuery.data?.invoices?.slice(0, 5).map((inv, i) => (
+                      <div key={i} className="flex justify-between items-center">
+                        <span className="text-muted-foreground">{fmtDate(inv.createdAt)}</span>
+                        <span className="font-mono">${(inv.amountPaid / 100).toFixed(2)}</span>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                          inv.status === 'paid' ? 'bg-green-500/20 text-green-300' :
+                          inv.status === 'open' ? 'bg-amber-500/20 text-amber-300' :
+                          'bg-gray-500/20 text-gray-400'
+                        }`}>{inv.status}</span>
+                      </div>
+                    ))}
+                    {subConfigQuery.data?.achHolds?.slice(0, 5).map((h, i) => (
+                      <div key={`h${i}`} className="flex justify-between items-center">
+                        <span className="text-muted-foreground">ACH hold</span>
+                        <span className="font-mono">${(h.amountCents / 100).toFixed(2)}</span>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                          h.status === 'cleared' ? 'bg-green-500/20 text-green-300' :
+                          h.status === 'paused' ? 'bg-red-500/20 text-red-300' :
+                          'bg-amber-500/20 text-amber-300'
+                        }`}>{h.status}{h.retryCount > 0 ? ` (x${h.retryCount})` : ''}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* ── Asignar tier ─────────────────────────────────────────────────── */}
+                <div className="space-y-3">
+                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Asignar plan</div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs">Tier</Label>
+                      <select
+                        value={subTargetTier}
+                        onChange={e => setSubTargetTier(e.target.value as any)}
+                        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                      >
+                        <option value="network_elite">Elite</option>
+                        <option value="chyrris_growth">Growth</option>
+                        <option value="chyrris_legacy">Legacy</option>
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Modo de pago</Label>
+                      <select
+                        value={subBillingMode}
+                        onChange={e => setSubBillingMode(e.target.value as any)}
+                        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                      >
+                        <option value="comp_no_charge">Cortêsía</option>
+                        <option value="stripe_ach">ACH real</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Créditos (solo si es cortêsía) */}
+                  {subBillingMode === 'comp_no_charge' && (
+                    <div>
+                      <Label className="text-xs">Créditos mensuales (cents, máx $1,200 = 120000)</Label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="120000"
+                        step="100"
+                        placeholder="Dejar vacío = catálogo"
+                        value={subCreditsCents}
+                        onChange={e => setSubCreditsCents(e.target.value)}
+                        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                      />
+                      <p className="text-xs text-muted-foreground mt-0.5">Vacío = usa los créditos del catálogo del plan</p>
+                    </div>
+                  )}
+
+                  {/* Legacy Projects switch — solo Growth/Legacy */}
+                  {(subTargetTier === 'chyrris_growth' || subTargetTier === 'chyrris_legacy') && (
+                    <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={subEnableLegacy}
+                        onChange={e => setSubEnableLegacy(e.target.checked)}
+                        className="h-4 w-4 accent-violet-500"
+                      />
+                      Habilitar Legacy Projects (mes 6)
+                    </label>
+                  )}
+
+                  {/* Fin de contrato */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs">Fin de contrato</Label>
+                      <input
+                        type="date"
+                        value={subContractEnd}
+                        onChange={e => setSubContractEnd(e.target.value)}
+                        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Al vencer</Label>
+                      <select
+                        value={subOnContractEnd}
+                        onChange={e => setSubOnContractEnd(e.target.value as any)}
+                        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                      >
+                        <option value="downgrade_to_elite">Pasar a Elite</option>
+                        <option value="cancel">Cancelar</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Tier change log (audit) ──────────────────────────────────────── */}
+                <button
+                  onClick={() => setSubShowLog(v => !v)}
+                  className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <History className="h-3.5 w-3.5" />
+                  {subShowLog ? 'Ocultar' : 'Ver'} historial de cambios de tier
+                </button>
+                {subShowLog && (
+                  <div className="rounded-lg border border-border p-3 text-xs space-y-1.5 max-h-40 overflow-y-auto">
+                    {subTierLogQuery.isLoading ? (
+                      <div className="flex justify-center py-2"><Loader2 className="h-4 w-4 animate-spin" /></div>
+                    ) : (subTierLogQuery.data?.data?.length ?? 0) === 0 ? (
+                      <div className="text-muted-foreground">Sin cambios registrados</div>
+                    ) : (
+                      subTierLogQuery.data?.data?.map((entry: any) => (
+                        <div key={entry.id} className="flex items-center gap-2">
+                          <span className="text-muted-foreground shrink-0">{fmtDate(entry.createdAt)}</span>
+                          <span className="text-amber-300">{entry.fromTier ?? 'none'}</span>
+                          <span className="text-muted-foreground">→</span>
+                          <span className="text-green-300">{entry.toTier}</span>
+                          {entry.reason && <span className="text-muted-foreground truncate">{entry.reason}</span>}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+
+                {/* ── Actions ────────────────────────────────────────────────────────────────── */}
+                <div className="flex gap-2 justify-end pt-1">
+                  <Button variant="outline" onClick={() => setSubUser(null)}>Cancelar</Button>
+                  <Button
+                    disabled={setSubConfig.isPending}
+                    className="bg-violet-600 hover:bg-violet-700 text-white"
+                    onClick={() => {
+                      const credsCents = subCreditsCents !== ''
+                        ? Math.min(Math.max(0, parseInt(subCreditsCents, 10) || 0), 120000)
+                        : null;
+                      setSubConfig.mutate({
+                        contractorId: subUser.id,
+                        targetTier: subTargetTier,
+                        billingMode: subBillingMode,
+                        monthlyCreditsCents: credsCents,
+                        enableLegacyProjects: subEnableLegacy,
+                        contractEndAt: subContractEnd ? new Date(subContractEnd).toISOString() : null,
+                        onContractEnd: subOnContractEnd,
+                      });
+                    }}
+                  >
+                    {setSubConfig.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 mr-1" />} Guardar
                   </Button>
                 </div>
               </>
