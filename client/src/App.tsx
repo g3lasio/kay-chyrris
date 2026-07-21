@@ -23,6 +23,7 @@ import LeadPrimeUsersIntelligence from "./pages/LeadPrimeUsersIntelligence";
 import SystemIssues from "./pages/SystemIssues";
 import LeadPrimeSystemHealth from "./pages/LeadPrimeSystemHealth";
 import LeadPrimeFinance from "./pages/LeadPrimeFinance";
+import LeadPrimePendingSubscriptions from "./pages/LeadPrimePendingSubscriptions";
 
 function Router() {
   return (
@@ -156,6 +157,14 @@ function Router() {
         <ProtectedRoute>
           <LeadPrimeLayout>
             <LeadPrimeFinance />
+          </LeadPrimeLayout>
+        </ProtectedRoute>
+      </Route>
+
+      <Route path="/leadprime/pending-subs">
+        <ProtectedRoute>
+          <LeadPrimeLayout>
+            <LeadPrimePendingSubscriptions />
           </LeadPrimeLayout>
         </ProtectedRoute>
       </Route>

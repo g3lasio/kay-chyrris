@@ -1124,6 +1124,56 @@ export const appRouter = router({
         }
       }),
 
+    // ─── Portales /join — suscripciones pendientes de vinculación ────────────
+    getPendingSubscriptions: protectedProcedure
+      .input(z.object({
+        status: z.enum(['paid', 'linked', 'failed', 'all']).optional().default('paid'),
+        limit: z.number().int().min(1).max(200).optional().default(100),
+        offset: z.number().int().min(0).optional().default(0),
+      }))
+      .query(async ({ input }) => {
+        try {
+          const { getPendingSubscriptions } = await import('./services/leadprime-db');
+          const statusFilter = input.status === 'all' ? undefined : input.status;
+          const result = await getPendingSubscriptions({
+            status: statusFilter,
+            limit: input.limit,
+            offset: input.offset,
+          });
+          return { success: true, data: result.rows, total: result.total };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error fetching pending subscriptions:', error);
+          return { success: false, error: error.message, data: [], total: 0 };
+        }
+      }),
+
+    linkPendingSubscription: protectedProcedure
+      .input(z.object({
+        pendingId: z.number().int().positive(),
+        contractorId: z.string().min(1),
+        staff: z.object({
+          phone: z.string().min(1),
+          email: z.string().email().optional(),
+          name: z.string().optional(),
+        }).nullable().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        try {
+          const actor = (ctx as any)?.user?.email ?? (ctx as any)?.user?.id ?? 'kai_admin';
+          const { linkPendingSubscriptionViaApi } = await import('./services/leadprime-db');
+          const result = await linkPendingSubscriptionViaApi({
+            pendingId: input.pendingId,
+            contractorId: input.contractorId,
+            actor: `kai:${actor}`,
+            staff: input.staff ?? null,
+          });
+          return { success: true, ...result };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error linking pending subscription:', error);
+          return { success: false, error: error.message, linked: false, tier: '', creditsGrantedCents: 0, staffAdded: false };
+        }
+      }),
+
   }),
 
   // ─── END LEADPRIME CREDIT MANAGEMENT ─────────────────────────────────────

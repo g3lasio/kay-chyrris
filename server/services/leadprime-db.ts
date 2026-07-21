@@ -1483,7 +1483,12 @@ export interface TierChangeLogEntry {
   contractorId: string;
   fromTier: string | null;
   toTier: string;
-  changedBy: string | null;
+  fromStatus: string | null;
+  toStatus: string | null;
+  source: string | null;
+  actor: string | null;
+  billing: string | null;
+  creditsGrantedCents: number;
   reason: string | null;
   metadata: Record<string, any> | null;
   createdAt: string;
@@ -1493,7 +1498,9 @@ export interface TierChangeLogEntry {
 export async function getTierChangeLog(contractorId: string): Promise<TierChangeLogEntry[]> {
   const pool = getLeadPrimePool();
   const res = await pool.query(
-    `SELECT id, contractor_id, from_tier, to_tier, changed_by, reason, metadata, created_at
+    `SELECT id, contractor_id, from_tier, to_tier, from_status, to_status,
+            source, actor, billing, COALESCE(credits_granted_cents, 0) AS credits_granted_cents,
+            reason, metadata, created_at
      FROM tier_change_log
      WHERE contractor_id = $1
      ORDER BY id DESC LIMIT 50`,
@@ -1504,9 +1511,133 @@ export async function getTierChangeLog(contractorId: string): Promise<TierChange
     contractorId: r.contractor_id,
     fromTier: r.from_tier ?? null,
     toTier: r.to_tier,
-    changedBy: r.changed_by ?? null,
+    fromStatus: r.from_status ?? null,
+    toStatus: r.to_status ?? null,
+    source: r.source ?? null,
+    actor: r.actor ?? null,
+    billing: r.billing ?? null,
+    creditsGrantedCents: parseInt(r.credits_granted_cents, 10) || 0,
     reason: r.reason ?? null,
     metadata: r.metadata ?? null,
     createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
   }));
+}
+
+// ─── PENDING SUBSCRIPTIONS (portales /join) ────────────────────────────────
+
+export interface PendingSubscription {
+  id: number;
+  tier: string;
+  businessName: string | null;
+  contactName: string | null;
+  email: string;
+  phone: string | null;
+  stripeCustomerId: string;
+  stripeSubscriptionId: string;
+  stripeInvoiceId: string | null;
+  amountPaidCents: number;
+  status: 'paid' | 'linked' | 'failed';
+  goodFaithConfirmed: boolean;
+  paidAt: string | null;
+  linkedContractorId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** List pending subscriptions from /join portals (paid but not yet linked to an account). */
+export async function getPendingSubscriptions(options: {
+  status?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<{ rows: PendingSubscription[]; total: number }> {
+  const pool = getLeadPrimePool();
+  const { status, limit = 100, offset = 0 } = options;
+  const params: any[] = [];
+  let where = '';
+  if (status) {
+    params.push(status);
+    where = `WHERE status = $${params.length}`;
+  }
+  const countRes = await pool.query(
+    `SELECT COUNT(*) FROM pending_subscriptions ${where}`,
+    params
+  );
+  const total = parseInt(countRes.rows[0].count, 10);
+  params.push(limit, offset);
+  const res = await pool.query(
+    `SELECT id, tier, business_name, contact_name, email, phone,
+            stripe_customer_id, stripe_subscription_id, stripe_invoice_id,
+            amount_paid_cents, status, good_faith_confirmed, paid_at,
+            linked_contractor_id, created_at, updated_at
+     FROM pending_subscriptions
+     ${where}
+     ORDER BY created_at DESC
+     LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
+  );
+  const rows: PendingSubscription[] = res.rows.map(r => ({
+    id: r.id,
+    tier: r.tier,
+    businessName: r.business_name ?? null,
+    contactName: r.contact_name ?? null,
+    email: r.email,
+    phone: r.phone ?? null,
+    stripeCustomerId: r.stripe_customer_id,
+    stripeSubscriptionId: r.stripe_subscription_id,
+    stripeInvoiceId: r.stripe_invoice_id ?? null,
+    amountPaidCents: r.amount_paid_cents ?? 0,
+    status: r.status,
+    goodFaithConfirmed: r.good_faith_confirmed,
+    paidAt: r.paid_at ? (r.paid_at instanceof Date ? r.paid_at.toISOString() : r.paid_at) : null,
+    linkedContractorId: r.linked_contractor_id ?? null,
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
+    updatedAt: r.updated_at instanceof Date ? r.updated_at.toISOString() : r.updated_at,
+  }));
+  return { rows, total };
+}
+
+export interface LinkPendingResult {
+  linked: boolean;
+  alreadyLinked?: boolean;
+  tier: string;
+  creditsGrantedCents: number;
+  staffAdded: boolean;
+  error?: string;
+}
+
+/**
+ * Proxy call to LeadPrime's /api/join/link endpoint to link a paid pending
+ * subscription to an existing contractor account.
+ * This avoids duplicating the complex applyTierChange logic in Kai.
+ */
+export async function linkPendingSubscriptionViaApi(input: {
+  pendingId: number;
+  contractorId: string;
+  actor: string;
+  staff?: { phone: string; email?: string; name?: string } | null;
+}): Promise<LinkPendingResult> {
+  const baseUrl = process.env.LEADPRIME_API_URL || 'https://leadprime.chyrris.com';
+  const apiKey = process.env.LEADPRIME_INTERNAL_API_KEY;
+  if (!apiKey) throw new Error('LEADPRIME_INTERNAL_API_KEY no configurado — necesario para la vinculación');
+  const resp = await fetch(`${baseUrl}/api/join/link`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      pendingId: input.pendingId,
+      contractorId: input.contractorId,
+      staff: input.staff ?? null,
+    }),
+  });
+  const data: any = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data?.error || `LeadPrime API error ${resp.status}`);
+  return {
+    linked: data.linked ?? true,
+    alreadyLinked: data.alreadyLinked ?? false,
+    tier: data.tier ?? '',
+    creditsGrantedCents: data.creditsGrantedCents ?? 0,
+    staffAdded: data.staffAdded ?? false,
+  };
 }
