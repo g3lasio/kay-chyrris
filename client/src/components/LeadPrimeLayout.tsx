@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/sidebar";
 
 import { useIsMobile } from "@/hooks/useMobile";
-import { Wallet, ArrowLeft, PanelLeft, LogOut, LayoutDashboard, Bug, Users, ShieldCheck, TrendingUp, Inbox } from "lucide-react";
+import { ArrowLeft, PanelLeft, LogOut, LayoutDashboard, Bug, Users, ShieldCheck, TrendingUp, Inbox } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Button } from "./ui/button";
@@ -39,14 +39,15 @@ function SystemIssuesBadge() {
   );
 }
 
+// "Credits" ya no existe como página: transacciones, historial de grants y el
+// grant masivo viven ahora en Usuarios (pestañas); /leadprime/credits redirige.
 const menuItems = [
   { icon: LayoutDashboard, label: "Overview", path: "/leadprime" },
-  { icon: Wallet, label: "Credits", path: "/leadprime/credits" },
-  { icon: Users, label: "Users Intelligence", path: "/leadprime/users" },
+  { icon: Users, label: "Usuarios", path: "/leadprime/users" },
   { icon: Inbox, label: "Suscripciones", path: "/leadprime/pending-subs" },
-  { icon: Bug, label: "System Issues", path: "/leadprime/system-issues" },
+  { icon: TrendingUp, label: "Finanzas", path: "/leadprime/finance" },
   { icon: ShieldCheck, label: "System Health", path: "/leadprime/health" },
-  { icon: TrendingUp, label: "Finance", path: "/leadprime/finance" },
+  { icon: Bug, label: "System Issues", path: "/leadprime/system-issues" },
 ];
 
 const SIDEBAR_WIDTH_KEY = "leadprime-sidebar-width";

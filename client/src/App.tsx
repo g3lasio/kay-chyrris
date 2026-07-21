@@ -18,7 +18,6 @@ import DashboardLayout from "./components/DashboardLayout";
 import OwlFencLayout from "./components/OwlFencLayout";
 import LeadPrimeLayout from "./components/LeadPrimeLayout";
 import LeadPrimeDashboard from "./pages/LeadPrimeDashboard";
-import LeadPrimeCreditsAdmin from "./pages/LeadPrimeCreditsAdmin";
 import LeadPrimeUsersIntelligence from "./pages/LeadPrimeUsersIntelligence";
 import SystemIssues from "./pages/SystemIssues";
 import LeadPrimeSystemHealth from "./pages/LeadPrimeSystemHealth";
@@ -117,12 +116,10 @@ function Router() {
         </ProtectedRoute>
       </Route>
 
+      {/* La página de Créditos se fusionó en Usuarios (pestañas Transacciones
+          e Historial de créditos) — se mantiene la ruta como redirect. */}
       <Route path="/leadprime/credits">
-        <ProtectedRoute>
-          <LeadPrimeLayout>
-            <LeadPrimeCreditsAdmin />
-          </LeadPrimeLayout>
-        </ProtectedRoute>
+        <Redirect to="/leadprime/users" />
       </Route>
 
       <Route path="/leadprime/users">

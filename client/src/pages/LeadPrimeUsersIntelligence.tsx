@@ -1,12 +1,14 @@
 /**
- * LEADPRIME USERS INTELLIGENCE — Chyrris KAI
+ * LEADPRIME USUARIOS — Chyrris KAI
  *
- * Full enriched user table with:
- * - Stats overview (total, active, balance, spent, by industry)
- * - Filterable/sortable table with all user data
- * - Quick filters: inactive, low balance, no subscription, licensed
- * - Per-user actions: edit contact, grant credits, delete
- * - Batch delete: select multiple users and delete at once
+ * Página unificada de usuarios (antes: Users Intelligence + Credits Admin).
+ * Pestañas:
+ *   - Directorio: tabla enriquecida con filtros/orden + acciones por fila
+ *     (editar, créditos, hosting, suscripción, eliminar) + acciones masivas
+ *     (dar créditos / eliminar a la selección).
+ *   - Transacciones: movimientos de wallet (antes en la página de Créditos).
+ *   - Historial de créditos: grants de admin (antes en la página de Créditos).
+ * El modal de suscripción es el componente compartido SubscriptionConfigModal.
  */
 import { Fragment, useState, useMemo, useEffect } from 'react';
 import { trpc } from '@/lib/trpc';
@@ -19,9 +21,10 @@ import {
   Users, Search, RefreshCw, Loader2, TrendingUp, DollarSign,
   Activity, Building2, Shield, ChevronUp, ChevronDown,
   Pencil, Trash2, Gift, X, Check, AlertTriangle, BadgeCheck,
-  Phone, Mail, MapPin, Calendar, Briefcase, Star, Server,
-  CreditCard, Copy, CheckCheck, History,
+  Phone, Mail, Calendar, Briefcase, Star, Server,
+  CreditCard, Send,
 } from 'lucide-react';
+import { SubscriptionConfigModal } from '@/components/leadprime/SubscriptionConfigModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface EnrichedUser {
@@ -77,6 +80,8 @@ function activityBadge(isActive: boolean) {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function LeadPrimeUsersIntelligence() {
+  const [activeTab, setActiveTab] = useState<'directorio' | 'transactions' | 'grants'>('directorio');
+  const [txTypeFilter, setTxTypeFilter] = useState('');
   const [search, setSearch] = useState('');
   const [industryFilter, setIndustryFilter] = useState('');
   const [subFilter, setSubFilter] = useState('all');
@@ -109,16 +114,8 @@ export default function LeadPrimeUsersIntelligence() {
   const [hostingEnabled, setHostingEnabled] = useState(false);
   const [hostingAmount, setHostingAmount] = useState('');
 
-  // Subscription config modal state
+  // Subscription config modal state (form vive en SubscriptionConfigModal)
   const [subUser, setSubUser] = useState<EnrichedUser | null>(null);
-  const [subTargetTier, setSubTargetTier] = useState<'network_elite' | 'chyrris_growth' | 'chyrris_legacy'>('network_elite');
-  const [subBillingMode, setSubBillingMode] = useState<'stripe_ach' | 'comp_no_charge'>('comp_no_charge');
-  const [subCreditsCents, setSubCreditsCents] = useState<string>('');
-  const [subEnableLegacy, setSubEnableLegacy] = useState(false);
-  const [subContractEnd, setSubContractEnd] = useState('');
-  const [subOnContractEnd, setSubOnContractEnd] = useState<'downgrade_to_elite' | 'cancel'>('downgrade_to_elite');
-  const [subShowLog, setSubShowLog] = useState(false);
-  const [copiedUrl, setCopiedUrl] = useState(false);
 
   // Delete confirm state (single)
   const [deleteUser, setDeleteUser] = useState<EnrichedUser | null>(null);
@@ -126,6 +123,12 @@ export default function LeadPrimeUsersIntelligence() {
   // Batch selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false);
+
+  // Batch grant credits state (antes en la página de Créditos)
+  const [showBatchGrant, setShowBatchGrant] = useState(false);
+  const [batchAmount, setBatchAmount] = useState('');
+  const [batchDesc, setBatchDesc] = useState('');
+  const [batchNote, setBatchNote] = useState('');
 
   // Expanded row
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -177,48 +180,33 @@ export default function LeadPrimeUsersIntelligence() {
     onError: (e) => toast.error(e.message),
   });
 
-  // Subscription config: read current config + billing history when modal opens.
-  const subConfigQuery = trpc.leadprime.getSubscriptionConfig.useQuery(
-    { contractorId: subUser?.id ?? '' },
-    { enabled: !!subUser, staleTime: 0 },
+  // Wallet: transacciones + historial de grants (pestañas absorbidas de la
+  // antigua página de Créditos) y stats de wallet para las tarjetas.
+  const walletStatsQuery = trpc.leadprime.getStats.useQuery(undefined, { staleTime: 60_000 });
+  const transactionsQuery = trpc.leadprime.getTransactions.useQuery(
+    { type: txTypeFilter || undefined, limit: 100 },
+    { enabled: activeTab === 'transactions' }
   );
-  const subTierLogQuery = trpc.leadprime.getTierChangeLog.useQuery(
-    { contractorId: subUser?.id ?? '' },
-    { enabled: !!subUser && subShowLog, staleTime: 0 },
+  const grantsQuery = trpc.leadprime.getGrantHistory.useQuery(
+    { limit: 100 },
+    { enabled: activeTab === 'grants' }
   );
-  const setSubConfig = trpc.leadprime.setSubscriptionConfig.useMutation({
-    onSuccess: () => {
-      toast.success('Suscripción guardada — el worker la aplicará en los próximos 5 min');
-      utils.leadprime.getSubscriptionConfig.invalidate({ contractorId: subUser?.id ?? '' });
+
+  const grantBatchMutation = trpc.leadprime.grantCreditsBatch.useMutation({
+    onSuccess: (result: any) => {
+      toast.success(`Créditos otorgados a ${result.successCount} cuenta(s)${result.failCount ? ` · ${result.failCount} fallaron` : ''}`);
+      setShowBatchGrant(false);
+      setBatchAmount('');
+      setBatchDesc('');
+      setBatchNote('');
+      setSelectedIds(new Set());
       utils.leadprime.getEnrichedUsers.invalidate();
+      utils.leadprime.getStats.invalidate();
+      utils.leadprime.getGrantHistory.invalidate();
+      utils.leadprime.getTransactions.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
-
-  function openSub(u: EnrichedUser) {
-    setSubUser(u);
-    setSubTargetTier('network_elite');
-    setSubBillingMode('comp_no_charge');
-    setSubCreditsCents('');
-    setSubEnableLegacy(false);
-    setSubContractEnd('');
-    setSubOnContractEnd('downgrade_to_elite');
-    setSubShowLog(false);
-    setCopiedUrl(false);
-  }
-
-  // Prime subscription form fields from fetched config when it loads.
-  useEffect(() => {
-    if (subUser && subConfigQuery.data) {
-      const d = subConfigQuery.data;
-      if (d.targetTier) setSubTargetTier(d.targetTier as any);
-      if (d.billingMode) setSubBillingMode(d.billingMode as any);
-      setSubCreditsCents(d.monthlyCreditsCents != null ? String(d.monthlyCreditsCents) : '');
-      setSubEnableLegacy(d.enableLegacyProjects);
-      setSubContractEnd(d.contractEndAt ? d.contractEndAt.slice(0, 10) : '');
-      setSubOnContractEnd((d.onContractEnd as any) ?? 'downgrade_to_elite');
-    }
-  }, [subUser, subConfigQuery.data]);
 
   // Managed hosting: read current config when a user's hosting modal opens.
   const hostingQuery = trpc.leadprime.getHosting.useQuery(
@@ -330,47 +318,86 @@ export default function LeadPrimeUsersIntelligence() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Users Intelligence</h1>
-          <p className="text-sm text-muted-foreground mt-1">Full enriched user data for marketing and operations</p>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+            <Users className="h-6 w-6 text-primary" /> Usuarios
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">Directorio, wallet y créditos de LeadPrime en un solo lugar</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => { utils.leadprime.getEnrichedUsers.invalidate(); utils.leadprime.getUserIntelligenceStats.invalidate(); }}>
-          <RefreshCw className="h-4 w-4 mr-2" /> Refresh
+        <Button variant="outline" size="sm" onClick={() => { utils.leadprime.getEnrichedUsers.invalidate(); utils.leadprime.getUserIntelligenceStats.invalidate(); utils.leadprime.getStats.invalidate(); }}>
+          <RefreshCw className="h-4 w-4 mr-2" /> Actualizar
         </Button>
       </div>
 
       {/* Stats Cards */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           <Card>
             <CardContent className="pt-4">
-              <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Users className="h-3.5 w-3.5" /> Total Users</div>
+              <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Users className="h-3.5 w-3.5" /> Usuarios</div>
               <div className="text-2xl font-bold">{stats.totalUsers}</div>
-              <div className="text-xs text-muted-foreground mt-0.5">{stats.activeUsers} active (30d)</div>
+              <div className="text-xs text-muted-foreground mt-0.5">{stats.activeUsers} activos (30d)</div>
             </CardContent>
           </Card>
           <Card>
             <CardContent className="pt-4">
-              <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><DollarSign className="h-3.5 w-3.5" /> Total Wallet</div>
+              <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><DollarSign className="h-3.5 w-3.5" /> Wallet total</div>
               <div className="text-2xl font-bold">{fmt$(stats.totalBalanceCents)}</div>
-              <div className="text-xs text-muted-foreground mt-0.5">across all users</div>
+              <div className="text-xs text-muted-foreground mt-0.5">en todas las cuentas</div>
             </CardContent>
           </Card>
           <Card>
             <CardContent className="pt-4">
-              <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><TrendingUp className="h-3.5 w-3.5" /> Total Spent</div>
+              <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><TrendingUp className="h-3.5 w-3.5" /> Gastado</div>
               <div className="text-2xl font-bold">{fmt$(stats.totalSpentCents)}</div>
-              <div className="text-xs text-muted-foreground mt-0.5">all time revenue</div>
+              <div className="text-xs text-muted-foreground mt-0.5">histórico</div>
             </CardContent>
           </Card>
           <Card>
             <CardContent className="pt-4">
-              <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Shield className="h-3.5 w-3.5" /> Licensed</div>
+              <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Gift className="h-3.5 w-3.5" /> Otorgado (mes)</div>
+              <div className="text-2xl font-bold">{walletStatsQuery.data?.data ? fmt$(walletStatsQuery.data.data.totalGrantedThisMonth) : '—'}</div>
+              <div className="text-xs text-muted-foreground mt-0.5">créditos de admin</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-4">
+              <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><BadgeCheck className="h-3.5 w-3.5" /> Subs activas</div>
+              <div className="text-2xl font-bold">{walletStatsQuery.data?.data?.activeSubscribers ?? '—'}</div>
+              <div className="text-xs text-muted-foreground mt-0.5">{walletStatsQuery.data?.data?.trialUsers ?? 0} en trial</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-4">
+              <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Shield className="h-3.5 w-3.5" /> Con licencia</div>
               <div className="text-2xl font-bold">{stats.withLicense}</div>
-              <div className="text-xs text-muted-foreground mt-0.5">{stats.withoutLicense} without license</div>
+              <div className="text-xs text-muted-foreground mt-0.5">{stats.withoutLicense} sin licencia</div>
             </CardContent>
           </Card>
         </div>
       )}
+
+      {/* Pestañas: Directorio | Transacciones | Historial de créditos */}
+      <div className="flex gap-1 border-b">
+        {([
+          { key: 'directorio', label: 'Directorio' },
+          { key: 'transactions', label: 'Transacciones' },
+          { key: 'grants', label: 'Historial de créditos' },
+        ] as const).map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+              activeTab === tab.key
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'directorio' && (<>
 
       {/* Industry Distribution */}
       {stats?.byIndustry && stats.byIndustry.length > 0 && (
@@ -443,8 +470,15 @@ export default function LeadPrimeUsersIntelligence() {
 
       {/* Batch action toolbar */}
       {selectedIds.size > 0 && (
-        <div className="flex items-center gap-3 px-4 py-2.5 bg-destructive/10 border border-destructive/30 rounded-lg">
-          <span className="text-sm font-medium text-destructive">{selectedIds.size} user{selectedIds.size > 1 ? 's' : ''} selected</span>
+        <div className="flex items-center gap-3 px-4 py-2.5 bg-primary/5 border border-primary/30 rounded-lg flex-wrap">
+          <span className="text-sm font-medium">{selectedIds.size} seleccionado{selectedIds.size > 1 ? 's' : ''}</span>
+          <Button
+            size="sm"
+            onClick={() => setShowBatchGrant(v => !v)}
+            className="gap-1.5"
+          >
+            <Gift className="h-3.5 w-3.5" /> Dar créditos
+          </Button>
           <Button
             variant="destructive"
             size="sm"
@@ -452,12 +486,62 @@ export default function LeadPrimeUsersIntelligence() {
             disabled={deleteUsersMutation.isPending}
           >
             <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-            Delete Selected
+            Eliminar
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>
-            <X className="h-3.5 w-3.5 mr-1" /> Clear selection
+          <Button variant="ghost" size="sm" onClick={() => { setSelectedIds(new Set()); setShowBatchGrant(false); }}>
+            <X className="h-3.5 w-3.5 mr-1" /> Limpiar selección
           </Button>
         </div>
+      )}
+
+      {/* Panel de grant masivo (antes en la página de Créditos) */}
+      {showBatchGrant && selectedIds.size > 0 && (
+        <Card className="border-primary/40 bg-primary/5">
+          <CardHeader className="pb-3 pt-4">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Gift className="h-4 w-4" />
+              Dar créditos a {selectedIds.size} cuenta{selectedIds.size > 1 ? 's' : ''}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <Label className="text-xs">Monto (USD) *</Label>
+                <Input type="number" min="0.01" max="1200" step="0.01" placeholder="ej. 5.00"
+                  value={batchAmount} onChange={e => setBatchAmount(e.target.value)} />
+              </div>
+              <div>
+                <Label className="text-xs">Descripción *</Label>
+                <Input placeholder="ej. Bono de diciembre" value={batchDesc} onChange={e => setBatchDesc(e.target.value)} />
+              </div>
+              <div>
+                <Label className="text-xs">Nota interna (opcional)</Label>
+                <Input placeholder="ej. Promo XMAS" value={batchNote} onChange={e => setBatchNote(e.target.value)} />
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <Button
+                disabled={grantBatchMutation.isPending || !batchAmount || parseFloat(batchAmount) <= 0 || !batchDesc.trim()}
+                onClick={() => grantBatchMutation.mutate({
+                  contractorIds: Array.from(selectedIds),
+                  amountDollars: parseFloat(batchAmount),
+                  description: batchDesc.trim(),
+                  note: batchNote.trim() || undefined,
+                })}
+                className="gap-2"
+              >
+                {grantBatchMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                {grantBatchMutation.isPending ? 'Otorgando...' : `Dar $${parseFloat(batchAmount || '0').toFixed(2)} a ${selectedIds.size} cuenta${selectedIds.size > 1 ? 's' : ''}`}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setShowBatchGrant(false)}>Cancelar</Button>
+              {batchAmount && (
+                <span className="text-xs text-muted-foreground">
+                  Total: {fmt$(Math.round(parseFloat(batchAmount || '0') * 100 * selectedIds.size))}
+                </span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Table */}
@@ -567,7 +651,7 @@ export default function LeadPrimeUsersIntelligence() {
                             <button onClick={() => openHosting(u)} className="p-1.5 rounded hover:bg-accent transition-colors" title="Managed hosting">
                               <Server className="h-3.5 w-3.5 text-muted-foreground hover:text-cyan-400" />
                             </button>
-                            <button onClick={() => openSub(u)} className="p-1.5 rounded hover:bg-accent transition-colors" title="Suscripción">
+                            <button onClick={() => setSubUser(u)} className="p-1.5 rounded hover:bg-accent transition-colors" title="Suscripción">
                               <CreditCard className="h-3.5 w-3.5 text-muted-foreground hover:text-violet-400" />
                             </button>
                             <button onClick={() => setDeleteUser(u)} className="p-1.5 rounded hover:bg-accent transition-colors" title="Delete user">
@@ -646,11 +730,143 @@ export default function LeadPrimeUsersIntelligence() {
       {/* Pagination */}
       {totalPages > 1 && (
         <div className="flex items-center justify-between text-sm text-muted-foreground">
-          <span>Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total} users</span>
+          <span>Mostrando {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} de {total} usuarios</span>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>Previous</Button>
-            <Button variant="outline" size="sm" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next</Button>
+            <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>Anterior</Button>
+            <Button variant="outline" size="sm" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Siguiente</Button>
           </div>
+        </div>
+      )}
+
+      </>)}
+
+      {/* ── TRANSACCIONES (antes en la página de Créditos) ─────────────────── */}
+      {activeTab === 'transactions' && (
+        <div className="space-y-4">
+          <div className="flex gap-2">
+            <select
+              value={txTypeFilter}
+              onChange={e => setTxTypeFilter(e.target.value)}
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="">Todos los tipos</option>
+              <option value="welcome_credit">welcome_credit</option>
+              <option value="admin_grant">admin_grant</option>
+              <option value="usage">usage</option>
+              <option value="subscription_recharge">subscription_recharge</option>
+              <option value="welcome_credit_expired">welcome_credit_expired</option>
+            </select>
+            <Button variant="outline" size="sm" onClick={() => utils.leadprime.getTransactions.invalidate()}>
+              <RefreshCw className="h-4 w-4" />
+            </Button>
+          </div>
+          <Card>
+            <CardContent className="p-0">
+              {transactionsQuery.isLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : (transactionsQuery.data?.data ?? []).length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground">Sin transacciones</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/30">
+                        <th className="p-3 text-left font-medium text-muted-foreground">Fecha</th>
+                        <th className="p-3 text-left font-medium text-muted-foreground">Usuario</th>
+                        <th className="p-3 text-left font-medium text-muted-foreground">Tipo</th>
+                        <th className="p-3 text-right font-medium text-muted-foreground">Monto</th>
+                        <th className="p-3 text-left font-medium text-muted-foreground">Descripción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(transactionsQuery.data?.data ?? []).map((tx: any) => (
+                        <tr key={tx.id} className="border-b hover:bg-muted/10">
+                          <td className="p-3 text-xs text-muted-foreground">
+                            {new Date(tx.createdAt).toLocaleString()}
+                          </td>
+                          <td className="p-3">
+                            <div className="font-medium text-xs">{tx.contractorName ?? tx.contractorId}</div>
+                            <div className="text-xs text-muted-foreground">{tx.contractorEmail}</div>
+                          </td>
+                          <td className="p-3">
+                            <span className="text-xs bg-muted px-2 py-0.5 rounded-full">{tx.type}</span>
+                          </td>
+                          <td className="p-3 text-right font-mono font-semibold">
+                            <span className={tx.amountCents >= 0 ? 'text-green-400' : 'text-red-400'}>
+                              {tx.amountCents >= 0 ? '+' : ''}{fmt$(tx.amountCents)}
+                            </span>
+                          </td>
+                          <td className="p-3 text-xs text-muted-foreground max-w-xs truncate">{tx.description}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* ── HISTORIAL DE CRÉDITOS (antes en la página de Créditos) ─────────── */}
+      {activeTab === 'grants' && (
+        <div className="space-y-4">
+          <div className="flex justify-end">
+            <Button variant="outline" size="sm" onClick={() => utils.leadprime.getGrantHistory.invalidate()}>
+              <RefreshCw className="h-4 w-4 mr-2" /> Actualizar
+            </Button>
+          </div>
+          <Card>
+            <CardContent className="p-0">
+              {grantsQuery.isLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : (grantsQuery.data?.data ?? []).length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground">Sin grants todavía</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/30">
+                        <th className="p-3 text-left font-medium text-muted-foreground">Fecha</th>
+                        <th className="p-3 text-left font-medium text-muted-foreground">Usuario</th>
+                        <th className="p-3 text-right font-medium text-muted-foreground">Monto</th>
+                        <th className="p-3 text-left font-medium text-muted-foreground">Descripción</th>
+                        <th className="p-3 text-left font-medium text-muted-foreground">Nota</th>
+                        <th className="p-3 text-left font-medium text-muted-foreground">Batch ID</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(grantsQuery.data?.data ?? []).map((grant: any) => (
+                        <tr key={grant.id} className="border-b hover:bg-muted/10">
+                          <td className="p-3 text-xs text-muted-foreground">
+                            {new Date(grant.createdAt).toLocaleString()}
+                          </td>
+                          <td className="p-3">
+                            <div className="font-medium text-xs">{grant.contractorName ?? grant.contractorId}</div>
+                            <div className="text-xs text-muted-foreground">{grant.contractorEmail}</div>
+                          </td>
+                          <td className="p-3 text-right font-mono font-semibold text-green-400">
+                            +{fmt$(grant.amountCents)}
+                          </td>
+                          <td className="p-3 text-xs">{grant.description}</td>
+                          <td className="p-3 text-xs text-muted-foreground">{grant.note ?? '—'}</td>
+                          <td className="p-3 text-xs text-muted-foreground font-mono">
+                            {grant.batchId ? (
+                              <span className="bg-muted px-1.5 py-0.5 rounded text-xs">{grant.batchId.slice(0, 16)}…</span>
+                            ) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
       )}
 
@@ -793,249 +1009,13 @@ export default function LeadPrimeUsersIntelligence() {
         </div>
       )}
 
-      {/* Subscription Config Modal */}
+      {/* Subscription Config Modal — componente compartido con Suscripciones */}
       {subUser && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-background border border-border rounded-xl p-6 w-full max-w-lg space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <h2 className="font-semibold flex items-center gap-2"><CreditCard className="h-4 w-4 text-violet-400" /> Suscripción — {subUser.name}</h2>
-              <button onClick={() => setSubUser(null)}><X className="h-4 w-4" /></button>
-            </div>
-
-            {subConfigQuery.isLoading ? (
-              <div className="py-6 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
-            ) : (
-              <>
-                {/* ── Estado actual (solo lectura) ──────────────────────────────────── */}
-                <div className="rounded-lg border border-border p-3 text-sm space-y-1.5">
-                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Estado actual</div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Plan</span>
-                    <span className="font-medium">{subConfigQuery.data?.planName ?? '—'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Servicio</span>
-                    <span>{subConfigQuery.data?.serviceLevel ?? '—'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Sub status</span>
-                    {subBadge(subConfigQuery.data?.subStatus ?? null)}
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Legacy Projects</span>
-                    <span>{subConfigQuery.data?.legacyRealEstate ? '✅ activo' : '—'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Balance</span>
-                    <span className="font-mono">${subUser.balanceDollars}</span>
-                  </div>
-                  {/* Config status badge */}
-                  {subConfigQuery.data?.status && (
-                    <div className="flex justify-between items-center">
-                      <span className="text-muted-foreground">Config status</span>
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                        subConfigQuery.data.status === 'applied' ? 'bg-green-500/20 text-green-300 border border-green-500/30' :
-                        subConfigQuery.data.status === 'pending' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' :
-                        'bg-red-500/20 text-red-300 border border-red-500/30'
-                      }`}>{subConfigQuery.data.status}</span>
-                    </div>
-                  )}
-                  {subConfigQuery.data?.status === 'error' && subConfigQuery.data.lastError && (
-                    <div className="text-xs text-red-400 mt-1 break-all">{subConfigQuery.data.lastError}</div>
-                  )}
-                  {/* ACH checkout URL */}
-                  {subConfigQuery.data?.billingMode === 'stripe_ach' && subConfigQuery.data.checkoutUrl && (
-                    <div className="mt-2 pt-2 border-t border-border">
-                      <div className="text-xs text-muted-foreground mb-1">Link ACH (enviar al contratista)</div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-xs text-primary truncate flex-1">{subConfigQuery.data.checkoutUrl}</span>
-                        <button
-                          onClick={() => {
-                            navigator.clipboard.writeText(subConfigQuery.data!.checkoutUrl!);
-                            setCopiedUrl(true);
-                            setTimeout(() => setCopiedUrl(false), 2000);
-                          }}
-                          className="p-1 rounded hover:bg-accent transition-colors shrink-0"
-                          title="Copiar URL"
-                        >
-                          {copiedUrl ? <CheckCheck className="h-3.5 w-3.5 text-green-400" /> : <Copy className="h-3.5 w-3.5 text-muted-foreground" />}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* ── Billing history ───────────────────────────────────────────── */}
-                {((subConfigQuery.data?.invoices?.length ?? 0) > 0 || (subConfigQuery.data?.achHolds?.length ?? 0) > 0) && (
-                  <div className="rounded-lg border border-border p-3 text-xs space-y-2">
-                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Historial de cobros</div>
-                    {subConfigQuery.data?.invoices?.slice(0, 5).map((inv, i) => (
-                      <div key={i} className="flex justify-between items-center">
-                        <span className="text-muted-foreground">{fmtDate(inv.createdAt)}</span>
-                        <span className="font-mono">${(inv.amountPaid / 100).toFixed(2)}</span>
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                          inv.status === 'paid' ? 'bg-green-500/20 text-green-300' :
-                          inv.status === 'open' ? 'bg-amber-500/20 text-amber-300' :
-                          'bg-gray-500/20 text-gray-400'
-                        }`}>{inv.status}</span>
-                      </div>
-                    ))}
-                    {subConfigQuery.data?.achHolds?.slice(0, 5).map((h, i) => (
-                      <div key={`h${i}`} className="flex justify-between items-center">
-                        <span className="text-muted-foreground">ACH hold</span>
-                        <span className="font-mono">${(h.amountCents / 100).toFixed(2)}</span>
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                          h.status === 'cleared' ? 'bg-green-500/20 text-green-300' :
-                          h.status === 'paused' ? 'bg-red-500/20 text-red-300' :
-                          'bg-amber-500/20 text-amber-300'
-                        }`}>{h.status}{h.retryCount > 0 ? ` (x${h.retryCount})` : ''}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* ── Asignar tier ─────────────────────────────────────────────────── */}
-                <div className="space-y-3">
-                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Asignar plan</div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <Label className="text-xs">Tier</Label>
-                      <select
-                        value={subTargetTier}
-                        onChange={e => setSubTargetTier(e.target.value as any)}
-                        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-                      >
-                        <option value="network_elite">Elite</option>
-                        <option value="chyrris_growth">Growth</option>
-                        <option value="chyrris_legacy">Legacy</option>
-                      </select>
-                    </div>
-                    <div>
-                      <Label className="text-xs">Modo de pago</Label>
-                      <select
-                        value={subBillingMode}
-                        onChange={e => setSubBillingMode(e.target.value as any)}
-                        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-                      >
-                        <option value="comp_no_charge">Cortêsía</option>
-                        <option value="stripe_ach">ACH real</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {/* Créditos (solo si es cortêsía) */}
-                  {subBillingMode === 'comp_no_charge' && (
-                    <div>
-                      <Label className="text-xs">Créditos mensuales (cents, máx $1,200 = 120000)</Label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="120000"
-                        step="100"
-                        placeholder="Dejar vacío = catálogo"
-                        value={subCreditsCents}
-                        onChange={e => setSubCreditsCents(e.target.value)}
-                        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-                      />
-                      <p className="text-xs text-muted-foreground mt-0.5">Vacío = usa los créditos del catálogo del plan</p>
-                    </div>
-                  )}
-
-                  {/* Legacy Projects switch — solo Growth/Legacy */}
-                  {(subTargetTier === 'chyrris_growth' || subTargetTier === 'chyrris_legacy') && (
-                    <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={subEnableLegacy}
-                        onChange={e => setSubEnableLegacy(e.target.checked)}
-                        className="h-4 w-4 accent-violet-500"
-                      />
-                      Habilitar Legacy Projects (mes 6)
-                    </label>
-                  )}
-
-                  {/* Fin de contrato */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <Label className="text-xs">Fin de contrato</Label>
-                      <input
-                        type="date"
-                        value={subContractEnd}
-                        onChange={e => setSubContractEnd(e.target.value)}
-                        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Al vencer</Label>
-                      <select
-                        value={subOnContractEnd}
-                        onChange={e => setSubOnContractEnd(e.target.value as any)}
-                        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-                      >
-                        <option value="downgrade_to_elite">Pasar a Elite</option>
-                        <option value="cancel">Cancelar</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                {/* ── Tier change log (audit) ──────────────────────────────────────── */}
-                <button
-                  onClick={() => setSubShowLog(v => !v)}
-                  className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <History className="h-3.5 w-3.5" />
-                  {subShowLog ? 'Ocultar' : 'Ver'} historial de cambios de tier
-                </button>
-                {subShowLog && (
-                  <div className="rounded-lg border border-border p-3 text-xs space-y-1.5 max-h-40 overflow-y-auto">
-                    {subTierLogQuery.isLoading ? (
-                      <div className="flex justify-center py-2"><Loader2 className="h-4 w-4 animate-spin" /></div>
-                    ) : (subTierLogQuery.data?.data?.length ?? 0) === 0 ? (
-                      <div className="text-muted-foreground">Sin cambios registrados</div>
-                    ) : (
-                      subTierLogQuery.data?.data?.map((entry: any) => (
-                        <div key={entry.id} className="flex items-center gap-2">
-                          <span className="text-muted-foreground shrink-0">{fmtDate(entry.createdAt)}</span>
-                          <span className="text-amber-300">{entry.fromTier ?? 'none'}</span>
-                          <span className="text-muted-foreground">→</span>
-                          <span className="text-green-300">{entry.toTier}</span>
-                          {entry.reason && <span className="text-muted-foreground truncate">{entry.reason}</span>}
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
-
-                {/* ── Actions ────────────────────────────────────────────────────────────────── */}
-                <div className="flex gap-2 justify-end pt-1">
-                  <Button variant="outline" onClick={() => setSubUser(null)}>Cancelar</Button>
-                  <Button
-                    disabled={setSubConfig.isPending}
-                    className="bg-violet-600 hover:bg-violet-700 text-white"
-                    onClick={() => {
-                      const credsCents = subCreditsCents !== ''
-                        ? Math.min(Math.max(0, parseInt(subCreditsCents, 10) || 0), 120000)
-                        : null;
-                      setSubConfig.mutate({
-                        contractorId: subUser.id,
-                        targetTier: subTargetTier,
-                        billingMode: subBillingMode,
-                        monthlyCreditsCents: credsCents,
-                        enableLegacyProjects: subEnableLegacy,
-                        contractEndAt: subContractEnd ? new Date(subContractEnd).toISOString() : null,
-                        onContractEnd: subOnContractEnd,
-                      });
-                    }}
-                  >
-                    {setSubConfig.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 mr-1" />} Guardar
-                  </Button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
+        <SubscriptionConfigModal
+          user={{ id: subUser.id, name: subUser.name }}
+          balanceDollars={subUser.balanceDollars}
+          onClose={() => setSubUser(null)}
+        />
       )}
 
       {/* Delete Confirm Modal (single) */}

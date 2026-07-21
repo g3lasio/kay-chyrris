@@ -14,6 +14,8 @@
 
 import { useState, useEffect } from 'react';
 import { trpc } from '@/lib/trpc';
+import { UserPicker, type PickedUser } from '@/components/leadprime/UserPicker';
+import { SubscriptionConfigModal } from '@/components/leadprime/SubscriptionConfigModal';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -165,85 +167,6 @@ function saveStaffIdentity(identity: StaffIdentity) {
   } catch { /* ignorar */ }
 }
 
-// ─── Buscador de contratistas existentes ──────────────────────────────────────
-
-interface PickedContractor {
-  id: string;
-  name: string;
-  businessName: string | null;
-  email: string;
-  subscriptionPlan: string | null;
-}
-
-function ContractorPicker({ selected, onSelect }: {
-  selected: PickedContractor | null;
-  onSelect: (c: PickedContractor | null) => void;
-}) {
-  const [search, setSearch] = useState('');
-  const usersQuery = trpc.leadprime.getUsers.useQuery(
-    { search, limit: 8, offset: 0 },
-    { enabled: search.trim().length >= 2, staleTime: 30_000 }
-  );
-  const results = (usersQuery.data?.data ?? []) as Array<{
-    id: string; name: string; businessName: string | null; email: string; subscriptionPlan: string | null;
-  }>;
-
-  if (selected) {
-    return (
-      <div className="flex items-center gap-2 rounded-lg border border-violet-500/40 bg-violet-500/10 px-3 py-2">
-        <User className="h-4 w-4 text-violet-300 shrink-0" />
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium truncate">{selected.businessName ?? selected.name}</p>
-          <p className="text-xs text-muted-foreground truncate font-mono">{selected.id}</p>
-        </div>
-        <button onClick={() => onSelect(null)} className="shrink-0 p-1 rounded hover:bg-accent transition-colors" title="Cambiar">
-          <X className="h-3.5 w-3.5" />
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-1.5">
-      <div className="relative">
-        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-        <Input
-          placeholder="Buscar cuenta por nombre, negocio, email o teléfono..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="pl-8 h-9 text-sm"
-          autoFocus
-        />
-      </div>
-      {search.trim().length >= 2 && (
-        <div className="rounded-lg border border-border divide-y divide-border max-h-48 overflow-y-auto">
-          {usersQuery.isLoading ? (
-            <div className="flex justify-center py-3"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>
-          ) : results.length === 0 ? (
-            <p className="text-xs text-muted-foreground px-3 py-2.5">Sin resultados para “{search}”.</p>
-          ) : (
-            results.map(u => (
-              <button
-                key={u.id}
-                onClick={() => onSelect({ id: u.id, name: u.name, businessName: u.businessName, email: u.email, subscriptionPlan: u.subscriptionPlan })}
-                className="w-full text-left px-3 py-2 hover:bg-muted/40 transition-colors"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium truncate">{u.businessName ?? u.name}</span>
-                  {u.subscriptionPlan && (
-                    <span className="text-[10px] text-muted-foreground shrink-0">{u.subscriptionPlan}</span>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground truncate">{u.email} · <span className="font-mono">{u.id}</span></p>
-              </button>
-            ))
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── Link Modal ───────────────────────────────────────────────────────────────
 
 interface LinkModalProps {
@@ -254,7 +177,8 @@ interface LinkModalProps {
 
 function LinkModal({ pending, onClose, onSuccess }: LinkModalProps) {
   const savedIdentity = loadStaffIdentity();
-  const [contractorId, setContractorId] = useState('');
+  const [pickedUser, setPickedUser] = useState<PickedUser | null>(null);
+  const contractorId = pickedUser?.id ?? '';
   const [staffPhone, setStaffPhone] = useState(savedIdentity.phone);
   const [staffEmail, setStaffEmail] = useState(savedIdentity.email);
   const [staffName, setStaffName] = useState(savedIdentity.name);
@@ -280,7 +204,7 @@ function LinkModal({ pending, onClose, onSuccess }: LinkModalProps) {
 
   function handleLink() {
     if (!contractorId.trim()) {
-      toast.error('Ingresa el Contractor ID');
+      toast.error('Elige la cuenta destino');
       return;
     }
     if (addStaff && !staffPhone.trim()) {
@@ -350,19 +274,10 @@ function LinkModal({ pending, onClose, onSuccess }: LinkModalProps) {
           </div>
         </div>
 
-        {/* Contractor ID input */}
+        {/* Cuenta destino — dropdown + buscador */}
         <div className="space-y-1.5">
-          <Label htmlFor="contractor-id">Contractor ID (LeadPrime)</Label>
-          <Input
-            id="contractor-id"
-            placeholder="con_xxxxxxxxxxxxxxxxxxxx"
-            value={contractorId}
-            onChange={(e) => setContractorId(e.target.value)}
-            className="font-mono text-sm"
-          />
-          <p className="text-xs text-muted-foreground">
-            Encuéntralo en la tabla de Usuarios → columna ID del contratista.
-          </p>
+          <Label>Cuenta de LeadPrime destino</Label>
+          <UserPicker selected={pickedUser} onSelect={setPickedUser} />
         </div>
 
         {/* Optional staff */}
@@ -659,201 +574,13 @@ function CreateAccountModal({ pending, onClose, onCreated }: {
   );
 }
 
-// ─── Assign Subscription Modal ────────────────────────────────────────────────
-// Asigna un tier a una cuenta EXISTENTE sin necesidad de un pago del portal.
-// Escribe la intención vía setSubscriptionConfig (el worker de LeadPrime la
-// aplica en ~5 min por la puerta única applyTierChange).
-
-function AssignSubscriptionModal({ onClose }: { onClose: () => void }) {
-  const [selected, setSelected] = useState<PickedContractor | null>(null);
-  const [targetTier, setTargetTier] = useState<'network_elite' | 'chyrris_growth' | 'chyrris_legacy'>('chyrris_growth');
-  const [billingMode, setBillingMode] = useState<'stripe_ach' | 'comp_no_charge'>('stripe_ach');
-  const [creditsCents, setCreditsCents] = useState('');
-  const [enableLegacy, setEnableLegacy] = useState(false);
-  const [contractEnd, setContractEnd] = useState('');
-  const [onContractEnd, setOnContractEnd] = useState<'downgrade_to_elite' | 'cancel'>('downgrade_to_elite');
-
-  const utils = trpc.useUtils();
-  const configQuery = trpc.leadprime.getSubscriptionConfig.useQuery(
-    { contractorId: selected?.id ?? '' },
-    { enabled: !!selected, staleTime: 0 }
-  );
-
-  // Prellenar el formulario con la config existente al elegir la cuenta.
-  useEffect(() => {
-    if (selected && configQuery.data) {
-      const d = configQuery.data;
-      if (d.targetTier) setTargetTier(d.targetTier as any);
-      if (d.billingMode) setBillingMode(d.billingMode as any);
-      setCreditsCents(d.monthlyCreditsCents != null ? String(d.monthlyCreditsCents) : '');
-      setEnableLegacy(d.enableLegacyProjects);
-      setContractEnd(d.contractEndAt ? d.contractEndAt.slice(0, 10) : '');
-      setOnContractEnd((d.onContractEnd as any) ?? 'downgrade_to_elite');
-    }
-  }, [selected, configQuery.data]);
-
-  const setConfig = trpc.leadprime.setSubscriptionConfig.useMutation({
-    onSuccess: () => {
-      toast.success('Suscripción guardada — el worker de LeadPrime la aplicará en los próximos 5 min');
-      utils.leadprime.getSubscriptionConfig.invalidate({ contractorId: selected?.id ?? '' });
-      utils.leadprime.getUsers.invalidate();
-      onClose();
-    },
-    onError: (e) => toast.error(e.message),
-  });
-
-  function handleSave() {
-    if (!selected) return;
-    const creds = creditsCents !== ''
-      ? Math.min(Math.max(0, parseInt(creditsCents, 10) || 0), 120000)
-      : null;
-    setConfig.mutate({
-      contractorId: selected.id,
-      targetTier,
-      billingMode,
-      monthlyCreditsCents: creds,
-      enableLegacyProjects: enableLegacy,
-      contractEndAt: contractEnd ? new Date(contractEnd).toISOString() : null,
-      onContractEnd,
-    });
-  }
-
-  return (
-    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <CreditCard className="h-5 w-5 text-violet-400" />
-            Asignar suscripción
-          </DialogTitle>
-          <DialogDescription>
-            Asigna un tier a una cuenta existente. Con ACH real se genera un link de cobro;
-            con cortesía se activa sin cargo.
-          </DialogDescription>
-        </DialogHeader>
-
-        <ContractorPicker selected={selected} onSelect={setSelected} />
-
-        {selected && (configQuery.isLoading ? (
-          <div className="py-4 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
-        ) : (
-          <>
-            <div className="rounded-lg border border-border p-3 text-xs flex items-center justify-between">
-              <span className="text-muted-foreground">Plan actual</span>
-              <span className="font-medium">{configQuery.data?.planName ?? '—'}
-                {configQuery.data?.status ? <span className="ml-2 text-muted-foreground">(config: {configQuery.data.status})</span> : null}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs">Tier</Label>
-                <select
-                  value={targetTier}
-                  onChange={e => setTargetTier(e.target.value as any)}
-                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-                >
-                  <option value="network_elite">Elite</option>
-                  <option value="chyrris_growth">Growth</option>
-                  <option value="chyrris_legacy">Legacy</option>
-                </select>
-              </div>
-              <div>
-                <Label className="text-xs">Modo de pago</Label>
-                <select
-                  value={billingMode}
-                  onChange={e => setBillingMode(e.target.value as any)}
-                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-                >
-                  <option value="stripe_ach">ACH real</option>
-                  <option value="comp_no_charge">Cortesía</option>
-                </select>
-              </div>
-            </div>
-
-            {billingMode === 'comp_no_charge' && (
-              <div>
-                <Label className="text-xs">Créditos mensuales (cents, máx $1,200 = 120000)</Label>
-                <input
-                  type="number"
-                  min="0"
-                  max="120000"
-                  step="100"
-                  placeholder="Dejar vacío = catálogo"
-                  value={creditsCents}
-                  onChange={e => setCreditsCents(e.target.value)}
-                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-                />
-              </div>
-            )}
-
-            {(targetTier === 'chyrris_growth' || targetTier === 'chyrris_legacy') && (
-              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={enableLegacy}
-                  onChange={e => setEnableLegacy(e.target.checked)}
-                  className="h-4 w-4 accent-violet-500"
-                />
-                Habilitar Legacy Projects (mes 6)
-              </label>
-            )}
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs">Fin de contrato</Label>
-                <input
-                  type="date"
-                  value={contractEnd}
-                  onChange={e => setContractEnd(e.target.value)}
-                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-                />
-              </div>
-              <div>
-                <Label className="text-xs">Al vencer</Label>
-                <select
-                  value={onContractEnd}
-                  onChange={e => setOnContractEnd(e.target.value as any)}
-                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-                >
-                  <option value="downgrade_to_elite">Pasar a Elite</option>
-                  <option value="cancel">Cancelar</option>
-                </select>
-              </div>
-            </div>
-
-            {billingMode === 'stripe_ach' && (
-              <p className="text-xs text-muted-foreground">
-                El link de cobro ACH aparecerá en Usuarios → Suscripción cuando el worker lo genere.
-              </p>
-            )}
-          </>
-        ))}
-
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={setConfig.isPending}>Cancelar</Button>
-          <Button
-            className="bg-violet-600 hover:bg-violet-700 text-white"
-            onClick={handleSave}
-            disabled={setConfig.isPending || !selected}
-          >
-            {setConfig.isPending
-              ? <><Loader2 className="h-4 w-4 animate-spin mr-1.5" /> Guardando...</>
-              : <><Check className="h-4 w-4 mr-1.5" /> Guardar</>}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 // ─── Add Staff Modal ──────────────────────────────────────────────────────────
 // Agrega a G. Sánchez como staff (admin, is_staff=true — sin cargo de asiento)
 // a la cuenta de un cliente, parte de los acuerdos del servicio Growth/Legacy.
 
 function AddStaffModal({ onClose }: { onClose: () => void }) {
   const savedIdentity = loadStaffIdentity();
-  const [selected, setSelected] = useState<PickedContractor | null>(null);
+  const [selected, setSelected] = useState<PickedUser | null>(null);
   const [staffPhone, setStaffPhone] = useState(savedIdentity.phone);
   const [staffEmail, setStaffEmail] = useState(savedIdentity.email);
   const [staffName, setStaffName] = useState(savedIdentity.name);
@@ -906,7 +633,7 @@ function AddStaffModal({ onClose }: { onClose: () => void }) {
 
         <div className="space-y-1.5">
           <Label className="text-xs">Cuenta del cliente</Label>
-          <ContractorPicker selected={selected} onSelect={setSelected} />
+          <UserPicker selected={selected} onSelect={setSelected} />
         </div>
 
         <div className="rounded-lg border border-border p-3 space-y-2">
@@ -1296,9 +1023,9 @@ export default function LeadPrimePendingSubscriptions() {
         />
       )}
 
-      {/* Assign subscription modal */}
+      {/* Assign subscription modal — componente compartido con Usuarios */}
       {showAssignModal && (
-        <AssignSubscriptionModal onClose={() => setShowAssignModal(false)} />
+        <SubscriptionConfigModal user={null} onClose={() => setShowAssignModal(false)} />
       )}
 
       {/* Add staff modal */}
