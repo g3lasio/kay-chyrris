@@ -1174,6 +1174,71 @@ export const appRouter = router({
         }
       }),
 
+    // Crear cuenta completa de LeadPrime desde Kai (servicio Growth/Legacy).
+    createContractor: protectedProcedure
+      .input(z.object({
+        name: z.string().min(1),
+        businessName: z.string().optional(),
+        email: z.string().email(),
+        phone: z.string().min(10),
+        industry: z.string().optional(),
+        subCategory: z.string().optional(),
+        staff: z.object({
+          phone: z.string().min(1),
+          email: z.string().email().optional(),
+          name: z.string().optional(),
+        }).nullable().optional(),
+        allowAdditionalBusiness: z.boolean().optional().default(false),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        try {
+          const actor = (ctx as any)?.user?.email ?? (ctx as any)?.user?.id ?? 'kai_admin';
+          const { createContractorViaApi } = await import('./services/leadprime-db');
+          const result = await createContractorViaApi({
+            ...input,
+            actor: `kai:${actor}`,
+          });
+          return { success: true, ...result };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error creating contractor:', error);
+          return {
+            success: false,
+            error: error.message,
+            // 409 del API interno: el teléfono ya tiene cuenta(s) — la UI
+            // ofrece usarla(s) o crear un negocio adicional.
+            accountExists: error.details?.accountExists ?? false,
+            emailTaken: error.details?.emailTaken ?? false,
+            existingBusinesses: (error.details?.existingBusinesses ?? []) as Array<{ id: string; name: string }>,
+          };
+        }
+      }),
+
+    // Agregar staff Chyrris (sin cargo de asiento) a una cuenta existente.
+    addStaff: protectedProcedure
+      .input(z.object({
+        contractorId: z.string().min(1),
+        staff: z.object({
+          phone: z.string().min(1),
+          email: z.string().email().optional(),
+          name: z.string().optional(),
+        }),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        try {
+          const actor = (ctx as any)?.user?.email ?? (ctx as any)?.user?.id ?? 'kai_admin';
+          const { addStaffViaApi } = await import('./services/leadprime-db');
+          const result = await addStaffViaApi({
+            contractorId: input.contractorId,
+            staff: input.staff,
+            actor: `kai:${actor}`,
+          });
+          return { success: true, ...result };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error adding staff:', error);
+          return { success: false, error: error.message, staffAdded: false, staffPhone: '' };
+        }
+      }),
+
   }),
 
   // ─── END LEADPRIME CREDIT MANAGEMENT ─────────────────────────────────────

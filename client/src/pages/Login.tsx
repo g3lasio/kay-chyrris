@@ -12,6 +12,7 @@ export default function Login() {
   const [passcode, setPasscode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
+  const utils = trpc.useUtils();
   const verifyPasscodeMutation = trpc.auth.verifyPasscode.useMutation();
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -28,6 +29,11 @@ export default function Login() {
       const result = await verifyPasscodeMutation.mutateAsync({ passcode });
 
       if (result.success) {
+        // The auth.me query caches `null` (unauthenticated) with a 30s
+        // staleTime; without a refetch here ProtectedRoute still sees the
+        // stale null and bounces back to /login until the cache expires —
+        // the "enter the PIN 2-3 times then refresh" loop.
+        await utils.auth.me.refetch();
         toast.success('Welcome to Chyrris KAI');
         setLocation('/');
       } else {

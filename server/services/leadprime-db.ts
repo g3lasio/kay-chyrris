@@ -1606,9 +1606,37 @@ export interface LinkPendingResult {
 }
 
 /**
- * Proxy call to LeadPrime's /api/join/link endpoint to link a paid pending
- * subscription to an existing contractor account.
- * This avoids duplicating the complex applyTierChange logic in Kai.
+ * Server-to-server call to LeadPrime's internal Kai API
+ * (backend/src/routes/internalKai.ts in g3lasio/leadprime). Authenticated by
+ * the shared secret LEADPRIME_INTERNAL_API_KEY (= KAI_INTERNAL_API_KEY on the
+ * LeadPrime side). NOTE: the old /api/join/link endpoint expects a user JWT,
+ * NOT this key — calling it from Kai always returned 401.
+ */
+async function callLeadPrimeInternalApi(path: string, body: Record<string, any>): Promise<any> {
+  const baseUrl = process.env.LEADPRIME_API_URL || 'https://leadprime.chyrris.com';
+  const apiKey = process.env.LEADPRIME_INTERNAL_API_KEY;
+  if (!apiKey) throw new Error('LEADPRIME_INTERNAL_API_KEY no configurado — necesario para operar cuentas de LeadPrime');
+  const resp = await fetch(`${baseUrl}/api/internal/kai${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+  const data: any = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    const err: any = new Error(data?.error || `LeadPrime API error ${resp.status}`);
+    err.details = data;
+    err.status = resp.status;
+    throw err;
+  }
+  return data;
+}
+
+/**
+ * Link a paid /join-portal payment to an existing contractor account.
+ * Delegates to LeadPrime so the complex applyTierChange logic stays there.
  */
 export async function linkPendingSubscriptionViaApi(input: {
   pendingId: number;
@@ -1616,23 +1644,12 @@ export async function linkPendingSubscriptionViaApi(input: {
   actor: string;
   staff?: { phone: string; email?: string; name?: string } | null;
 }): Promise<LinkPendingResult> {
-  const baseUrl = process.env.LEADPRIME_API_URL || 'https://leadprime.chyrris.com';
-  const apiKey = process.env.LEADPRIME_INTERNAL_API_KEY;
-  if (!apiKey) throw new Error('LEADPRIME_INTERNAL_API_KEY no configurado — necesario para la vinculación');
-  const resp = await fetch(`${baseUrl}/api/join/link`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      pendingId: input.pendingId,
-      contractorId: input.contractorId,
-      staff: input.staff ?? null,
-    }),
+  const data = await callLeadPrimeInternalApi('/link', {
+    pendingId: input.pendingId,
+    contractorId: input.contractorId,
+    actor: input.actor,
+    staff: input.staff ?? null,
   });
-  const data: any = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error(data?.error || `LeadPrime API error ${resp.status}`);
   return {
     linked: data.linked ?? true,
     alreadyLinked: data.alreadyLinked ?? false,
@@ -1640,4 +1657,66 @@ export async function linkPendingSubscriptionViaApi(input: {
     creditsGrantedCents: data.creditsGrantedCents ?? 0,
     staffAdded: data.staffAdded ?? false,
   };
+}
+
+export interface CreateContractorResult {
+  contractorId: string;
+  handle: string;
+  phone: string;
+  additionalBusiness: boolean;
+  staffAdded: boolean;
+}
+
+/**
+ * Create a complete, verified LeadPrime account (contractor + business profile
+ * + team owner + pay_as_you_go subscription + welcome credit + seeds).
+ * The client logs in afterwards via the normal phone-OTP flow.
+ */
+export async function createContractorViaApi(input: {
+  name: string;
+  businessName?: string | null;
+  email: string;
+  phone: string;
+  industry?: string | null;
+  subCategory?: string | null;
+  actor: string;
+  staff?: { phone: string; email?: string; name?: string } | null;
+  allowAdditionalBusiness?: boolean;
+}): Promise<CreateContractorResult> {
+  const data = await callLeadPrimeInternalApi('/contractors/create', {
+    name: input.name,
+    businessName: input.businessName ?? null,
+    email: input.email,
+    phone: input.phone,
+    industry: input.industry ?? null,
+    subCategory: input.subCategory ?? null,
+    actor: input.actor,
+    staff: input.staff ?? null,
+    allowAdditionalBusiness: input.allowAdditionalBusiness ?? false,
+  });
+  return {
+    contractorId: data.contractorId,
+    handle: data.handle ?? '',
+    phone: data.phone ?? input.phone,
+    additionalBusiness: data.additionalBusiness ?? false,
+    staffAdded: data.staffAdded ?? false,
+  };
+}
+
+/**
+ * Add a Chyrris staff member (is_staff=true — no $10 seat charge, role admin)
+ * to an existing contractor account. Part of the managed service included in
+ * the Growth/Legacy tiers.
+ */
+export async function addStaffViaApi(input: {
+  contractorId: string;
+  staff: { phone: string; email?: string; name?: string };
+  actor: string;
+}): Promise<{ staffAdded: boolean; staffPhone: string }> {
+  const data = await callLeadPrimeInternalApi('/staff/add', {
+    contractorId: input.contractorId,
+    staff: input.staff,
+    actor: input.actor,
+  });
+  return { staffAdded: data.staffAdded ?? true, staffPhone: data.staffPhone ?? input.staff.phone };
 }

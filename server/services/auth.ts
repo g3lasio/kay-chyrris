@@ -3,12 +3,31 @@
  * Passcode-based authentication (replaces OTP email)
  * Set ADMIN_PASSCODE env variable to configure the passcode
  */
+import { timingSafeEqual } from 'node:crypto';
 import { eq, and, gt, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { getDb } from '../db';
 import { adminSessions, adminUsers, type InsertAdminSession } from '../../drizzle/schema';
 
 const SESSION_EXPIRY_DAYS = 7;
+
+// validateSession runs on EVERY tRPC request; without this cache each request
+// costs two extra DB roundtrips, which is what made the whole panel (and the
+// login redirect) feel sluggish. Entries are short-lived and dropped on logout.
+const SESSION_CACHE_TTL_MS = 60_000;
+const sessionCache = new Map<string, { user: typeof adminUsers.$inferSelect; expires: number }>();
+
+function passcodeMatches(input: string, expected: string): boolean {
+  const a = Buffer.from(input);
+  const b = Buffer.from(expected);
+  // timingSafeEqual requires equal lengths; comparing against itself keeps
+  // constant time while still failing the overall check.
+  if (a.length !== b.length) {
+    timingSafeEqual(b, b);
+    return false;
+  }
+  return timingSafeEqual(a, b);
+}
 
 /**
  * Verify passcode and create session
@@ -26,7 +45,7 @@ export async function verifyPasscode(
       return { success: false, error: 'Server configuration error' };
     }
 
-    if (passcode !== adminPasscode) {
+    if (!passcodeMatches(passcode, adminPasscode)) {
       console.log('[Auth] Invalid passcode attempt');
       return { success: false, error: 'Invalid passcode' };
     }
@@ -82,29 +101,32 @@ export async function verifyPasscode(
  */
 export async function validateSession(sessionId: string) {
   try {
+    const cached = sessionCache.get(sessionId);
+    if (cached && cached.expires > Date.now()) {
+      return cached.user;
+    }
+
     const db = await getDb();
     if (!db) {
       return null;
     }
 
-    const sessions = await db
-      .select()
+    // Single roundtrip: session validity + user in one JOIN.
+    const rows = await db
+      .select({ user: adminUsers })
       .from(adminSessions)
+      .innerJoin(adminUsers, eq(adminUsers.id, adminSessions.adminUserId))
       .where(and(eq(adminSessions.id, sessionId), gt(adminSessions.expiresAt, sql`NOW()`)))
       .limit(1);
 
-    if (sessions.length === 0) {
+    const user = rows[0]?.user;
+    if (!user || !user.isActive) {
+      sessionCache.delete(sessionId);
       return null;
     }
 
-    const session = sessions[0];
-    const users = await db.select().from(adminUsers).where(eq(adminUsers.id, session!.adminUserId)).limit(1);
-
-    if (users.length === 0 || !users[0]!.isActive) {
-      return null;
-    }
-
-    return users[0];
+    sessionCache.set(sessionId, { user, expires: Date.now() + SESSION_CACHE_TTL_MS });
+    return user;
   } catch (error) {
     console.error('[Auth] Error in validateSession:', error);
     return null;
@@ -116,6 +138,7 @@ export async function validateSession(sessionId: string) {
  */
 export async function invalidateSession(sessionId: string): Promise<boolean> {
   try {
+    sessionCache.delete(sessionId);
     const db = await getDb();
     if (!db) {
       return false;
