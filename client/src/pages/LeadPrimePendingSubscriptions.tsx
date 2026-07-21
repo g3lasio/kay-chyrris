@@ -52,6 +52,8 @@ import {
   Search,
   Filter,
   ChevronRight,
+  Copy,
+  Check,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -342,6 +344,35 @@ export default function LeadPrimePendingSubscriptions() {
     : rows;
 
   const pendingCount = rows.filter(r => r.status === 'paid').length;
+  const [copiedGrowth, setCopiedGrowth] = useState(false);
+  const [copiedLegacy, setCopiedLegacy] = useState(false);
+
+  const BASE_URL = 'https://leadprime.chyrris.com';
+  const PORTAL_LINKS = [
+    {
+      tier: 'Growth',
+      url: `${BASE_URL}/join/growth`,
+      color: 'border-violet-500/30 bg-violet-500/10 text-violet-300',
+      btnColor: 'hover:bg-violet-500/20 text-violet-300',
+      copied: copiedGrowth,
+      setCopied: setCopiedGrowth,
+    },
+    {
+      tier: 'Legacy',
+      url: `${BASE_URL}/join/legacy`,
+      color: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
+      btnColor: 'hover:bg-amber-500/20 text-amber-300',
+      copied: copiedLegacy,
+      setCopied: setCopiedLegacy,
+    },
+  ];
+
+  function copyLink(url: string, setCopied: (v: boolean) => void) {
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
 
   return (
     <div className="space-y-5 max-w-6xl mx-auto">
@@ -372,6 +403,38 @@ export default function LeadPrimePendingSubscriptions() {
           <RefreshCw className={`h-4 w-4 mr-1.5 ${query.isFetching ? 'animate-spin' : ''}`} />
           Actualizar
         </Button>
+      </div>
+
+      {/* Portal Links — links fijos para mandar a clientes */}
+      <div className="rounded-xl border border-border bg-card p-4 space-y-2">
+        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Links de captación (copiar y mandar al cliente)</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {PORTAL_LINKS.map(({ tier, url, color, btnColor, copied, setCopied }) => (
+            <div key={tier} className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${color}`}>
+              <span className="text-xs font-semibold shrink-0">{tier}</span>
+              <code className="flex-1 text-xs truncate opacity-80">{url}</code>
+              <button
+                onClick={() => copyLink(url, setCopied)}
+                className={`shrink-0 flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors ${btnColor}`}
+                title="Copiar link"
+              >
+                {copied
+                  ? <><Check className="h-3.5 w-3.5" /> Copiado</>
+                  : <><Copy className="h-3.5 w-3.5" /> Copiar</>
+                }
+              </button>
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`shrink-0 ${btnColor} p-1 rounded transition-colors`}
+                title="Abrir portal"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Stats row */}
