@@ -78,6 +78,39 @@ function activityBadge(isActive: boolean) {
     : <span className="text-xs px-2 py-0.5 rounded-full bg-gray-500/10 text-gray-400">inactive</span>;
 }
 
+// Plan SIEMPRE visible por fila: una cuenta sin plan es un huérfano de datos y
+// se marca en rojo para detectarlo de inmediato (no debería existir ninguno).
+const PLAN_COLORS: Record<string, string> = {
+  pay: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+  starter: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+  basic: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+  growth: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
+  chyrris: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
+  pro: 'bg-fuchsia-500/15 text-fuchsia-300 border-fuchsia-500/30',
+  premium: 'bg-fuchsia-500/15 text-fuchsia-300 border-fuchsia-500/30',
+  network: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+  elite: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+  enterprise: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+};
+
+function planBadge(plan: string | null) {
+  if (!plan) {
+    return (
+      <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-500/15 text-red-300 border border-red-500/30 whitespace-nowrap">
+        ⚠ sin plan
+      </span>
+    );
+  }
+  const label = plan.replace(/^price_/, '').replace(/[_-]+/g, ' ').trim();
+  const colorKey = label.split(' ')[0].toLowerCase();
+  const cls = PLAN_COLORS[colorKey] ?? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30';
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full font-medium border capitalize whitespace-nowrap ${cls}`} title={plan}>
+      {label}
+    </span>
+  );
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function LeadPrimeUsersIntelligence() {
   const [activeTab, setActiveTab] = useState<'directorio' | 'transactions' | 'grants'>('directorio');
@@ -570,6 +603,7 @@ export default function LeadPrimeUsersIntelligence() {
                     <th className="text-left px-3 py-3 font-medium">Business</th>
                     <th className="text-left px-3 py-3 font-medium">Industry</th>
                     <th className="text-left px-3 py-3 font-medium">Location</th>
+                    <th className="text-left px-3 py-3 font-medium">Plan</th>
                     <th className="text-left px-3 py-3 font-medium">Status</th>
                     <th className="text-right px-3 py-3 font-medium cursor-pointer hover:text-foreground" onClick={() => toggleSort('balance')}>
                       <span className="flex items-center justify-end gap-1">Balance <SortIcon col="balance" /></span>
@@ -628,6 +662,9 @@ export default function LeadPrimeUsersIntelligence() {
                           {u.city && u.state ? `${u.city}, ${u.state}` : u.state ?? u.city ?? '—'}
                         </td>
                         <td className="px-3 py-3">
+                          {planBadge(u.subscriptionPlanId)}
+                        </td>
+                        <td className="px-3 py-3">
                           <div className="flex flex-col gap-1">
                             {subBadge(u.subscriptionStatus)}
                             {activityBadge(u.isActive)}
@@ -662,7 +699,7 @@ export default function LeadPrimeUsersIntelligence() {
                       </tr>
                       {expandedId === u.id && (
                         <tr className="bg-accent/20">
-                          <td colSpan={12} className="px-6 py-4">
+                          <td colSpan={13} className="px-6 py-4">
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
                               <div>
                                 <div className="text-muted-foreground mb-1 flex items-center gap-1"><Mail className="h-3 w-3" /> Email</div>

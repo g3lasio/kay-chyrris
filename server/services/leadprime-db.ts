@@ -151,7 +151,10 @@ export async function getLeadPrimeUsers(options: {
      LEFT JOIN company_profiles cp ON cp.contractor_id = c.id
      LEFT JOIN wallets w ON w.contractor_id = c.id
      LEFT JOIN LATERAL (
-       SELECT status, plan
+       -- plan_name es la columna real desde la migración 099 de LeadPrime; la
+       -- columna legacy \`plan\` (037) quedó NULL en cuentas nuevas y hacía ver
+       -- usuarios "active" sin plan.
+       SELECT status, COALESCE(NULLIF(TRIM(plan_name), ''), plan) AS plan
        FROM subscriptions
        WHERE contractor_id = c.id
        ORDER BY CASE status
@@ -544,9 +547,11 @@ export async function getEnrichedLeadPrimeUsers(options: {
        -- wallet
        COALESCE(w.balance_cents, 0) AS balance_cents,
        COALESCE(spent.total_spent_cents, 0) AS total_spent_cents,
-       -- subscription
+       -- subscription: plan_name es la columna real (migración 099); la legacy
+       -- \`plan\` (037) está NULL en cuentas nuevas — leerla sola dejaba
+       -- usuarios "active" sin plan visible en Kai.
        s.status AS subscription_status,
-       s.plan AS subscription_plan_id,
+       COALESCE(NULLIF(TRIM(s.plan_name), ''), s.plan) AS subscription_plan_id,
        -- activity counts
        COALESCE(lc.lead_count, 0) AS lead_count,
        COALESCE(mc.message_count, 0) AS message_count,
