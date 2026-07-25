@@ -17,11 +17,22 @@ import {
 } from "@/components/ui/table";
 import { toast } from "sonner";
 import {
+  Area,
+  AreaChart,
+  ResponsiveContainer,
+  Tooltip as RTooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
   Copy,
   DollarSign,
+  ExternalLink,
   Gift,
+  Globe,
   Link2,
   Loader2,
+  Rocket,
   TrendingUp,
   Users,
   Wallet,
@@ -104,10 +115,54 @@ export default function PartnerDashboard() {
   );
 }
 
+function LinkTile({
+  icon: Icon,
+  label,
+  url,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  url: string;
+}) {
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("Link copiado");
+    } catch {
+      toast.error("No se pudo copiar");
+    }
+  };
+  return (
+    <div className="flex items-center gap-3 border rounded-xl p-3">
+      <div className="w-9 h-9 rounded-lg bg-accent flex items-center justify-center shrink-0">
+        <Icon className="w-4 h-4 text-primary" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium">{label}</p>
+        <a href={url} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline truncate block">
+          {url.replace(/^https?:\/\//, "")}
+        </a>
+      </div>
+      <div className="flex gap-1 shrink-0">
+        <Button variant="ghost" size="sm" onClick={copy} title="Copiar">
+          <Copy className="w-4 h-4" />
+        </Button>
+        <Button variant="ghost" size="sm" asChild title="Abrir">
+          <a href={url} target="_blank" rel="noreferrer">
+            <ExternalLink className="w-4 h-4" />
+          </a>
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function DashboardContent() {
   const dashboardQuery = trpc.partnerPortal.dashboard.useQuery();
   const referralsQuery = trpc.partnerPortal.referrals.useQuery();
   const payoutsQuery = trpc.partnerPortal.payouts.useQuery();
+  const incomeQuery = trpc.partnerPortal.monthlyIncome.useQuery();
+  const linksQuery = trpc.partnerPortal.links.useQuery();
 
   const data = dashboardQuery.data;
   if (dashboardQuery.isLoading || !data) {
@@ -133,6 +188,9 @@ function DashboardContent() {
   );
   const referrals = referralsQuery.data ?? [];
   const payouts = payoutsQuery.data ?? [];
+  const income = incomeQuery.data ?? [];
+  const links = linksQuery.data;
+  const hasIncome = income.some(pt => parseFloat(pt.amount) !== 0);
 
   return (
     <div className="space-y-6">
@@ -220,10 +278,11 @@ function DashboardContent() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Negocio</TableHead>
-                      <TableHead>Registro</TableHead>
+                      <TableHead>Inicio</TableHead>
                       <TableHead>Estado</TableHead>
                       <TableHead>Etapa</TableHead>
-                      <TableHead>Plan</TableHead>
+                      <TableHead>Plan / costo</TableHead>
+                      <TableHead>1ª comisión (est.)</TableHead>
                       <TableHead className="text-right">Comisión (mes)</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -234,7 +293,21 @@ function DashboardContent() {
                         <TableCell className="text-muted-foreground">{shortDate(r.signupDate)}</TableCell>
                         <TableCell><StatusChip status={r.status} /></TableCell>
                         <TableCell><StageChip stage={r.stage} pct={r.stagePct} /></TableCell>
-                        <TableCell className="text-muted-foreground">{r.plan ?? "—"}</TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {r.plan ?? "—"}
+                          {r.planCost ? <span className="text-xs"> · {money(r.planCost)}/mes</span> : null}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground text-sm">
+                          {r.status === "active" ? (
+                            <span className="lp-chip-green text-xs px-2 py-0.5 rounded-full">Generando</span>
+                          ) : r.estimatedCommissionStart ? (
+                            <span title="Estimado por el ciclo ACH (~30-40 días)">
+                              ~{shortDate(r.estimatedCommissionStart)}
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                        </TableCell>
                         <TableCell className="text-right font-medium">{money(r.commissionThisMonth)}</TableCell>
                       </TableRow>
                     ))}
@@ -250,12 +323,22 @@ function DashboardContent() {
                       <StatusChip status={r.status} />
                     </div>
                     <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span>Registro: {shortDate(r.signupDate)}</span>
+                      <span>Inicio: {shortDate(r.signupDate)}</span>
                       <StageChip stage={r.stage} pct={r.stagePct} />
                     </div>
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-muted-foreground">{r.plan ?? "Sin plan"}</span>
+                      <span className="text-muted-foreground">
+                        {r.plan ?? "Sin plan"}
+                        {r.planCost ? ` · ${money(r.planCost)}/mes` : ""}
+                      </span>
                       <span className="font-semibold">{money(r.commissionThisMonth)} / mes</span>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {r.status === "active"
+                        ? "Generando comisión"
+                        : r.estimatedCommissionStart
+                          ? `1ª comisión estimada ~${shortDate(r.estimatedCommissionStart)}`
+                          : ""}
                     </div>
                   </div>
                 ))}
@@ -264,6 +347,61 @@ function DashboardContent() {
           )}
         </CardContent>
       </Card>
+
+      {/* Monthly income history */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <TrendingUp className="w-5 h-5 text-primary" /> Historial de ingresos por referidos
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {incomeQuery.isLoading ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="w-6 h-6 animate-spin text-primary" />
+            </div>
+          ) : !hasIncome ? (
+            <p className="text-sm text-muted-foreground py-6 text-center">
+              Cuando tus referidos empiecen a pagar, aquí verás cómo crece tu ingreso recurrente mes a mes.
+            </p>
+          ) : (
+            <div className="h-56 -ml-2">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={income.map(pt => ({ ...pt, value: parseFloat(pt.amount) }))}>
+                  <defs>
+                    <linearGradient id="lpIncome" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="var(--lp-blue)" stopOpacity={0.35} />
+                      <stop offset="100%" stopColor="var(--lp-blue)" stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                  <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={54} tickFormatter={v => `$${v}`} />
+                  <RTooltip
+                    formatter={(v: any) => [money(v), "Comisión"]}
+                    contentStyle={{ borderRadius: 10, border: "1px solid var(--border)", fontSize: 12 }}
+                  />
+                  <Area type="monotone" dataKey="value" stroke="var(--lp-blue)" strokeWidth={2} fill="url(#lpIncome)" isAnimationActive={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* LeadPrime links to share (brief §6) */}
+      {links && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Globe className="w-5 h-5 text-primary" /> Links de LeadPrime para compartir
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid sm:grid-cols-2 gap-3">
+            <LinkTile icon={Globe} label="Landing page" url={links.landingUrl} />
+            <LinkTile icon={Rocket} label="Sitio de producción" url={links.productionUrl} />
+          </CardContent>
+        </Card>
+      )}
 
       {/* Payout history */}
       <Card>

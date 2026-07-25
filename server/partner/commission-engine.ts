@@ -612,6 +612,7 @@ export interface ReferredUserInfo {
   businessName: string | null;
   plan: string | null;
   subscriptionStatus: string | null;
+  planPriceCents: number | null;
 }
 
 /**
@@ -625,14 +626,16 @@ export async function fetchReferredUsersInfo(
   const result = new Map<string, ReferredUserInfo>();
   if (contractorIds.length === 0) return result;
   const pool = getLeadPrimePool();
+  // base_price_cents is the plan's monthly cost (used for the dashboard's
+  // "plan + cost" column). It is billing config, not the contractor's PII.
   const res = await pool.query(
     `SELECT c.id,
             COALESCE(NULLIF(TRIM(cp.business_name), ''), NULLIF(TRIM(c.company_name), ''), NULLIF(TRIM(c.name), '')) AS business_name,
-            s.plan, s.status AS sub_status
+            s.plan, s.status AS sub_status, s.base_price_cents
      FROM contractors c
      LEFT JOIN company_profiles cp ON cp.contractor_id = c.id
      LEFT JOIN LATERAL (
-       SELECT COALESCE(NULLIF(TRIM(plan_name), ''), plan) AS plan, status
+       SELECT COALESCE(NULLIF(TRIM(plan_name), ''), plan) AS plan, status, base_price_cents
        FROM subscriptions
        WHERE contractor_id = c.id
        ORDER BY CASE status
@@ -652,9 +655,37 @@ export async function fetchReferredUsersInfo(
       businessName: row.business_name ?? null,
       plan: row.plan ?? null,
       subscriptionStatus: row.sub_status ?? null,
+      planPriceCents: row.base_price_cents != null ? parseInt(row.base_price_cents, 10) : null,
     });
   }
   return result;
+}
+
+/** Look up LeadPrime contractors by email (for invitation status matching). */
+export async function findContractorsByEmails(
+  emails: string[]
+): Promise<Map<string, { id: string; createdAt: Date | null }>> {
+  const map = new Map<string, { id: string; createdAt: Date | null }>();
+  if (emails.length === 0) return map;
+  const pool = getLeadPrimePool();
+  const res = await pool.query(
+    `SELECT id, email, created_at FROM contractors WHERE LOWER(email) = ANY($1)`,
+    [emails.map(e => e.toLowerCase())]
+  );
+  for (const row of res.rows) {
+    if (row.email) map.set(String(row.email).toLowerCase(), { id: row.id, createdAt: row.created_at ?? null });
+  }
+  return map;
+}
+
+// Invitation status matching runs as the last sweep step. Dynamic import
+// avoids a static import cycle (partner-invitations imports this module).
+async function syncInvitationsStep(summary: SyncSummary): Promise<void> {
+  const { syncInvitationStatuses } = await import("./partner-invitations");
+  const res = await syncInvitationStatuses();
+  if (res.registered || res.activated) {
+    console.log(`[Commission Engine] Invitations: +${res.registered} registered, +${res.activated} active`);
+  }
 }
 
 let syncInFlight: Promise<SyncSummary> | null = null;
@@ -669,6 +700,7 @@ export async function syncReferralSystem(): Promise<SyncSummary> {
       ["charges", syncCommissionCharges],
       ["refunds", syncRefundsFromStripe],
       ["lifecycle", syncAttributionLifecycle],
+      ["invitations", syncInvitationsStep],
     ];
     for (const [name, step] of steps) {
       try {

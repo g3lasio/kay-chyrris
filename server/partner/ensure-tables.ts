@@ -18,6 +18,20 @@ const ENUMS: Array<[string, string[]]> = [
   ["attribution_status", ["pending_first_payment", "active", "inactive"]],
   ["commission_payout_status", ["pending", "paid"]],
   ["payout_status", ["pending", "paid"]],
+  ["partner_invitation_status", ["pending_approval", "sent", "registered", "active", "declined"]],
+];
+
+// Values added to partner_doc_type AFTER the original enum shipped. ALTER TYPE
+// ... ADD VALUE IF NOT EXISTS runs outside a transaction (autocommit) and is a
+// no-op once present, so this is safe on every boot.
+const ENUM_ADDED_VALUES: Array<[string, string[]]> = [
+  ["partner_doc_type", ["revenue_projection", "features", "term_sheet_info", "term_sheet_signed"]],
+];
+
+// Columns added to existing tables (additive). ADD COLUMN IF NOT EXISTS.
+const ADDED_COLUMNS: string[] = [
+  `ALTER TABLE partner_documents ADD COLUMN IF NOT EXISTS uploaded_by varchar(20) DEFAULT 'partner' NOT NULL`,
+  `ALTER TABLE referral_partners ADD COLUMN IF NOT EXISTS materials_reviewed_at timestamp`,
 ];
 
 const TABLE_STATEMENTS = [
@@ -107,6 +121,27 @@ const TABLE_STATEMENTS = [
   `CREATE UNIQUE INDEX IF NOT EXISTS uq_referral_commissions_source ON referral_commissions (source_payment_id, is_reversal)`,
   `CREATE INDEX IF NOT EXISTS idx_referral_commissions_partner ON referral_commissions (partner_id, payout_status, charge_date)`,
   `CREATE INDEX IF NOT EXISTS idx_partner_auth_codes_partner ON partner_auth_codes (partner_id, created_at)`,
+  // Enhancements (v2): consent-based referral invitations + portal settings.
+  `CREATE TABLE IF NOT EXISTS partner_invitations (
+    id serial PRIMARY KEY,
+    partner_id integer NOT NULL REFERENCES referral_partners(id) ON DELETE CASCADE,
+    email varchar(255) NOT NULL,
+    token varchar(64) NOT NULL UNIQUE,
+    status partner_invitation_status DEFAULT 'sent' NOT NULL,
+    registered_user_id varchar(100),
+    sent_at timestamp,
+    registered_at timestamp,
+    activated_at timestamp,
+    created_at timestamp DEFAULT now() NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS app_settings (
+    key varchar(100) PRIMARY KEY,
+    value text,
+    updated_at timestamp DEFAULT now() NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_partner_invitations_partner ON partner_invitations (partner_id, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_partner_invitations_email ON partner_invitations (email)`,
 ];
 
 export async function ensurePartnerTables(): Promise<void> {
@@ -128,10 +163,19 @@ export async function ensurePartnerTables(): Promise<void> {
         )
       );
     }
+    // Add enum values that were introduced after the type first shipped.
+    for (const [name, values] of ENUM_ADDED_VALUES) {
+      for (const value of values) {
+        await db.execute(sql.raw(`ALTER TYPE "${name}" ADD VALUE IF NOT EXISTS '${value}'`));
+      }
+    }
+    for (const statement of ADDED_COLUMNS) {
+      await db.execute(sql.raw(statement));
+    }
     for (const statement of TABLE_STATEMENTS) {
       await db.execute(sql.raw(statement));
     }
-    console.log("[Partner Tables] referral_* tables ensured");
+    console.log("[Partner Tables] referral_* tables ensured (v2)");
   } catch (error) {
     // Non-fatal: Kai must keep booting even if the portal bootstrap fails.
     console.error("[Partner Tables] Bootstrap failed:", error);

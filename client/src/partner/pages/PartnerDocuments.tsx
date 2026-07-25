@@ -1,30 +1,28 @@
 /**
- * Partner Portal — documents zone (brief §7.2): view, upload and refresh
- * W-9 / ACH / contract beyond the initial checklist.
+ * Partner Portal — enriched "Documentación" (brief §3): the partner's full
+ * file in one place — informational materials LeadPrime uploaded (view-only)
+ * and the signed documents the partner uploaded, each with its status.
  */
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { toast } from "sonner";
-import { Download, ExternalLink, FileText, Loader2 } from "lucide-react";
+import { Download, ExternalLink, FileText, Info, Loader2, ShieldCheck } from "lucide-react";
 import PartnerLayout from "../PartnerLayout";
 import DocumentUploadCard from "../components/DocumentUploadCard";
 
 const DOC_LABEL: Record<string, string> = {
-  contract: "Contrato de alianza",
+  contract: "Contrato firmado",
+  term_sheet_signed: "Term sheet firmado",
   w9: "Formulario W-9",
   ach_authorization: "Autorización ACH",
+  revenue_projection: "Proyección de revenue",
+  features: "Documento de features",
+  term_sheet_info: "Term sheet (informativo)",
   other: "Otro documento",
 };
 
+const INFORMATIONAL = new Set(["revenue_projection", "features", "term_sheet_info"]);
 const IRS_W9_URL = "https://www.irs.gov/pub/irs-pdf/fw9.pdf";
 
 function StatusChip({ status }: { status: string }) {
@@ -33,6 +31,11 @@ function StatusChip({ status }: { status: string }) {
   if (status === "uploaded")
     return <span className="lp-chip-blue text-xs font-medium px-2 py-0.5 rounded-full">Subido</span>;
   return <span className="lp-chip-muted text-xs font-medium px-2 py-0.5 rounded-full">Pendiente</span>;
+}
+
+function shortDate(value: string | Date | null): string {
+  if (!value) return "—";
+  return new Date(value).toLocaleDateString("es-MX", { year: "numeric", month: "short", day: "numeric" });
 }
 
 export default function PartnerDocuments() {
@@ -48,54 +51,66 @@ export default function PartnerDocuments() {
     }
   };
 
-  const documents = documentsQuery.data ?? [];
+  const allDocs = documentsQuery.data ?? [];
+  const informational = allDocs.filter(d => INFORMATIONAL.has(d.docType));
+  const signed = allDocs.filter(d => !INFORMATIONAL.has(d.docType));
+
+  const DocTable = ({ docs, source }: { docs: typeof allDocs; source: "admin" | "partner" }) => (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-muted-foreground border-b">
+            <th className="py-2 font-medium">Documento</th>
+            <th className="py-2 font-medium hidden sm:table-cell">Archivo</th>
+            <th className="py-2 font-medium">Estado</th>
+            <th className="py-2 font-medium hidden sm:table-cell">
+              {source === "admin" ? "Cargado" : "Subido"}
+            </th>
+            <th className="py-2 font-medium text-right">Ver</th>
+          </tr>
+        </thead>
+        <tbody>
+          {docs.map(doc => (
+            <tr key={doc.id} className="border-b last:border-0">
+              <td className="py-2.5 font-medium">{DOC_LABEL[doc.docType] ?? doc.docType}</td>
+              <td className="py-2.5 hidden sm:table-cell text-muted-foreground truncate max-w-[200px]">
+                {doc.fileName ?? "—"}
+              </td>
+              <td className="py-2.5"><StatusChip status={doc.status} /></td>
+              <td className="py-2.5 hidden sm:table-cell text-muted-foreground">
+                {shortDate(doc.uploadedAt)}
+              </td>
+              <td className="py-2.5 text-right">
+                {doc.fileUrl ? (
+                  <Button variant="ghost" size="sm" onClick={() => openDocument(doc.id)}>
+                    <ExternalLink className="w-4 h-4" />
+                  </Button>
+                ) : (
+                  <span className="text-muted-foreground text-xs">—</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 
   return (
     <PartnerLayout>
       <div className="space-y-6">
         <div>
-          <h1 className="text-xl font-bold">Zona de documentos</h1>
+          <h1 className="text-xl font-bold">Documentación</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Sube versiones actualizadas de tu W-9, autorización ACH o contrato cuando cambien.
+            Tu expediente completo: los materiales que LeadPrime preparó y los documentos firmados que subiste.
           </p>
         </div>
 
-        <div className="grid sm:grid-cols-3 gap-3">
-          <Card>
-            <CardHeader className="pb-1">
-              <CardTitle className="text-sm">Formulario W-9</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <Button variant="outline" size="sm" asChild className="w-full">
-                <a href={IRS_W9_URL} target="_blank" rel="noreferrer">
-                  <Download className="w-4 h-4 mr-2" /> W-9 en blanco (IRS)
-                </a>
-              </Button>
-              <DocumentUploadCard docType="w9" label="W-9" compact />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-1">
-              <CardTitle className="text-sm">Autorización ACH</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <DocumentUploadCard docType="ach_authorization" label="ACH" compact />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-1">
-              <CardTitle className="text-sm">Contrato</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <DocumentUploadCard docType="contract" label="contrato" compact />
-            </CardContent>
-          </Card>
-        </div>
-
+        {/* Informational materials from LeadPrime */}
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-base">
-              <FileText className="w-5 h-5 text-primary" /> Tus documentos
+              <Info className="w-5 h-5 text-primary" /> Materiales de LeadPrime
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -103,54 +118,60 @@ export default function PartnerDocuments() {
               <div className="flex justify-center py-8">
                 <Loader2 className="w-6 h-6 animate-spin text-primary" />
               </div>
-            ) : documents.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-6 text-center">
-                Aún no has subido documentos.
+            ) : informational.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">
+                LeadPrime aún no ha cargado materiales informativos.
               </p>
             ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Tipo</TableHead>
-                      <TableHead className="hidden sm:table-cell">Archivo</TableHead>
-                      <TableHead>Estado</TableHead>
-                      <TableHead className="hidden sm:table-cell">Subido</TableHead>
-                      <TableHead className="text-right">Ver</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {documents.map(doc => (
-                      <TableRow key={doc.id}>
-                        <TableCell className="font-medium text-sm">
-                          {DOC_LABEL[doc.docType] ?? doc.docType}
-                        </TableCell>
-                        <TableCell className="hidden sm:table-cell text-muted-foreground text-sm truncate max-w-[220px]">
-                          {doc.fileName ?? "—"}
-                        </TableCell>
-                        <TableCell><StatusChip status={doc.status} /></TableCell>
-                        <TableCell className="hidden sm:table-cell text-muted-foreground text-sm">
-                          {doc.uploadedAt
-                            ? new Date(doc.uploadedAt).toLocaleDateString("es-MX", {
-                                year: "numeric",
-                                month: "short",
-                                day: "numeric",
-                              })
-                            : "—"}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {doc.fileUrl ? (
-                            <Button variant="ghost" size="sm" onClick={() => openDocument(doc.id)}>
-                              <ExternalLink className="w-4 h-4" />
-                            </Button>
-                          ) : (
-                            <span className="text-muted-foreground text-xs">—</span>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+              <DocTable docs={informational} source="admin" />
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Signed documents uploaded by the partner */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ShieldCheck className="w-5 h-5 text-[var(--lp-green)]" /> Tus documentos firmados
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="border rounded-xl p-3 space-y-2">
+                <p className="text-sm font-medium">Term sheet</p>
+                <DocumentUploadCard docType="term_sheet_signed" label="term sheet" compact />
+              </div>
+              <div className="border rounded-xl p-3 space-y-2">
+                <p className="text-sm font-medium">Contrato</p>
+                <DocumentUploadCard docType="contract" label="contrato" compact />
+              </div>
+              <div className="border rounded-xl p-3 space-y-2">
+                <p className="text-sm font-medium">Autorización ACH</p>
+                <DocumentUploadCard docType="ach_authorization" label="ACH" compact />
+              </div>
+              <div className="border rounded-xl p-3 space-y-2">
+                <p className="text-sm font-medium">W-9</p>
+                <div className="flex flex-col gap-1.5">
+                  <Button variant="outline" size="sm" asChild className="w-full">
+                    <a href={IRS_W9_URL} target="_blank" rel="noreferrer">
+                      <Download className="w-4 h-4 mr-1" /> W-9 IRS
+                    </a>
+                  </Button>
+                  <DocumentUploadCard docType="w9" label="W-9" compact />
+                </div>
+              </div>
+            </div>
+
+            {signed.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2 text-center">
+                Aún no has subido documentos firmados.
+              </p>
+            ) : (
+              <div className="pt-2 border-t">
+                <p className="text-sm font-medium mb-2 flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-primary" /> Archivos subidos
+                </p>
+                <DocTable docs={signed} source="partner" />
               </div>
             )}
           </CardContent>

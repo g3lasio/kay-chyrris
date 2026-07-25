@@ -245,21 +245,23 @@ async function main() {
   const otherDocUrl = await pdb.getPartnerDocumentUrl(other!.id, 99999);
   check("AISLAMIENTO: socio B no puede leer documentos por ID ajeno", otherDocUrl === null);
 
-  // ── 8. Onboarding gate ──
+  // ── 8. Onboarding gate (3-stage journey) ──
   const ob1 = await pdb.getOnboardingState(primeRow);
-  check("Onboarding inicia 0/4, dashboard bloqueado", ob1.completedCount === 0 && !ob1.complete);
-  // Complete the 4 steps (docs directly — upload path needs the storage proxy)
+  check("Onboarding inicia en etapa 1, dashboard bloqueado",
+    ob1.completedStages === 0 && ob1.currentStage === 1 && !ob1.complete);
+  // Complete the 3 stages (docs directly + flags — upload path needs the proxy).
+  await db.update(schema.referralPartners).set({ materialsReviewedAt: new Date() }).where(eq(schema.referralPartners.id, prime!.id));
   await db.insert(schema.partnerDocuments).values([
-    { partnerId: prime!.id, docType: "contract", status: "verified", fileName: "contrato.pdf", uploadedAt: new Date(), verifiedAt: new Date() },
-    { partnerId: prime!.id, docType: "w9", status: "uploaded", fileName: "w9.pdf", uploadedAt: new Date() },
-    { partnerId: prime!.id, docType: "ach_authorization", status: "uploaded", fileName: "ach.pdf", uploadedAt: new Date() },
+    { partnerId: prime!.id, docType: "term_sheet_signed", status: "uploaded", fileName: "ts.pdf", uploadedBy: "partner", uploadedAt: new Date() },
+    { partnerId: prime!.id, docType: "contract", status: "verified", fileName: "contrato.pdf", uploadedBy: "partner", uploadedAt: new Date(), verifiedAt: new Date() },
+    { partnerId: prime!.id, docType: "ach_authorization", status: "uploaded", fileName: "ach.pdf", uploadedBy: "partner", uploadedAt: new Date() },
   ]);
   await db.update(schema.referralPartners).set({ contactConfirmedAt: new Date() }).where(eq(schema.referralPartners.id, prime!.id));
   const primeRow2 = (await db.select().from(schema.referralPartners).where(eq(schema.referralPartners.id, prime!.id)))[0]!;
   const ob2 = await pdb.getOnboardingState(primeRow2);
   const primeRow3 = (await db.select().from(schema.referralPartners).where(eq(schema.referralPartners.id, prime!.id)))[0]!;
-  check("Onboarding 4/4 → onboarding_complete persiste y desbloquea",
-    ob2.complete && primeRow3.onboardingComplete === true, `${ob2.completedCount}/4`);
+  check("Onboarding 3/3 etapas → onboarding_complete persiste y desbloquea",
+    ob2.complete && primeRow3.onboardingComplete === true, `${ob2.completedStages}/3`);
 
   // ── 9. Payout (double-generation race, review #5) ──
   // Fire two CONCURRENT generations for the same period. The guarded UPDATE

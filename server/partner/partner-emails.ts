@@ -42,6 +42,7 @@ function layout(title: string, bodyHtml: string): string {
           ${bodyHtml}
         </td></tr>
         <tr><td style="padding:18px 32px;background:${BRAND.bg};color:#7b8a99;font-size:12px;">
+          <span style="display:block;color:#9aa8b5;font-style:italic;margin-bottom:6px;">El que no vive para servir, no sirve para vivir.</span>
           Este correo fue enviado por el programa de socios de LeadPrime.
           Si no esperabas este mensaje, puedes ignorarlo.
         </td></tr>
@@ -120,6 +121,46 @@ export async function sendPartnerInvitationEmail(
     return { success: true };
   } catch (error: any) {
     console.error("[Partner Emails] Invitation send error:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Referral invitation to a partner's graduate (brief §5). The link carries the
+ * partner's attribution; the graduate registers themselves (their consent).
+ */
+export async function sendReferralInvitationEmail(
+  to: string,
+  partnerName: string,
+  signupLink: string
+): Promise<{ success: boolean; error?: string }> {
+  if (!resend) {
+    console.error("[Partner Emails] Resend not configured (RESEND_API_KEY missing)");
+    return { success: false, error: "Email service not configured" };
+  }
+  try {
+    const html = layout(
+      "Te invitaron a LeadPrime",
+      `<p style="color:#3d4a58;font-size:14px;line-height:1.6;"><strong>${partnerName}</strong> te invita a unirte a <strong>LeadPrime</strong>, la plataforma que ayuda a los contratistas a conseguir y gestionar más trabajo.</p>
+       <p style="color:#3d4a58;font-size:14px;line-height:1.6;">Crea tu cuenta con este enlace personalizado. Al registrarte, tu cuenta queda vinculada a quien te invitó.</p>
+       <div style="text-align:center;margin:28px 0;">
+         <a href="${signupLink}" style="display:inline-block;background:${BRAND.blue};color:#ffffff;text-decoration:none;font-size:15px;font-weight:bold;padding:14px 32px;border-radius:10px;">Crear mi cuenta en LeadPrime</a>
+       </div>
+       <p style="color:#7b8a99;font-size:12px;line-height:1.6;">Si el botón no funciona, copia este enlace: <a href="${signupLink}" style="color:${BRAND.blue};">${signupLink}</a></p>`
+    );
+    const result = await resend.emails.send({
+      from: getFrom(),
+      to,
+      subject: `${partnerName} te invitó a LeadPrime`,
+      html,
+    });
+    if (result.error) {
+      console.error("[Partner Emails] Referral invitation send failed:", result.error);
+      return { success: false, error: result.error.message };
+    }
+    return { success: true };
+  } catch (error: any) {
+    console.error("[Partner Emails] Referral invitation send error:", error);
     return { success: false, error: error.message };
   }
 }

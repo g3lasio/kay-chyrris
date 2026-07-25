@@ -12,11 +12,30 @@ import { serial } from "drizzle-orm/pg-core";
 
 export const roleEnum = pgEnum("role", ["super_admin", "admin", "viewer"]);
 export const referralPartnerStatusEnum = pgEnum("referral_partner_status", ["invited", "active", "paused", "inactive"]);
-export const partnerDocTypeEnum = pgEnum("partner_doc_type", ["contract", "w9", "ach_authorization", "other"]);
+// Document types. Informational (admin-uploaded, no signature): revenue_projection,
+// features, term_sheet_info. Signed by the partner via LeadSign (partner-uploaded):
+// term_sheet_signed, contract, ach_authorization, w9. 'other' is a catch-all.
+export const partnerDocTypeEnum = pgEnum("partner_doc_type", [
+  "contract",
+  "w9",
+  "ach_authorization",
+  "other",
+  "revenue_projection",
+  "features",
+  "term_sheet_info",
+  "term_sheet_signed",
+]);
 export const partnerDocStatusEnum = pgEnum("partner_doc_status", ["pending", "uploaded", "verified"]);
 export const attributionStatusEnum = pgEnum("attribution_status", ["pending_first_payment", "active", "inactive"]);
 export const commissionPayoutStatusEnum = pgEnum("commission_payout_status", ["pending", "paid"]);
 export const payoutStatusEnum = pgEnum("payout_status", ["pending", "paid"]);
+export const partnerInvitationStatusEnum = pgEnum("partner_invitation_status", [
+  "pending_approval",
+  "sent",
+  "registered",
+  "active",
+  "declined",
+]);
 export const applicationStatusEnum = pgEnum("application_status", ["active", "inactive", "maintenance"]);
 export const campaignStatusEnum = pgEnum("campaign_status", ["draft", "scheduled", "sending", "sent", "failed"]);
 export const recipientStatusEnum = pgEnum("recipient_status", ["pending", "sent", "failed", "bounced"]);
@@ -275,6 +294,9 @@ export const referralPartners = pgTable("referral_partners", {
   freeAccountThreshold: integer("free_account_threshold").default(10).notNull(),
   onboardingComplete: boolean("onboarding_complete").default(false).notNull(),
   contactConfirmedAt: timestamp("contact_confirmed_at"),
+  // Stage 1 of the onboarding journey: internal record that the partner
+  // reviewed the informational materials. NOT a legal signature.
+  materialsReviewedAt: timestamp("materials_reviewed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -286,6 +308,9 @@ export const partnerDocuments = pgTable("partner_documents", {
   fileUrl: text("file_url"),
   fileName: varchar("file_name", { length: 255 }),
   status: partnerDocStatusEnum("status").default("pending").notNull(),
+  // Who uploaded it: 'admin' (LeadPrime informational docs) or 'partner'
+  // (signed docs). Drives the split in the enriched Documentación section.
+  uploadedBy: varchar("uploaded_by", { length: 20 }).default("partner").notNull(),
   uploadedAt: timestamp("uploaded_at"),
   verifiedAt: timestamp("verified_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -371,6 +396,39 @@ export const partnerSessions = pgTable("partner_sessions", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Consent-based referral invitations sent by a partner to their graduates.
+// The partner NEVER uploads third-party data in bulk — they enter one email,
+// the graduate gets a personalized signup link carrying the partner's referral
+// code, and attribution only happens when the graduate registers themselves.
+// Status: pending_approval (admin approval mode) → sent → registered (graduate
+// signed up) → active (first payment). token is used for the redirect link.
+export const partnerInvitations = pgTable("partner_invitations", {
+  id: serial("id").primaryKey(),
+  partnerId: integer("partner_id").notNull().references(() => referralPartners.id, { onDelete: "cascade" }),
+  email: varchar("email", { length: 255 }).notNull(),
+  token: varchar("token", { length: 64 }).notNull().unique(),
+  status: partnerInvitationStatusEnum("status").default("sent").notNull(),
+  // The LeadPrime contractor id once the graduate registers (best-effort match
+  // by email during the engine sync).
+  registeredUserId: varchar("registered_user_id", { length: 100 }),
+  sentAt: timestamp("sent_at"),
+  registeredAt: timestamp("registered_at"),
+  activatedAt: timestamp("activated_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  invitationPartnerIdx: index("idx_partner_invitations_partner").on(table.partnerId, table.status),
+  invitationEmailIdx: index("idx_partner_invitations_email").on(table.email),
+}));
+
+// Simple key/value settings for the partner portal (LeadPrime landing/product
+// links, invitation approval mode). Global, admin-editable.
+export const appSettings = pgTable("app_settings", {
+  key: varchar("key", { length: 100 }).primaryKey(),
+  value: text("value"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // ================================================
 // TYPE EXPORTS
 // ================================================
@@ -437,6 +495,12 @@ export type InsertPartnerAuthCode = typeof partnerAuthCodes.$inferInsert;
 
 export type PartnerSession = typeof partnerSessions.$inferSelect;
 export type InsertPartnerSession = typeof partnerSessions.$inferInsert;
+
+export type PartnerInvitation = typeof partnerInvitations.$inferSelect;
+export type InsertPartnerInvitation = typeof partnerInvitations.$inferInsert;
+
+export type AppSetting = typeof appSettings.$inferSelect;
+export type InsertAppSetting = typeof appSettings.$inferInsert;
 
 // Legacy exports for compatibility with auth system
 export const users = adminUsers;

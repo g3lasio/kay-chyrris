@@ -16,6 +16,7 @@
  */
 import type { Express, Request, Response } from "express";
 import { createAttribution, findPartnerByCode } from "./commission-engine";
+import { resolveInvitationRedirect } from "./partner-invitations";
 
 // Simple in-memory throttle: max N requests per IP per minute.
 const RATE_LIMIT_PER_MINUTE = 60;
@@ -35,6 +36,24 @@ function rateLimited(req: Request): boolean {
 }
 
 export function registerReferralRoutes(app: Express): void {
+  // Personalized referral invitation link: /i/<token> → 302 to the LeadPrime
+  // signup carrying the partner's ?ref= code. The graduate then registers
+  // themselves (consent). Unknown/inactive tokens fall back to the plain
+  // signup so the link never dead-ends.
+  app.get("/i/:token", async (req: Request, res: Response) => {
+    try {
+      const token = String(req.params.token ?? "").trim();
+      const target =
+        (token.length > 0 && token.length <= 64 ? await resolveInvitationRedirect(token) : null) ||
+        process.env.REFERRAL_SIGNUP_URL ||
+        "https://leadprime.chyrris.com/signup";
+      return res.redirect(302, target);
+    } catch (error) {
+      console.error("[Referral Routes] invitation redirect failed:", error);
+      return res.redirect(302, process.env.REFERRAL_SIGNUP_URL || "https://leadprime.chyrris.com/signup");
+    }
+  });
+
   app.get("/api/referrals/validate", async (req: Request, res: Response) => {
     if (rateLimited(req)) return res.status(429).json({ valid: false });
     try {

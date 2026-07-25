@@ -20,21 +20,37 @@ import {
 import { storagePut, storageGet } from "../storage";
 import { buildReferralLink, fetchReferredUsersInfo, reversalKey } from "./commission-engine";
 
-// ── Onboarding (brief §7.1) ────────────────────────────────────────────────
-// Step 1 contract  → a 'contract' document exists (verified by admin or uploaded signed)
-// Step 2 W-9       → a 'w9' document uploaded
-// Step 3 ACH       → an 'ach_authorization' document uploaded
-// Step 4 contact   → partner confirmed their contact data (contact_confirmed_at)
+// ── Onboarding journey — 3 unlockable stages (brief §1) ────────────────────
+// Stage 1 "materiales": partner reviewed the informational docs LeadPrime
+//   uploaded (revenue projection, features, informational term sheet) and
+//   checked "he revisado" → materials_reviewed_at. NOT a legal signature.
+// Stage 2 "firmados": partner uploads the LeadSign-signed term sheet AND the
+//   signed contract (signed OUTSIDE the portal; here they're only stored).
+// Stage 3 "pago": partner uploads ACH authorization AND confirms contact.
+// Completing all three unlocks the referrals/commissions dashboard.
 
-export interface OnboardingState {
-  steps: {
-    contract: { done: boolean; status: string | null };
-    w9: { done: boolean; status: string | null };
-    ach: { done: boolean; status: string | null };
-    contact: { done: boolean };
+// Informational doc types (admin-uploaded) shown in stage 1 / Documentación.
+export const INFORMATIONAL_DOC_TYPES = ["revenue_projection", "features", "term_sheet_info"] as const;
+// Signed doc types (partner-uploaded via LeadSign).
+export const SIGNED_DOC_TYPES = ["term_sheet_signed", "contract", "ach_authorization", "w9"] as const;
+
+export interface OnboardingJourney {
+  stages: {
+    materials: { done: boolean; materialsCount: number; reviewedAt: Date | null };
+    signed: {
+      termSheet: { done: boolean; status: string | null };
+      contract: { done: boolean; status: string | null };
+      done: boolean;
+    };
+    payment: {
+      ach: { done: boolean; status: string | null };
+      contact: { done: boolean };
+      done: boolean;
+    };
   };
-  completedCount: number;
-  totalSteps: 4;
+  currentStage: number; // 1..3 = the stage to work on; 4 = complete
+  completedStages: number;
+  totalStages: 3;
   complete: boolean;
 }
 
@@ -42,7 +58,7 @@ function docStepDone(doc: PartnerDocument | undefined): boolean {
   return !!doc && (doc.status === "uploaded" || doc.status === "verified");
 }
 
-export async function getOnboardingState(partner: ReferralPartner): Promise<OnboardingState> {
+export async function getOnboardingState(partner: ReferralPartner): Promise<OnboardingJourney> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
@@ -52,27 +68,43 @@ export async function getOnboardingState(partner: ReferralPartner): Promise<Onbo
     .where(eq(partnerDocuments.partnerId, partner.id))
     .orderBy(desc(partnerDocuments.createdAt));
 
-  // Latest document per type drives the step state.
+  // Latest document per type drives step state.
   const latestByType = new Map<string, PartnerDocument>();
   for (const doc of docs) {
     if (!latestByType.has(doc.docType)) latestByType.set(doc.docType, doc);
   }
+  const materialsCount = docs.filter(d =>
+    (INFORMATIONAL_DOC_TYPES as readonly string[]).includes(d.docType)
+  ).length;
 
+  const termSheet = latestByType.get("term_sheet_signed");
   const contract = latestByType.get("contract");
-  const w9 = latestByType.get("w9");
   const ach = latestByType.get("ach_authorization");
 
-  const steps = {
-    contract: { done: docStepDone(contract), status: contract?.status ?? null },
-    w9: { done: docStepDone(w9), status: w9?.status ?? null },
-    ach: { done: docStepDone(ach), status: ach?.status ?? null },
-    contact: { done: partner.contactConfirmedAt != null },
-  };
-  const completedCount = [steps.contract.done, steps.w9.done, steps.ach.done, steps.contact.done]
-    .filter(Boolean).length;
-  const complete = completedCount === 4;
+  const materialsDone = partner.materialsReviewedAt != null;
+  const signedDone = docStepDone(termSheet) && docStepDone(contract);
+  const paymentDone = docStepDone(ach) && partner.contactConfirmedAt != null;
 
-  // Persist the flag the first time all 4 steps are done (unlocks dashboard).
+  const stages = {
+    materials: { done: materialsDone, materialsCount, reviewedAt: partner.materialsReviewedAt },
+    signed: {
+      termSheet: { done: docStepDone(termSheet), status: termSheet?.status ?? null },
+      contract: { done: docStepDone(contract), status: contract?.status ?? null },
+      done: signedDone,
+    },
+    payment: {
+      ach: { done: docStepDone(ach), status: ach?.status ?? null },
+      contact: { done: partner.contactConfirmedAt != null },
+      done: paymentDone,
+    },
+  };
+
+  const stageDone = [materialsDone, signedDone, paymentDone];
+  const completedStages = stageDone.filter(Boolean).length;
+  const complete = completedStages === 3;
+  // First incomplete stage (1-based); 4 means done.
+  const currentStage = stageDone.findIndex(d => !d) === -1 ? 4 : stageDone.findIndex(d => !d) + 1;
+
   if (complete !== partner.onboardingComplete) {
     await db
       .update(referralPartners)
@@ -80,7 +112,17 @@ export async function getOnboardingState(partner: ReferralPartner): Promise<Onbo
       .where(eq(referralPartners.id, partner.id));
   }
 
-  return { steps, completedCount, totalSteps: 4, complete };
+  return { stages, currentStage, completedStages, totalStages: 3, complete };
+}
+
+/** Stage 1 acknowledgement: partner marks the informational materials reviewed. */
+export async function markMaterialsReviewed(partnerId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .update(referralPartners)
+    .set({ materialsReviewedAt: new Date(), updatedAt: new Date() })
+    .where(eq(referralPartners.id, partnerId));
 }
 
 // ── Documents zone (upload via the Kai storage proxy) ─────────────────────
@@ -93,12 +135,16 @@ const ALLOWED_DOC_MIME = new Set([
   "image/webp",
 ]);
 
-export async function uploadPartnerDocument(input: {
+export type PartnerUploadDocType = "term_sheet_signed" | "contract" | "ach_authorization" | "w9" | "other";
+export type AdminUploadDocType = "revenue_projection" | "features" | "term_sheet_info";
+
+async function storeDocument(input: {
   partnerId: number;
-  docType: "contract" | "w9" | "ach_authorization" | "other";
+  docType: PartnerUploadDocType | AdminUploadDocType;
   fileName: string;
   contentType: string;
   base64Data: string;
+  uploadedBy: "partner" | "admin";
 }): Promise<PartnerDocument> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -116,7 +162,6 @@ export async function uploadPartnerDocument(input: {
   const key = `partner-documents/${input.partnerId}/${input.docType}/${Date.now()}-${safeName}`;
   const { url } = await storagePut(key, buffer, input.contentType);
 
-  const now = new Date();
   const rows = await db
     .insert(partnerDocuments)
     .values({
@@ -125,10 +170,45 @@ export async function uploadPartnerDocument(input: {
       fileUrl: url,
       fileName: safeName,
       status: "uploaded",
-      uploadedAt: now,
+      uploadedBy: input.uploadedBy,
+      uploadedAt: new Date(),
     })
     .returning();
   return rows[0]!;
+}
+
+/** Partner uploads a signed document (uploaded_by='partner'). */
+export async function uploadPartnerDocument(input: {
+  partnerId: number;
+  docType: PartnerUploadDocType;
+  fileName: string;
+  contentType: string;
+  base64Data: string;
+}): Promise<PartnerDocument> {
+  return storeDocument({ ...input, uploadedBy: "partner" });
+}
+
+/**
+ * Admin (LeadPrime) uploads an INFORMATIONAL document for a specific partner
+ * (uploaded_by='admin'). These appear in the partner's Stage 1 materials and
+ * are auto-marked 'verified' (informational, no verification workflow needed).
+ */
+export async function adminUploadPartnerDocument(input: {
+  partnerId: number;
+  docType: AdminUploadDocType;
+  fileName: string;
+  contentType: string;
+  base64Data: string;
+}): Promise<PartnerDocument> {
+  const doc = await storeDocument({ ...input, uploadedBy: "admin" });
+  const db = await getDb();
+  if (db) {
+    await db
+      .update(partnerDocuments)
+      .set({ status: "verified", verifiedAt: new Date() })
+      .where(eq(partnerDocuments.id, doc.id));
+  }
+  return { ...doc, status: "verified", verifiedAt: new Date() };
 }
 
 export async function listPartnerDocuments(partnerId: number): Promise<PartnerDocument[]> {
@@ -255,6 +335,12 @@ export async function getPartnerDashboard(partner: ReferralPartner): Promise<Par
 
 // ── Referrals table (sanitized — brief §7.2: no contractor PII) ───────────
 
+// The ACH settlement cycle means the first collected payment (and therefore
+// the first commission) lands ~30–40 days after signup. We surface a single
+// estimated date at +35 days for pending referrals so the partner sees when
+// their recurring income is expected to start.
+const ESTIMATED_FIRST_COMMISSION_DAYS = 35;
+
 export interface PartnerReferralRow {
   attributionId: number;
   business: string;
@@ -263,6 +349,9 @@ export interface PartnerReferralRow {
   stage: "year1" | "year2" | null;
   stagePct: string | null;
   plan: string | null;
+  planCost: string | null;
+  firstPaymentDate: Date | null;
+  estimatedCommissionStart: Date | null;
   commissionThisMonth: string;
 }
 
@@ -305,6 +394,17 @@ export async function getPartnerReferrals(partner: ReferralPartner): Promise<Par
       stage = now.getTime() <= boundary.getTime() ? "year1" : "year2";
       stagePct = stage === "year1" ? partner.tierYear1Pct : partner.tierYear2Pct;
     }
+    // Estimated first-commission date: the real first_payment_date once known,
+    // otherwise signup + ~35 days (ACH cycle) for pending referrals.
+    let estimatedCommissionStart: Date | null = null;
+    if (a.firstPaymentDate) {
+      estimatedCommissionStart = a.firstPaymentDate;
+    } else if (a.status === "pending_first_payment") {
+      estimatedCommissionStart = new Date(
+        a.signupDate.getTime() + ESTIMATED_FIRST_COMMISSION_DAYS * 24 * 60 * 60 * 1000
+      );
+    }
+    const planPriceCents = user?.planPriceCents ?? null;
     return {
       attributionId: a.id,
       // Business identifier only — never email/phone/payment data.
@@ -314,9 +414,59 @@ export async function getPartnerReferrals(partner: ReferralPartner): Promise<Par
       stage,
       stagePct,
       plan: user?.plan ?? null,
+      planCost: planPriceCents != null ? (planPriceCents / 100).toFixed(2) : null,
+      firstPaymentDate: a.firstPaymentDate,
+      estimatedCommissionStart,
       commissionThisMonth: monthMap.get(a.id) ?? "0.00",
     };
   });
+}
+
+/**
+ * Monthly commission history (last 12 months) so the partner sees their
+ * recurring income accumulate month over month. Reversals net out per month.
+ */
+export interface MonthlyIncomePoint {
+  month: string; // YYYY-MM
+  label: string; // e.g. "ene 2026"
+  amount: string;
+}
+
+export async function getMonthlyIncomeHistory(partnerId: number): Promise<MonthlyIncomePoint[]> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const rows = await db
+    .select({
+      month: sql<string>`to_char(date_trunc('month', ${referralCommissions.chargeDate}), 'YYYY-MM')`,
+      amount: sql<string>`COALESCE(SUM(${referralCommissions.commissionAmount}), 0)::numeric(12,2)::text`,
+    })
+    .from(referralCommissions)
+    .where(
+      and(
+        eq(referralCommissions.partnerId, partnerId),
+        gte(referralCommissions.chargeDate, sql`date_trunc('month', NOW()) - INTERVAL '11 months'`)
+      )
+    )
+    .groupBy(sql`date_trunc('month', ${referralCommissions.chargeDate})`)
+    .orderBy(sql`date_trunc('month', ${referralCommissions.chargeDate})`);
+
+  const byMonth = new Map(rows.map(r => [r.month, r.amount]));
+  const monthLabels = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+
+  // Emit a continuous 12-month series (zero-filled) ending in the current month.
+  const out: MonthlyIncomePoint[] = [];
+  const now = new Date();
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    out.push({
+      month: key,
+      label: `${monthLabels[d.getMonth()]} ${d.getFullYear()}`,
+      amount: byMonth.get(key) ?? "0.00",
+    });
+  }
+  return out;
 }
 
 // ── Payout history ────────────────────────────────────────────────────────

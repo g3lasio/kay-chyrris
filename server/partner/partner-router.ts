@@ -29,12 +29,15 @@ import {
   adminListPartners,
   adminMarkPayoutPaid,
   adminReverseCommission,
+  adminUploadPartnerDocument,
+  getMonthlyIncomeHistory,
   getOnboardingState,
   getPartnerDashboard,
   getPartnerDocumentUrl,
   getPartnerPayouts,
   getPartnerReferrals,
   listPartnerDocuments,
+  markMaterialsReviewed,
   uploadPartnerDocument,
 } from "./partner-db";
 import {
@@ -43,6 +46,13 @@ import {
   syncReferralSystem,
 } from "./commission-engine";
 import { sendPartnerInvitationEmail } from "./partner-emails";
+import {
+  adminApproveInvitation,
+  adminListInvitations,
+  createInvitation,
+  listPartnerInvitations,
+} from "./partner-invitations";
+import { getPortalSettings, setSetting, SETTING_KEYS } from "./app-settings";
 
 const PARTNER_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -114,10 +124,19 @@ export const partnerPortalRouter = router({
     return getOnboardingState(ctx.partner);
   }),
 
+  // Stage 1 acknowledgement — records that the partner reviewed the
+  // informational materials (internal record, NOT a legal signature).
+  markMaterialsReviewed: partnerProcedure.mutation(async ({ ctx }) => {
+    await markMaterialsReviewed(ctx.partner.id);
+    evictPartnerFromSessionCache(ctx.partner.id);
+    return { success: true };
+  }),
+
   uploadDocument: partnerProcedure
     .input(
       z.object({
-        docType: z.enum(["contract", "w9", "ach_authorization", "other"]),
+        // Only signed/partner-owned docs — informational types are admin-only.
+        docType: z.enum(["term_sheet_signed", "contract", "ach_authorization", "w9", "other"]),
         fileName: z.string().min(1).max(255),
         contentType: z.string().min(3).max(100),
         base64Data: z.string().min(1),
@@ -137,6 +156,34 @@ export const partnerPortalRouter = router({
   documents: partnerProcedure.query(async ({ ctx }) => {
     return listPartnerDocuments(ctx.partner.id);
   }),
+
+  monthlyIncome: partnerProcedure.query(async ({ ctx }) => {
+    return getMonthlyIncomeHistory(ctx.partner.id);
+  }),
+
+  // LeadPrime useful links (admin-configurable) for the partner to share.
+  links: partnerProcedure.query(async () => {
+    const s = await getPortalSettings();
+    return {
+      landingUrl: s.leadprimeLandingUrl,
+      productionUrl: s.leadprimeProductionUrl,
+    };
+  }),
+
+  // ── Consent-based referral invitations (brief §5) ──
+  invitations: partnerProcedure.query(async ({ ctx }) => {
+    return listPartnerInvitations(ctx.partner.id);
+  }),
+
+  createInvitation: partnerProcedure
+    .input(z.object({ email: z.string().email().max(255) }))
+    .mutation(async ({ input, ctx }) => {
+      const result = await createInvitation(ctx.partner, input.email);
+      if (!result.success) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: result.error ?? "No se pudo invitar" });
+      }
+      return { success: true, status: result.status };
+    }),
 
   documentUrl: partnerProcedure
     .input(z.object({ documentId: z.number().int().positive() }))
@@ -352,11 +399,91 @@ export const partnerAdminRouter = router({
           docType: "contract",
           fileName: input.note ?? "Contrato de alianza (verificado por admin)",
           status: "verified",
+          uploadedBy: "partner",
           uploadedAt: new Date(),
           verifiedAt: new Date(),
         })
         .returning();
       return { success: true, document: rows[0] };
+    }),
+
+  // LeadPrime (admin) uploads an INFORMATIONAL document for a specific partner
+  // — revenue projection, features, informational term sheet. Appears in that
+  // partner's Stage 1 materials only (multi-tenant isolation).
+  uploadDocument: protectedProcedure
+    .input(
+      z.object({
+        partnerId: z.number().int().positive(),
+        docType: z.enum(["revenue_projection", "features", "term_sheet_info"]),
+        fileName: z.string().min(1).max(255),
+        contentType: z.string().min(3).max(100),
+        base64Data: z.string().min(1),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const doc = await adminUploadPartnerDocument({
+        partnerId: input.partnerId,
+        docType: input.docType,
+        fileName: input.fileName,
+        contentType: input.contentType,
+        base64Data: input.base64Data,
+      });
+      return { success: true, document: doc };
+    }),
+
+  // Fresh download URL for any partner document (admin can view all).
+  documentUrl: protectedProcedure
+    .input(z.object({ partnerId: z.number().int().positive(), documentId: z.number().int().positive() }))
+    .query(async ({ input }) => {
+      const url = await getPartnerDocumentUrl(input.partnerId, input.documentId);
+      if (!url) throw new TRPCError({ code: "NOT_FOUND", message: "Documento no encontrado" });
+      return { url };
+    }),
+
+  deleteDocument: protectedProcedure
+    .input(z.object({ documentId: z.number().int().positive() }))
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
+      const { partnerDocuments } = await import("../../drizzle/schema");
+      await db.delete(partnerDocuments).where(eq(partnerDocuments.id, input.documentId));
+      return { success: true };
+    }),
+
+  // Invitations oversight (approval mode + monitoring).
+  listInvitations: protectedProcedure
+    .input(z.object({ partnerId: z.number().int().positive() }))
+    .query(async ({ input }) => {
+      return adminListInvitations(input.partnerId);
+    }),
+
+  approveInvitation: protectedProcedure
+    .input(z.object({ invitationId: z.number().int().positive() }))
+    .mutation(async ({ input }) => {
+      return adminApproveInvitation(input.invitationId);
+    }),
+
+  // Portal settings (LeadPrime links + invitation mode).
+  getSettings: protectedProcedure.query(async () => {
+    return getPortalSettings();
+  }),
+
+  updateSettings: protectedProcedure
+    .input(
+      z.object({
+        leadprimeLandingUrl: z.string().url().max(500).optional(),
+        leadprimeProductionUrl: z.string().url().max(500).optional(),
+        invitationMode: z.enum(["auto", "approval"]).optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      if (input.leadprimeLandingUrl !== undefined)
+        await setSetting(SETTING_KEYS.leadprimeLandingUrl, input.leadprimeLandingUrl);
+      if (input.leadprimeProductionUrl !== undefined)
+        await setSetting(SETTING_KEYS.leadprimeProductionUrl, input.leadprimeProductionUrl);
+      if (input.invitationMode !== undefined)
+        await setSetting(SETTING_KEYS.invitationMode, input.invitationMode);
+      return { success: true, settings: await getPortalSettings() };
     }),
 
   generatePayout: protectedProcedure
