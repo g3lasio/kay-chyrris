@@ -54,8 +54,20 @@ export function registerReferralRoutes(app: Express): void {
   app.post("/api/referrals/attribute", async (req: Request, res: Response) => {
     if (rateLimited(req)) return res.status(429).json({ success: false });
     try {
+      // FAIL CLOSED: attribution binds a contractor to a partner (and thus to
+      // future commission). Without a shared secret configured, the endpoint
+      // is DISABLED — an unauthenticated attacker must never be able to hijack
+      // attributions. When REFERRAL_WEBHOOK_SECRET is unset, LeadPrime should
+      // instead attribute via contractors.referral_code (swept by the engine)
+      // or the admin does it manually.
       const secret = process.env.REFERRAL_WEBHOOK_SECRET;
-      if (secret && req.headers["x-referral-secret"] !== secret) {
+      if (!secret) {
+        console.warn(
+          "[Referral Routes] /api/referrals/attribute called but REFERRAL_WEBHOOK_SECRET is not set — endpoint disabled (fail-closed)"
+        );
+        return res.status(503).json({ success: false, error: "Attribution endpoint not configured" });
+      }
+      if (req.headers["x-referral-secret"] !== secret) {
         return res.status(401).json({ success: false, error: "Unauthorized" });
       }
 
@@ -67,7 +79,9 @@ export function registerReferralRoutes(app: Express): void {
 
       const result = await createAttribution({ referralCode, referredUserId: contractorId });
       if (!result.success) {
-        return res.status(400).json({ success: false, error: result.error });
+        // Generic error — do NOT distinguish "invalid code" from "user not
+        // found" (that difference is an enumeration oracle).
+        return res.status(400).json({ success: false, error: "Attribution rejected" });
       }
       return res.json({ success: true, created: result.created });
     } catch (error: any) {

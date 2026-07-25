@@ -18,7 +18,7 @@ import {
   type ReferralPartner,
 } from "../../drizzle/schema";
 import { storagePut, storageGet } from "../storage";
-import { buildReferralLink, fetchReferredUsersInfo } from "./commission-engine";
+import { buildReferralLink, fetchReferredUsersInfo, reversalKey } from "./commission-engine";
 
 // ── Onboarding (brief §7.1) ────────────────────────────────────────────────
 // Step 1 contract  → a 'contract' document exists (verified by admin or uploaded signed)
@@ -433,9 +433,14 @@ export async function adminGetPartnerDetail(partnerId: number) {
 }
 
 /**
- * Generate a payout for every pending commission in the period. Sums pending
- * rows (reversals included, so refunds net out) and stamps them with the
- * payout id atomically.
+ * Generate a payout for every pending commission in the period.
+ *
+ * ATOMIC & double-payout-safe: runs in a transaction and CLAIMS the pending
+ * rows with a single guarded UPDATE (payout_id IS NULL AND payout_status =
+ * 'pending', returning the claimed rows). Two concurrent calls (double-click /
+ * two admins) cannot both stamp the same commissions: the second UPDATE
+ * matches zero rows and rolls back. The payout total is computed from the rows
+ * actually claimed, so it always equals what was stamped.
  */
 export async function adminGeneratePayout(input: {
   partnerId: number;
@@ -447,54 +452,58 @@ export async function adminGeneratePayout(input: {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const pending = await db
-    .select()
-    .from(referralCommissions)
-    .where(
-      and(
-        eq(referralCommissions.partnerId, input.partnerId),
-        eq(referralCommissions.payoutStatus, "pending"),
-        isNull(referralCommissions.payoutId),
-        gte(referralCommissions.chargeDate, input.periodStart),
-        lte(referralCommissions.chargeDate, input.periodEnd)
+  return db.transaction(async tx => {
+    // Insert the payout shell first so we have an id to stamp with.
+    const payoutRows = await tx
+      .insert(referralPayouts)
+      .values({
+        partnerId: input.partnerId,
+        periodStart: input.periodStart,
+        periodEnd: input.periodEnd,
+        totalAmount: "0.00",
+        method: input.method,
+        notes: input.notes,
+      })
+      .returning();
+    const payout = payoutRows[0]!;
+
+    // Claim only rows still unpaid & unclaimed — the guard is what makes
+    // concurrent generation safe.
+    const claimed = await tx
+      .update(referralCommissions)
+      .set({ payoutId: payout.id })
+      .where(
+        and(
+          eq(referralCommissions.partnerId, input.partnerId),
+          eq(referralCommissions.payoutStatus, "pending"),
+          isNull(referralCommissions.payoutId),
+          gte(referralCommissions.chargeDate, input.periodStart),
+          lte(referralCommissions.chargeDate, input.periodEnd)
+        )
       )
+      .returning();
+
+    if (claimed.length === 0) {
+      throw new Error("No hay comisiones pendientes en ese periodo");
+    }
+
+    const totalCents = claimed.reduce(
+      (acc, c) => acc + Math.round(parseFloat(c.commissionAmount) * 100),
+      0
     );
-  if (pending.length === 0) {
-    throw new Error("No hay comisiones pendientes en ese periodo");
-  }
+    if (totalCents <= 0) {
+      // Rolls back the payout row and the stamping.
+      throw new Error("El total del periodo es <= $0 (reversiones superan comisiones)");
+    }
 
-  const totalCents = pending.reduce(
-    (acc, c) => acc + Math.round(parseFloat(c.commissionAmount) * 100),
-    0
-  );
-  if (totalCents <= 0) {
-    throw new Error("El total del periodo es <= $0 (reversiones superan comisiones)");
-  }
+    const updatedPayout = await tx
+      .update(referralPayouts)
+      .set({ totalAmount: (totalCents / 100).toFixed(2) })
+      .where(eq(referralPayouts.id, payout.id))
+      .returning();
 
-  const payoutRows = await db
-    .insert(referralPayouts)
-    .values({
-      partnerId: input.partnerId,
-      periodStart: input.periodStart,
-      periodEnd: input.periodEnd,
-      totalAmount: (totalCents / 100).toFixed(2),
-      method: input.method,
-      notes: input.notes,
-    })
-    .returning();
-  const payout = payoutRows[0]!;
-
-  await db
-    .update(referralCommissions)
-    .set({ payoutId: payout.id })
-    .where(
-      inArray(
-        referralCommissions.id,
-        pending.map(c => c.id)
-      )
-    );
-
-  return { payout, commissionCount: pending.length };
+    return { payout: updatedPayout[0]!, commissionCount: claimed.length };
+  });
 }
 
 /** Mark a payout as paid; its commissions flip to 'paid' with it. */
@@ -520,6 +529,10 @@ export async function adminMarkPayoutPaid(payoutId: number, method?: string) {
 /**
  * Manual compensating reversal for a commission (refund/chargeback the
  * automatic Stripe sweep can't see, e.g. wallet top-up refunds).
+ *
+ * Keyed by the ORIGINAL commission id (`rev:<id>`), the SAME key the Stripe
+ * refund sweep uses — so a commission is reversed at most once whichever path
+ * fires first (UNIQUE(source_payment_id, is_reversal) dedupes across both).
  */
 export async function adminReverseCommission(commissionId: number, reason: string) {
   const db = await getDb();
@@ -539,7 +552,7 @@ export async function adminReverseCommission(commissionId: number, reason: strin
     .values({
       partnerId: original.partnerId,
       attributionId: original.attributionId,
-      sourcePaymentId: original.sourcePaymentId,
+      sourcePaymentId: reversalKey(original.id),
       chargeAmount: (-parseFloat(original.chargeAmount)).toFixed(2),
       appliedPct: original.appliedPct,
       commissionAmount: (-parseFloat(original.commissionAmount)).toFixed(2),

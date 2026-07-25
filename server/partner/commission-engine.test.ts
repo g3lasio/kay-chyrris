@@ -8,6 +8,7 @@ import {
   centsToDecimal,
   computeCommissionCents,
   resolveAppliedPct,
+  reversalKey,
 } from "./commission-engine";
 import { allowAdminSession, allowPartnerSession, isNeutralHost, isPartnerHost } from "./hostname";
 
@@ -57,6 +58,16 @@ describe("commission amounts", () => {
     expect(computeCommissionCents(0, "20.00")).toBe(0);
     expect(computeCommissionCents(-15000, "20.00")).toBe(-3000);
     expect(centsToDecimal(-3000)).toBe("-30.00");
+  });
+});
+
+describe("reversal idempotency key", () => {
+  it("both the Stripe sweep and the manual admin reversal key by the original commission id", () => {
+    // Same original commission → same key → UNIQUE(source,is_reversal) dedupes
+    // across both paths, so a charge is reversed at most once.
+    expect(reversalKey(42)).toBe("rev:42");
+    expect(reversalKey(42)).toBe(reversalKey(42));
+    expect(reversalKey(42)).not.toBe(reversalKey(43));
   });
 });
 

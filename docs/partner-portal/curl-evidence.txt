@@ -1,30 +1,19 @@
-### 1. Validación de código de referido (público, para el signup de LeadPrime)
-$ curl 'http://127.0.0.1:3999/api/referrals/validate?code=PRIME'
-{"valid":true,"partnerName":"Prime Contractors License Institute Inc."}
-$ curl 'http://127.0.0.1:3999/api/referrals/validate?code=NOEXISTE'
-{"valid":false}
+PARTNER PORTAL — evidencia curl (server de producción local, DBs de prueba)
+========================================================================
 
-### 2. Login OTP del socio — solicitar código (email válido)
-$ curl -X POST http://127.0.0.1:3999/api/trpc/partnerAuth.requestOtp ...
-{"result":{"data":{"json":{"success":true,"message":"Si tu correo está registrado, recibirás un código de acceso en unos segundos."}}}}
-
-### 3. Login OTP — email INEXISTENTE (misma respuesta neutra)
-{"result":{"data":{"json":{"success":true,"message":"Si tu correo está registrado, recibirás un código de acceso en unos segundos."}}}}
-
-### 4. Verificación con código incorrecto → rechazado
-{"result":{"data":{"json":{"success":false,"error":"Código inválido o expirado"}}}}
-
-### 5. Separación de dominios: login de ADMIN desde partners.chyrris.com → bloqueado
-$ curl -H 'Host: partners.chyrris.com' -X POST .../auth.verifyPasscode (passcode CORRECTO)
+### 1. Aislamiento de dominio: login admin desde partners.chyrris.com (passcode CORRECTO) → bloqueado
 {"result":{"data":{"json":{"success":false,"error":"Not available"}}}}
-
-### 6. Mismo login de admin desde kai.chyrris.com → funciona (cookie de sesión emitida)
+### 2. Login admin desde kai.chyrris.com → OK (cookie emitida)
 HTTP/1.1 200 OK
 Set-Cookie: app_session_id=<redacted>; Path=/; HttpOnly; SameSite=Lax
-
-### 7. Procedimiento de ADMIN con sesión de admin pero vía partners.chyrris.com → UNAUTHORIZED
-(cookie de admin válida obtenida en kai.chyrris.com; se reutiliza en partners.chyrris.com)
+### 3. Cookie admin válida reutilizada en partners.chyrris.com → UNAUTHORIZED
 {"error":{"json":{"message":"Please login (10001)","code":-32001,"data":{"code":"UNAUTHORIZED","httpStatus":401,"path":"partnerAdmin.list"}}}}
 
-### 8. El mismo procedimiento vía kai.chyrris.com con la misma cookie → OK
-{"result":{"data":{"json":[{"id":2,"name":"Otra Escuela de Licencias","referralCode":"ESCUELA2","contactName":null,"contactEmail":"admin@escuela2.com","contactPhone":null,"status":"invited","tierYear1
+### 4. OTP: email válido y email inexistente → misma respuesta neutra
+{"result":{"data":{"json":{"success":true,"message":"Si tu correo está registrado, recibirás un código de acceso en unos segundos."}}}}
+{"result":{"data":{"json":{"success":true,"message":"Si tu correo está registrado, recibirás un código de acceso en unos segundos."}}}}
+
+### 5. Endpoint de atribución FAIL-CLOSED sin REFERRAL_WEBHOOK_SECRET → 503 (deshabilitado)
+HTTP 503
+### 6. /validate público (para mostrar 'referido por X' en el signup de LeadPrime)
+{"valid":true,"partnerName":"Prime Contractors License Institute Inc."}
