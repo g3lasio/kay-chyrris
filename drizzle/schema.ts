@@ -1,4 +1,4 @@
-import { integer, pgEnum, pgTable, text, timestamp, varchar, decimal, boolean, json, index, time } from "drizzle-orm/pg-core";
+import { integer, pgEnum, pgTable, text, timestamp, varchar, decimal, boolean, json, index, uniqueIndex, time } from "drizzle-orm/pg-core";
 import { serial } from "drizzle-orm/pg-core";
 
 /**
@@ -11,6 +11,12 @@ import { serial } from "drizzle-orm/pg-core";
 // ================================================
 
 export const roleEnum = pgEnum("role", ["super_admin", "admin", "viewer"]);
+export const referralPartnerStatusEnum = pgEnum("referral_partner_status", ["invited", "active", "paused", "inactive"]);
+export const partnerDocTypeEnum = pgEnum("partner_doc_type", ["contract", "w9", "ach_authorization", "other"]);
+export const partnerDocStatusEnum = pgEnum("partner_doc_status", ["pending", "uploaded", "verified"]);
+export const attributionStatusEnum = pgEnum("attribution_status", ["pending_first_payment", "active", "inactive"]);
+export const commissionPayoutStatusEnum = pgEnum("commission_payout_status", ["pending", "paid"]);
+export const payoutStatusEnum = pgEnum("payout_status", ["pending", "paid"]);
 export const applicationStatusEnum = pgEnum("application_status", ["active", "inactive", "maintenance"]);
 export const campaignStatusEnum = pgEnum("campaign_status", ["draft", "scheduled", "sending", "sent", "failed"]);
 export const recipientStatusEnum = pgEnum("recipient_status", ["pending", "sent", "failed", "bounced"]);
@@ -249,6 +255,123 @@ export const notificationPreferences = pgTable("notification_preferences", {
 });
 
 // ================================================
+// PARTNER REFERRAL PORTAL (partners.chyrris.com)
+// Multi-tenant referral program: each partner refers
+// contractors to LeadPrime and earns recurring commission
+// on collected revenue. Prime Contractors License Institute
+// is the first partner; the model is fully generic.
+// ================================================
+
+export const referralPartners = pgTable("referral_partners", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  referralCode: varchar("referral_code", { length: 50 }).notNull().unique(),
+  contactName: varchar("contact_name", { length: 255 }),
+  contactEmail: varchar("contact_email", { length: 255 }).notNull().unique(),
+  contactPhone: varchar("contact_phone", { length: 50 }),
+  status: referralPartnerStatusEnum("status").default("invited").notNull(),
+  tierYear1Pct: decimal("tier_year1_pct", { precision: 5, scale: 2 }).default("20.00").notNull(),
+  tierYear2Pct: decimal("tier_year2_pct", { precision: 5, scale: 2 }).default("10.00").notNull(),
+  freeAccountThreshold: integer("free_account_threshold").default(10).notNull(),
+  onboardingComplete: boolean("onboarding_complete").default(false).notNull(),
+  contactConfirmedAt: timestamp("contact_confirmed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const partnerDocuments = pgTable("partner_documents", {
+  id: serial("id").primaryKey(),
+  partnerId: integer("partner_id").notNull().references(() => referralPartners.id, { onDelete: "cascade" }),
+  docType: partnerDocTypeEnum("doc_type").notNull(),
+  fileUrl: text("file_url"),
+  fileName: varchar("file_name", { length: 255 }),
+  status: partnerDocStatusEnum("status").default("pending").notNull(),
+  uploadedAt: timestamp("uploaded_at"),
+  verifiedAt: timestamp("verified_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  partnerDocIdx: index("idx_partner_documents_partner").on(table.partnerId, table.docType),
+}));
+
+// referred_user_id is the LeadPrime contractors.id (VARCHAR). It lives in the
+// LeadPrime database (separate Neon instance), so a SQL-level FK is impossible;
+// integrity is enforced by the attribution flow + UNIQUE constraint.
+export const referralAttributions = pgTable("referral_attributions", {
+  id: serial("id").primaryKey(),
+  partnerId: integer("partner_id").notNull().references(() => referralPartners.id, { onDelete: "cascade" }),
+  referredUserId: varchar("referred_user_id", { length: 100 }).notNull().unique(),
+  referralCode: varchar("referral_code", { length: 50 }).notNull(),
+  signupDate: timestamp("signup_date").notNull(),
+  firstPaymentDate: timestamp("first_payment_date"),
+  status: attributionStatusEnum("status").default("pending_first_payment").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  attributionPartnerIdx: index("idx_referral_attributions_partner").on(table.partnerId, table.status),
+}));
+
+// One row per real collected charge. source_payment_id references the payment
+// in the existing payment system (LeadPrime invoices / Stripe invoice id).
+// Refunds/chargebacks are compensated with a negative row (is_reversal=true)
+// so the ledger stays append-only; UNIQUE(source_payment_id, is_reversal)
+// makes the sync engine idempotent for both charge and reversal.
+export const referralCommissions = pgTable("referral_commissions", {
+  id: serial("id").primaryKey(),
+  partnerId: integer("partner_id").notNull().references(() => referralPartners.id, { onDelete: "cascade" }),
+  attributionId: integer("attribution_id").notNull().references(() => referralAttributions.id, { onDelete: "cascade" }),
+  sourcePaymentId: varchar("source_payment_id", { length: 255 }).notNull(),
+  chargeAmount: decimal("charge_amount", { precision: 10, scale: 2 }).notNull(),
+  appliedPct: decimal("applied_pct", { precision: 5, scale: 2 }).notNull(),
+  commissionAmount: decimal("commission_amount", { precision: 10, scale: 2 }).notNull(),
+  chargeDate: timestamp("charge_date").notNull(),
+  isReversal: boolean("is_reversal").default(false).notNull(),
+  payoutStatus: commissionPayoutStatusEnum("payout_status").default("pending").notNull(),
+  payoutId: integer("payout_id").references(() => referralPayouts.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  commissionSourceUnique: uniqueIndex("uq_referral_commissions_source").on(table.sourcePaymentId, table.isReversal),
+  commissionPartnerIdx: index("idx_referral_commissions_partner").on(table.partnerId, table.payoutStatus, table.chargeDate),
+}));
+
+export const referralPayouts = pgTable("referral_payouts", {
+  id: serial("id").primaryKey(),
+  partnerId: integer("partner_id").notNull().references(() => referralPartners.id, { onDelete: "cascade" }),
+  periodStart: timestamp("period_start").notNull(),
+  periodEnd: timestamp("period_end").notNull(),
+  totalAmount: decimal("total_amount", { precision: 10, scale: 2 }).notNull(),
+  status: payoutStatusEnum("status").default("pending").notNull(),
+  paidAt: timestamp("paid_at"),
+  method: varchar("method", { length: 100 }),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// OTP codes for partner login. `code` stores a bcrypt hash, never the
+// plaintext 6-digit code. attempts counts failed verifications (max 5).
+export const partnerAuthCodes = pgTable("partner_auth_codes", {
+  id: serial("id").primaryKey(),
+  partnerId: integer("partner_id").notNull().references(() => referralPartners.id, { onDelete: "cascade" }),
+  code: varchar("code", { length: 100 }).notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  used: boolean("used").default(false).notNull(),
+  attempts: integer("attempts").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  authCodePartnerIdx: index("idx_partner_auth_codes_partner").on(table.partnerId, table.createdAt),
+}));
+
+// Partner sessions are fully independent from admin_sessions: different table,
+// different cookie. A partner session can never authorize admin procedures.
+export const partnerSessions = pgTable("partner_sessions", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  partnerId: integer("partner_id").notNull().references(() => referralPartners.id, { onDelete: "cascade" }),
+  ipAddress: varchar("ip_address", { length: 45 }),
+  userAgent: text("user_agent"),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// ================================================
 // TYPE EXPORTS
 // ================================================
 
@@ -293,6 +416,27 @@ export type InsertInAppNotification = typeof inAppNotifications.$inferInsert;
 
 export type NotificationPreference = typeof notificationPreferences.$inferSelect;
 export type InsertNotificationPreference = typeof notificationPreferences.$inferInsert;
+
+export type ReferralPartner = typeof referralPartners.$inferSelect;
+export type InsertReferralPartner = typeof referralPartners.$inferInsert;
+
+export type PartnerDocument = typeof partnerDocuments.$inferSelect;
+export type InsertPartnerDocument = typeof partnerDocuments.$inferInsert;
+
+export type ReferralAttribution = typeof referralAttributions.$inferSelect;
+export type InsertReferralAttribution = typeof referralAttributions.$inferInsert;
+
+export type ReferralCommission = typeof referralCommissions.$inferSelect;
+export type InsertReferralCommission = typeof referralCommissions.$inferInsert;
+
+export type ReferralPayout = typeof referralPayouts.$inferSelect;
+export type InsertReferralPayout = typeof referralPayouts.$inferInsert;
+
+export type PartnerAuthCode = typeof partnerAuthCodes.$inferSelect;
+export type InsertPartnerAuthCode = typeof partnerAuthCodes.$inferInsert;
+
+export type PartnerSession = typeof partnerSessions.$inferSelect;
+export type InsertPartnerSession = typeof partnerSessions.$inferInsert;
 
 // Legacy exports for compatibility with auth system
 export const users = adminUsers;

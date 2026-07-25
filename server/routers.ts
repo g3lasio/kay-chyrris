@@ -16,15 +16,20 @@ import * as stripeService from './services/stripe-service';
 import { createAndSendCampaign, getCampaignHistory } from './services/notifications';
 import * as pushNotifications from './services/notifications-push';
 import * as revenueMetrics from './services/revenue-metrics';
+import { partnerAdminRouter, partnerAuthRouter, partnerPortalRouter } from './partner/partner-router';
 
 export const appRouter = router({
   system: systemRouter,
-  
+
   auth: router({
     // Verify passcode and create session
     verifyPasscode: publicProcedure
       .input(z.object({ passcode: z.string().min(1) }))
       .mutation(async ({ input, ctx }) => {
+        // The admin login never works through the partner portal domain.
+        if (ctx.isPartnerHost) {
+          return { success: false, error: 'Not available' };
+        }
         const ipAddress = ctx.req.ip || ctx.req.socket.remoteAddress;
         const userAgent = ctx.req.headers['user-agent'];
         const result = await verifyPasscode(input.passcode, ipAddress, userAgent);
@@ -607,6 +612,13 @@ export const appRouter = router({
         return { success: true };
       }),
   }),
+
+  // ─── PARTNER REFERRAL PORTAL (partners.chyrris.com) ──────────────────────
+  // partnerAuth/partnerPortal serve the partner-facing portal; partnerAdmin
+  // is the Kai admin management surface for partners.
+  partnerAuth: partnerAuthRouter,
+  partnerPortal: partnerPortalRouter,
+  partnerAdmin: partnerAdminRouter,
 
   // ─── LEADPRIME CREDIT MANAGEMENT ──────────────────────────────────────────
   leadprime: router({

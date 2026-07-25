@@ -46,3 +46,24 @@ export const adminProcedure = t.procedure.use(
     });
   }),
 );
+
+// Partner portal procedures require a partner session (partner_session_id
+// cookie). The admin session can never satisfy this — the two session types
+// live in different tables with different cookies, and createContext only
+// resolves each one on its allowed hostnames.
+export const partnerProcedure = t.procedure.use(
+  t.middleware(async opts => {
+    const { ctx, next } = opts;
+
+    if (!ctx.partner) {
+      throw new TRPCError({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
+    }
+
+    return next({
+      ctx: {
+        ...ctx,
+        partner: ctx.partner,
+      },
+    });
+  }),
+);

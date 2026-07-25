@@ -8,6 +8,13 @@
       "when": 1768249963138,
       "tag": "0000_furry_revanche",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1784998476908,
+      "tag": "0001_daffy_magdalene",
+      "breakpoints": true
     }
   ]
 }

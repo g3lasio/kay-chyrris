@@ -23,6 +23,9 @@ import SystemIssues from "./pages/SystemIssues";
 import LeadPrimeSystemHealth from "./pages/LeadPrimeSystemHealth";
 import LeadPrimeFinance from "./pages/LeadPrimeFinance";
 import LeadPrimePendingSubscriptions from "./pages/LeadPrimePendingSubscriptions";
+import LeadPrimePartners from "./pages/LeadPrimePartners";
+import PartnerApp from "./partner/PartnerApp";
+import { isPartnerPortalHost } from "./partner/host";
 
 function Router() {
   return (
@@ -166,6 +169,14 @@ function Router() {
         </ProtectedRoute>
       </Route>
 
+      <Route path="/leadprime/partners">
+        <ProtectedRoute>
+          <LeadPrimeLayout>
+            <LeadPrimePartners />
+          </LeadPrimeLayout>
+        </ProtectedRoute>
+      </Route>
+
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>
@@ -173,6 +184,13 @@ function Router() {
 }
 
 function App() {
+  // partners.chyrris.com → Partner Portal (LeadPrime branding, own auth).
+  // Any other host → Kai admin, untouched. The server enforces the same
+  // separation independently at the session/procedure level.
+  if (isPartnerPortalHost()) {
+    return <PartnerApp />;
+  }
+
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="dark">
