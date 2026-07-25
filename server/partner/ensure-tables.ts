@@ -33,6 +33,7 @@ const ADDED_COLUMNS: string[] = [
   `ALTER TABLE partner_documents ADD COLUMN IF NOT EXISTS uploaded_by varchar(20) DEFAULT 'partner' NOT NULL`,
   `ALTER TABLE partner_documents ADD COLUMN IF NOT EXISTS title varchar(255)`,
   `ALTER TABLE referral_partners ADD COLUMN IF NOT EXISTS materials_reviewed_at timestamp`,
+  `ALTER TABLE referral_partners ADD COLUMN IF NOT EXISTS welcome_email_sent_at timestamp`,
 ];
 
 const TABLE_STATEMENTS = [

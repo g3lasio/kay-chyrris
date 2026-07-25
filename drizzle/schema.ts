@@ -302,6 +302,10 @@ export const referralPartners = pgTable("referral_partners", {
   // Stage 1 of the onboarding journey: internal record that the partner
   // reviewed the informational materials. NOT a legal signature.
   materialsReviewedAt: timestamp("materials_reviewed_at"),
+  // Set when the "onboarding complete" welcome email is sent. Doubles as the
+  // once-ever lock: the send is claimed with a guarded UPDATE on this column,
+  // so re-completing the journey never re-sends it.
+  welcomeEmailSentAt: timestamp("welcome_email_sent_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
