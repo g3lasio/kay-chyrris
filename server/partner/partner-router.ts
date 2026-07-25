@@ -10,12 +10,19 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { PARTNER_COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "../_core/cookies";
 import { partnerProcedure, protectedProcedure, publicProcedure, router } from "../_core/trpc";
 import { getDb } from "../db";
-import { referralPartners } from "../../drizzle/schema";
+import {
+  partnerAuthCodes,
+  partnerSessions,
+  referralAttributions,
+  referralCommissions,
+  referralPartners,
+  referralPayouts,
+} from "../../drizzle/schema";
 import {
   invalidatePartnerSession,
   requestPartnerOtp,
@@ -231,6 +238,21 @@ export const partnerPortalRouter = router({
   }),
 });
 
+/**
+ * Postgres unique-violation detector. Drizzle wraps the driver error, so the
+ * SQLSTATE lives on `cause` (sometimes nested) rather than on the top error —
+ * checking only `error.code` silently leaks raw "Failed query: ..." text to
+ * the admin instead of a friendly message.
+ */
+function isUniqueViolation(error: any): boolean {
+  let current = error;
+  for (let depth = 0; current && depth < 4; depth++) {
+    if (current.code === "23505") return true;
+    current = current.cause;
+  }
+  return false;
+}
+
 const referralCodeSchema = z
   .string()
   .min(2)
@@ -286,7 +308,7 @@ export const partnerAdminRouter = router({
           invitationError: invitation.error,
         };
       } catch (error: any) {
-        if (error?.code === "23505") {
+        if (isUniqueViolation(error)) {
           throw new TRPCError({
             code: "CONFLICT",
             message: "Ya existe un socio con ese código de referido o email",
@@ -336,6 +358,7 @@ export const partnerAdminRouter = router({
         contactName: z.string().max(255).nullable().optional(),
         contactEmail: z.string().email().optional(),
         contactPhone: z.string().max(50).nullable().optional(),
+        referralCode: referralCodeSchema.optional(),
         status: z.enum(["invited", "active", "paused", "inactive"]).optional(),
         tierYear1Pct: z.number().min(0).max(100).optional(),
         tierYear2Pct: z.number().min(0).max(100).optional(),
@@ -347,26 +370,152 @@ export const partnerAdminRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
 
       const { partnerId, ...updates } = input;
+
+      const currentRows = await db
+        .select()
+        .from(referralPartners)
+        .where(eq(referralPartners.id, partnerId))
+        .limit(1);
+      const current = currentRows[0];
+      if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Socio no encontrado" });
+
       const set: Record<string, unknown> = { updatedAt: new Date() };
       if (updates.name !== undefined) set.name = updates.name;
       if (updates.contactName !== undefined) set.contactName = updates.contactName;
-      if (updates.contactEmail !== undefined) set.contactEmail = updates.contactEmail.trim().toLowerCase();
       if (updates.contactPhone !== undefined) set.contactPhone = updates.contactPhone;
       if (updates.status !== undefined) set.status = updates.status;
       if (updates.tierYear1Pct !== undefined) set.tierYear1Pct = updates.tierYear1Pct.toFixed(2);
       if (updates.tierYear2Pct !== undefined) set.tierYear2Pct = updates.tierYear2Pct.toFixed(2);
       if (updates.freeAccountThreshold !== undefined) set.freeAccountThreshold = updates.freeAccountThreshold;
 
-      const rows = await db
-        .update(referralPartners)
-        .set(set)
-        .where(eq(referralPartners.id, partnerId))
-        .returning();
+      // ── Referral code: the attribution identifier ──
+      // Existing attributions link to the partner by partner_id (FK), so a code
+      // change never breaks them. But links already shared with the OLD code
+      // would stop resolving for NEW signups, silently losing attributions.
+      // Protection: once the partner has referrals, the code is frozen.
+      const newCode = updates.referralCode;
+      if (newCode !== undefined && newCode !== current.referralCode) {
+        const attributionCount = await db
+          .select({ count: sql<number>`COUNT(*)::int` })
+          .from(referralAttributions)
+          .where(eq(referralAttributions.partnerId, partnerId));
+        if ((attributionCount[0]?.count ?? 0) > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "No se puede cambiar el código: este socio ya tiene referidos atribuidos. " +
+              "Cambiarlo rompería los links ya compartidos.",
+          });
+        }
+        set.referralCode = newCode;
+      }
+
+      // ── Email: this is the partner's login (OTP goes there) ──
+      const newEmail = updates.contactEmail?.trim().toLowerCase();
+      const emailChanged = newEmail !== undefined && newEmail !== current.contactEmail;
+      if (newEmail !== undefined) set.contactEmail = newEmail;
+
+      let rows;
+      try {
+        rows = await db
+          .update(referralPartners)
+          .set(set)
+          .where(eq(referralPartners.id, partnerId))
+          .returning();
+      } catch (error: any) {
+        if (isUniqueViolation(error)) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "Ya existe otro socio con ese email o código de referido",
+          });
+        }
+        throw error;
+      }
       if (rows.length === 0) throw new TRPCError({ code: "NOT_FOUND", message: "Socio no encontrado" });
 
-      // Status/tier changes take effect immediately, even mid-session.
+      if (emailChanged) {
+        // The login moved to the new address: burn any OTP already sent to the
+        // OLD one so it can't be used, and drop existing sessions so access is
+        // re-established through the new email.
+        await db.delete(partnerAuthCodes).where(eq(partnerAuthCodes.partnerId, partnerId));
+        await db.delete(partnerSessions).where(eq(partnerSessions.partnerId, partnerId));
+        console.log(`[Partner Admin] Login email changed for partner ${partnerId}; OTPs and sessions cleared`);
+      }
+
+      // Status/tier/email changes take effect immediately, even mid-session.
       evictPartnerFromSessionCache(partnerId);
-      return { success: true, partner: rows[0] };
+      return { success: true, partner: rows[0], emailChanged };
+    }),
+
+  /**
+   * Delete a partner — SAFE by default.
+   *
+   * A partner with financial history (commissions or payouts) is NEVER hard
+   * deleted: the ledger is the record of money owed/paid and must survive.
+   * Those partners are ARCHIVED instead (status='inactive'), which already
+   * revokes portal access and stops new commissions from accruing.
+   * Partners with no financial history (e.g. a test partner) are fully
+   * removed; their attributions/documents/invitations cascade.
+   */
+  remove: protectedProcedure
+    .input(z.object({ partnerId: z.number().int().positive() }))
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
+
+      const rows = await db
+        .select()
+        .from(referralPartners)
+        .where(eq(referralPartners.id, input.partnerId))
+        .limit(1);
+      const partner = rows[0];
+      if (!partner) throw new TRPCError({ code: "NOT_FOUND", message: "Socio no encontrado" });
+
+      const [commissionCount, payoutCount] = await Promise.all([
+        db
+          .select({ count: sql<number>`COUNT(*)::int` })
+          .from(referralCommissions)
+          .where(eq(referralCommissions.partnerId, input.partnerId)),
+        db
+          .select({ count: sql<number>`COUNT(*)::int` })
+          .from(referralPayouts)
+          .where(eq(referralPayouts.partnerId, input.partnerId)),
+      ]);
+      const commissions = commissionCount[0]?.count ?? 0;
+      const payouts = payoutCount[0]?.count ?? 0;
+
+      if (commissions > 0 || payouts > 0) {
+        await db
+          .update(referralPartners)
+          .set({ status: "inactive", updatedAt: new Date() })
+          .where(eq(referralPartners.id, input.partnerId));
+        await db.delete(partnerSessions).where(eq(partnerSessions.partnerId, input.partnerId));
+        evictPartnerFromSessionCache(input.partnerId);
+        console.log(
+          `[Partner Admin] Partner ${input.partnerId} archived (has ${commissions} commissions / ${payouts} payouts)`
+        );
+        return {
+          success: true,
+          mode: "archived" as const,
+          commissions,
+          payouts,
+          message:
+            `"${partner.name}" tiene historial financiero (${commissions} comisiones, ${payouts} liquidaciones). ` +
+            "Se archivó como inactivo para conservar el historial; su acceso al portal quedó revocado.",
+        };
+      }
+
+      // No money history → safe hard delete (children cascade via FKs).
+      await db.delete(referralPartners).where(eq(referralPartners.id, input.partnerId));
+      evictPartnerFromSessionCache(input.partnerId);
+      console.log(`[Partner Admin] Partner ${input.partnerId} deleted (no financial history)`);
+      return {
+        success: true,
+        mode: "deleted" as const,
+        commissions: 0,
+        payouts: 0,
+        message: `"${partner.name}" fue eliminado por completo (no tenía historial financiero).`,
+      };
     }),
 
   verifyDocument: protectedProcedure

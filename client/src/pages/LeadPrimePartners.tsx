@@ -36,6 +36,7 @@ import {
   Loader2,
   Mail,
   Pause,
+  Pencil,
   Play,
   Plus,
   RefreshCcw,
@@ -560,6 +561,259 @@ function CreatePartnerDialog({
 
 // ── Detalle del socio ──────────────────────────────────────────────────────
 
+// ── Editar socio ───────────────────────────────────────────────────────────
+
+function EditPartnerDialog({
+  open,
+  onOpenChange,
+  partner,
+  hasReferrals,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  partner: {
+    id: number;
+    name: string;
+    contactName: string | null;
+    contactEmail: string;
+    contactPhone: string | null;
+    referralCode: string;
+    tierYear1Pct: string;
+    tierYear2Pct: string;
+    freeAccountThreshold: number;
+  };
+  hasReferrals: boolean;
+}) {
+  const utils = trpc.useUtils();
+  const [form, setForm] = useState({
+    name: partner.name,
+    contactName: partner.contactName ?? "",
+    contactEmail: partner.contactEmail,
+    contactPhone: partner.contactPhone ?? "",
+    referralCode: partner.referralCode,
+    tierYear1Pct: String(parseFloat(partner.tierYear1Pct)),
+    tierYear2Pct: String(parseFloat(partner.tierYear2Pct)),
+    freeAccountThreshold: String(partner.freeAccountThreshold),
+  });
+  // Re-seed when a different partner is opened.
+  const seededFor = useRef(partner.id);
+  if (seededFor.current !== partner.id) {
+    seededFor.current = partner.id;
+    setForm({
+      name: partner.name,
+      contactName: partner.contactName ?? "",
+      contactEmail: partner.contactEmail,
+      contactPhone: partner.contactPhone ?? "",
+      referralCode: partner.referralCode,
+      tierYear1Pct: String(parseFloat(partner.tierYear1Pct)),
+      tierYear2Pct: String(parseFloat(partner.tierYear2Pct)),
+      freeAccountThreshold: String(partner.freeAccountThreshold),
+    });
+  }
+
+  const update = trpc.partnerAdmin.update.useMutation({
+    onSuccess: res => {
+      toast.success(
+        res.emailChanged
+          ? "Socio actualizado. El socio ahora entra con el nuevo email (sesiones y códigos anteriores invalidados)."
+          : "Socio actualizado"
+      );
+      void utils.partnerAdmin.invalidate();
+      onOpenChange(false);
+    },
+    onError: err => toast.error(err.message),
+  });
+
+  const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setForm(f => ({ ...f, [key]: e.target.value }));
+
+  const emailChanged = form.contactEmail.trim().toLowerCase() !== partner.contactEmail.toLowerCase();
+  const codeChanged = form.referralCode.trim().toUpperCase() !== partner.referralCode.toUpperCase();
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    update.mutate({
+      partnerId: partner.id,
+      name: form.name.trim(),
+      contactName: form.contactName.trim() || null,
+      contactEmail: form.contactEmail.trim(),
+      contactPhone: form.contactPhone.trim() || null,
+      // Only send the code when it actually changed — the server freezes it
+      // once the partner has referrals.
+      ...(codeChanged ? { referralCode: form.referralCode.trim() } : {}),
+      tierYear1Pct: parseFloat(form.tierYear1Pct) || 0,
+      tierYear2Pct: parseFloat(form.tierYear2Pct) || 0,
+      freeAccountThreshold: parseInt(form.freeAccountThreshold, 10) || 1,
+    });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Editar socio</DialogTitle>
+          <DialogDescription>
+            Cambia los datos del socio. El email es su acceso al portal (login por código).
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-3">
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Nombre del socio *</label>
+            <Input value={form.name} onChange={set("name")} required />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Email (login) *</label>
+              <Input type="email" value={form.contactEmail} onChange={set("contactEmail")} required />
+              {emailChanged && (
+                <p className="text-xs text-amber-400">
+                  El socio entrará con este nuevo email. Se invalidarán sus sesiones y códigos pendientes.
+                </p>
+              )}
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Código de referido</label>
+              <Input
+                value={form.referralCode}
+                onChange={set("referralCode")}
+                className="uppercase"
+                disabled={hasReferrals}
+              />
+              {hasReferrals ? (
+                <p className="text-xs text-muted-foreground">
+                  Bloqueado: el socio ya tiene referidos atribuidos. Cambiarlo rompería los links compartidos.
+                </p>
+              ) : codeChanged ? (
+                <p className="text-xs text-amber-400">
+                  Cambiar el código invalida los links ya compartidos con el código anterior.
+                </p>
+              ) : null}
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Contacto</label>
+              <Input value={form.contactName} onChange={set("contactName")} placeholder="Nombre del contacto" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Teléfono</label>
+              <Input value={form.contactPhone} onChange={set("contactPhone")} placeholder="+1 555 000 0000" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">% Año 1</label>
+              <Input type="number" min="0" max="100" step="0.01" value={form.tierYear1Pct} onChange={set("tierYear1Pct")} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">% Año 2</label>
+              <Input type="number" min="0" max="100" step="0.01" value={form.tierYear2Pct} onChange={set("tierYear2Pct")} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Umbral cuenta gratis</label>
+              <Input type="number" min="1" max="1000" value={form.freeAccountThreshold} onChange={set("freeAccountThreshold")} />
+            </div>
+          </div>
+          <DialogFooter className="pt-2">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
+            <Button type="submit" disabled={update.isPending}>
+              {update.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Guardar cambios
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Eliminar socio (borrado seguro) ────────────────────────────────────────
+
+function DeletePartnerDialog({
+  open,
+  onOpenChange,
+  partner,
+  commissionCount,
+  payoutCount,
+  onDeleted,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  partner: { id: number; name: string };
+  commissionCount: number;
+  payoutCount: number;
+  onDeleted: () => void;
+}) {
+  const utils = trpc.useUtils();
+  const [confirmText, setConfirmText] = useState("");
+  const hasHistory = commissionCount > 0 || payoutCount > 0;
+
+  const remove = trpc.partnerAdmin.remove.useMutation({
+    onSuccess: res => {
+      toast.success(res.message);
+      void utils.partnerAdmin.invalidate();
+      onOpenChange(false);
+      setConfirmText("");
+      onDeleted();
+    },
+    onError: err => toast.error(err.message),
+  });
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={v => {
+        if (!v) setConfirmText("");
+        onOpenChange(v);
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-destructive">
+            {hasHistory ? "Archivar socio" : "Eliminar socio"}
+          </DialogTitle>
+          <DialogDescription>
+            {hasHistory ? (
+              <>
+                <strong>{partner.name}</strong> tiene historial financiero ({commissionCount} comisiones,{" "}
+                {payoutCount} liquidaciones). Para no perder el historial, se <strong>archivará como
+                inactivo</strong> en vez de borrarse: pierde acceso al portal y deja de acumular comisiones,
+                pero el registro de dinero se conserva.
+              </>
+            ) : (
+              <>
+                <strong>{partner.name}</strong> no tiene comisiones ni liquidaciones, así que se{" "}
+                <strong>eliminará por completo</strong> junto con sus referidos, documentos e invitaciones.
+                Esta acción no se puede deshacer.
+              </>
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <label className="text-sm font-medium">
+              Escribe <code className="bg-muted px-1 rounded">ELIMINAR</code> para confirmar
+            </label>
+            <Input
+              value={confirmText}
+              onChange={e => setConfirmText(e.target.value)}
+              placeholder="ELIMINAR"
+              autoComplete="off"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
+            <Button
+              variant="destructive"
+              disabled={confirmText.trim().toUpperCase() !== "ELIMINAR" || remove.isPending}
+              onClick={() => remove.mutate({ partnerId: partner.id })}
+            >
+              {remove.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
+              {hasHistory ? "Archivar socio" : "Eliminar definitivamente"}
+            </Button>
+          </DialogFooter>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClose: () => void }) {
   const utils = trpc.useUtils();
   const detailQuery = trpc.partnerAdmin.detail.useQuery({ partnerId });
@@ -613,6 +867,17 @@ function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClos
     onError: err => toast.error(err.message),
   });
   const [docUploadOpen, setDocUploadOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  // Documents live in private R2; open through a fresh presigned URL.
+  const openAdminDocument = async (documentId: number) => {
+    try {
+      const { url } = await utils.partnerAdmin.documentUrl.fetch({ partnerId, documentId });
+      window.open(url, "_blank", "noopener");
+    } catch (error: any) {
+      toast.error(error.message || "No se pudo abrir el documento");
+    }
+  };
   const deleteDoc = trpc.partnerAdmin.deleteDocument.useMutation({
     onSuccess: () => { toast.success("Documento eliminado"); invalidate(); },
     onError: err => toast.error(err.message),
@@ -684,7 +949,33 @@ function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClos
               <Button size="sm" variant="outline" onClick={() => markContract.mutate({ partnerId })} disabled={markContract.isPending}>
                 <BadgeCheck className="w-4 h-4 mr-1" /> Marcar contrato firmado
               </Button>
+              <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
+                <Pencil className="w-4 h-4 mr-1" /> Editar
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-destructive hover:text-destructive"
+                onClick={() => setDeleteOpen(true)}
+              >
+                <Trash2 className="w-4 h-4 mr-1" /> Eliminar
+              </Button>
             </div>
+
+            <EditPartnerDialog
+              open={editOpen}
+              onOpenChange={setEditOpen}
+              partner={partner}
+              hasReferrals={data.attributions.length > 0}
+            />
+            <DeletePartnerDialog
+              open={deleteOpen}
+              onOpenChange={setDeleteOpen}
+              partner={partner}
+              commissionCount={data.commissions.length}
+              payoutCount={data.payouts.length}
+              onDeleted={onClose}
+            />
 
             <Tabs defaultValue="referrals" className="mt-2">
               <TabsList className="flex-wrap h-auto">
@@ -880,9 +1171,13 @@ function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClos
                             </TableCell>
                             <TableCell className="text-sm text-muted-foreground max-w-[240px] truncate">
                               {doc.fileUrl ? (
-                                <a href={doc.fileUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                                <button
+                                  type="button"
+                                  className="text-primary hover:underline text-left truncate max-w-full"
+                                  onClick={() => openAdminDocument(doc.id)}
+                                >
                                   {doc.fileName ?? "ver archivo"}
-                                </a>
+                                </button>
                               ) : (
                                 doc.fileName ?? "—"
                               )}
