@@ -15,6 +15,16 @@ const BRAND = {
   bg: "#F4F7F9",
 };
 
+/** Escape values interpolated into email HTML (defense in depth). */
+function esc(value: string | null | undefined): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function getFrom(): string {
   return process.env.PARTNER_EMAIL_FROM || "LeadPrime <no-reply@chyrris.com>";
 }
@@ -97,11 +107,11 @@ export async function sendPartnerInvitationEmail(
   }
   try {
     const portalUrl = getPortalUrl();
-    const greeting = contactName ? `Hola ${contactName},` : "Hola,";
+    const greeting = contactName ? `Hola ${esc(contactName)},` : "Hola,";
     const html = layout(
       "Bienvenido al programa de socios de LeadPrime",
       `<p style="color:#3d4a58;font-size:14px;line-height:1.6;">${greeting}</p>
-       <p style="color:#3d4a58;font-size:14px;line-height:1.6;"><strong>${partnerName}</strong> ya forma parte del programa de socios de LeadPrime. Desde tu portal podrás completar tu registro (contrato, W-9 y depósito ACH), obtener tu enlace de referido y seguir tus referidos y comisiones en tiempo real.</p>
+       <p style="color:#3d4a58;font-size:14px;line-height:1.6;"><strong>${esc(partnerName)}</strong> ya forma parte del programa de socios de LeadPrime. Desde tu portal podrás completar tu registro (contrato, W-9 y depósito ACH), obtener tu enlace de referido y seguir tus referidos y comisiones en tiempo real.</p>
        <div style="text-align:center;margin:28px 0;">
          <a href="${portalUrl}" style="display:inline-block;background:${BRAND.blue};color:#ffffff;text-decoration:none;font-size:15px;font-weight:bold;padding:14px 32px;border-radius:10px;">Activar mi acceso</a>
        </div>
@@ -141,7 +151,7 @@ export async function sendReferralInvitationEmail(
   try {
     const html = layout(
       "Te invitaron a LeadPrime",
-      `<p style="color:#3d4a58;font-size:14px;line-height:1.6;"><strong>${partnerName}</strong> te invita a unirte a <strong>LeadPrime</strong>, la plataforma que ayuda a los contratistas a conseguir y gestionar más trabajo.</p>
+      `<p style="color:#3d4a58;font-size:14px;line-height:1.6;"><strong>${esc(partnerName)}</strong> te invita a unirte a <strong>LeadPrime</strong>, la plataforma que ayuda a los contratistas a conseguir y gestionar más trabajo.</p>
        <p style="color:#3d4a58;font-size:14px;line-height:1.6;">Crea tu cuenta con este enlace personalizado. Al registrarte, tu cuenta queda vinculada a quien te invitó.</p>
        <div style="text-align:center;margin:28px 0;">
          <a href="${signupLink}" style="display:inline-block;background:${BRAND.blue};color:#ffffff;text-decoration:none;font-size:15px;font-weight:bold;padding:14px 32px;border-radius:10px;">Crear mi cuenta en LeadPrime</a>
@@ -151,7 +161,7 @@ export async function sendReferralInvitationEmail(
     const result = await resend.emails.send({
       from: getFrom(),
       to,
-      subject: `${partnerName} te invitó a LeadPrime`,
+      subject: `${partnerName} te invitó a LeadPrime`.replace(/[\r\n]/g, " "),
       html,
     });
     if (result.error) {

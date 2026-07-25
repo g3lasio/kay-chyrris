@@ -473,6 +473,7 @@ export const partnerAdminRouter = router({
       z.object({
         leadprimeLandingUrl: z.string().url().max(500).optional(),
         leadprimeProductionUrl: z.string().url().max(500).optional(),
+        shortLinkBase: z.string().url().max(500).optional(),
         invitationMode: z.enum(["auto", "approval"]).optional(),
       })
     )
@@ -481,6 +482,8 @@ export const partnerAdminRouter = router({
         await setSetting(SETTING_KEYS.leadprimeLandingUrl, input.leadprimeLandingUrl);
       if (input.leadprimeProductionUrl !== undefined)
         await setSetting(SETTING_KEYS.leadprimeProductionUrl, input.leadprimeProductionUrl);
+      if (input.shortLinkBase !== undefined)
+        await setSetting(SETTING_KEYS.shortLinkBase, input.shortLinkBase);
       if (input.invitationMode !== undefined)
         await setSetting(SETTING_KEYS.invitationMode, input.invitationMode);
       return { success: true, settings: await getPortalSettings() };

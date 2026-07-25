@@ -18,7 +18,8 @@
 | 5 | Invitación de referidos por el socio (consentimiento) | ✅ | screenshot invitaciones; E2E invitación→atribución |
 | 6 | Espacio de links de LeadPrime (configurable) | ✅ | screenshot dashboard + ajustes admin |
 | 7 | Eslogan en el footer (sin atribución) | ✅ | visible en todas las pantallas |
-| — | Validación técnica | ✅ `tsc` limpio · build OK · 15 unit + 46 E2E base + 20 E2E mejoras | §9 |
+| 8 | **Links cortos de referido** (`/r/CODE`, para bios de redes) | ✅ | screenshot link corto; E2E; spec para LeadPrime |
+| — | Validación técnica | ✅ `tsc` limpio · build OK · 18 unit + 46 E2E base + 21 E2E mejoras + fresh-DB bootstrap | §9 |
 
 **E2E de mejoras: 20/20 OK** y **E2E base (motor): 46/46 OK**, ambos contra PostgreSQL real con réplica del esquema de LeadPrime. Aislamiento multi-tenant de documentos e invitaciones verificado con dos socios; invitaciones que atribuyen por email; historial mensual que cuadra con query directa.
 
@@ -71,6 +72,19 @@ Tarjeta **"Links de LeadPrime para compartir"** en el dashboard (landing + sitio
 
 **"El que no vive para servir, no sirve para vivir."** — sin atribución, discreto, en el footer del portal (todas las pantallas) y en la bienvenida del onboarding y el pie de los emails. El mensaje central sigue siendo funcional.
 
+## 7b. Links cortos de referido (Mejora 8)
+
+Los links de referido ahora tienen forma **corta y bonita** para bios de TikTok/Instagram/WhatsApp: `leadprime.chyrris.com/r/prime`. Es una mejora **encima** del sistema de atribución ya validado por Manus — **no cambia el motor**: `/r/CODE` es solo una puerta de entrada que redirige (302) al mismo `?ref=CODE`.
+
+**En Kai (implementado):**
+- `buildShortReferralLink(code)` genera `<base>/r/<code en minúsculas>` automáticamente del código del socio (el admin no lo escribe a mano). La atribución es case-insensitive, así que `/r/prime` resuelve el mismo socio que `?ref=PRIME`.
+- El portal muestra el **link corto como el principal** para compartir (con botón copiar); el largo queda plegado en "Ver enlace largo". El admin también copia el corto.
+- La **base es configurable** desde Admin → Socios → ⚙ Ajustes ("Base del link corto") por si el prefijo cambia; default `https://leadprime.chyrris.com`.
+
+**En el repo de LeadPrime (hand-off — NO en Kai):** el redirect `/r/CODE → /signup?ref=CODE` vive en `leadprime.chyrris.com` (dominio y signup de LeadPrime, no del portal). Spec completo, listo para aplicar con revisión de Gelasio antes de producción, en **`docs/partner-portal/LEADPRIME_REPO_CHANGES.md`** — agrupado con la captura de `?ref=` (cookie/localStorage 30 días) que ya se necesitaba. Regla: **no romper el signup existente**; la ventana de 30 días funciona idéntica por el link corto.
+
+**Validación de Manus (en Neon):** que `/r/CODE` atribuya **idéntico** a `?ref=CODE` (misma fila en `referral_attributions`), que el signup de contratistas siga sin regresión, y que el link corto se vea bien en el portal (ya verificado en Kai — screenshot `v2-short-link.png`).
+
 ## 8. Estado de branch / seguridad
 
 `main` = portal **sin** los 13 fixes de seguridad del review previo (incluidos 2 críticos: doble liquidación y doble reversión de reembolso; brute-force de OTP; endpoint de atribución sin auth). Esta branch parte de la rama con esos fixes ya aplicados y verificados, por lo que **el merge de esta branch lleva a `main` los fixes de seguridad + las 7 mejoras**. Recomendado revisar/mergear esta branch (no la vieja) para cerrar ambos.
@@ -81,10 +95,11 @@ Tarjeta **"Links de LeadPrime para compartir"** en el dashboard (landing + sitio
 |---|---|
 | `pnpm run check` (tsc) | ✅ Sin errores |
 | `pnpm run build` | ✅ OK |
-| Unit tests (`server/partner`) | ✅ 15/15 |
+| Unit tests (`server/partner`) | ✅ 18/18 (incluye link corto) |
 | E2E base — motor de comisión (`validate-partner-portal-e2e.ts`) | ✅ 46/46 (sin regresión; onboarding actualizado a 3 etapas) |
-| E2E mejoras (`validate-partner-enhancements-e2e.ts`) | ✅ 20/20 |
-| Review adversarial (aislamiento, onboarding/dashboard, regresiones) | ✅ Ejecutado; hallazgos confirmados corregidos (ver §11) |
+| E2E mejoras (`validate-partner-enhancements-e2e.ts`) | ✅ 21/21 (incluye link corto) |
+| Fresh-DB bootstrap (deploy real) | ✅ DB vacía → 9 tablas del portal + columnas nuevas creadas; idempotente en 2ª corrida |
+| Review adversarial (aislamiento, onboarding/dashboard, regresiones) | ✅ Ejecutado; 2 hallazgos reales corregidos y verificados (ver §11) |
 
 **Evidencia E2E mejoras (extracto):**
 ```
@@ -110,11 +125,23 @@ Screenshots web + móvil (375px) en `docs/partner-portal/screenshots/` (prefijo 
 
 Motor de comisión validado por Manus, atribución por `?ref=`, aislamiento multi-tenant, pagos Stax/Stripe y el admin de Kai existente — todo intacto. Solo se AGREGÓ. El E2E base (46/46) confirma que el motor sigue cuadrando.
 
-## 11. Problemas y decisiones
+## 11. Review adversarial — 2 hallazgos reales, corregidos y verificados
+
+Un review multi-agente (3 dimensiones + verificadores) sobre la superficie nueva confirmó 2 defectos reales; **ambos corregidos y verificados**:
+
+| Sev | Hallazgo | Corrección |
+|---|---|---|
+| **HIGH** | `ensure-tables` corría `ADD COLUMN` **antes** de `CREATE TABLE` → en una DB vacía (el path real de deploy: `pnpm start` no corre migraciones) el primer `ALTER TABLE` lanzaba "relation does not exist", el catch abortaba el bootstrap y **no se creaba ninguna tabla** del portal. | Reordenado: `CREATE TABLE` antes de `ADD COLUMN`. **Verificado** con una DB fresca real: 9 tablas + columnas creadas, idempotente. |
+| **MEDIUM** | `getPortalSettings` ignoraba el default de `PARTNER_INVITATION_MODE` por env cuando no había fila en `app_settings` → el modo "approval" configurado por env se degradaba silenciosamente a "auto" (invitaciones enviadas sin aprobación). | Fallback al default por env cuando no hay fila guardada. |
+
+Otros hallazgos fueron de baja severidad; se aplicaron los de bajo costo (bloquear socios `paused` en el redirect `/i/:token` como en `validate`, rate-limit del `/i/:token`, escape de HTML en los emails). Los restantes (TOCTOU del tope diario de invitaciones, bucketing de meses en TZ de sesión) se documentan como aceptables en producción UTC.
+
+## 12. Problemas y decisiones
 
 | Tema | Decisión |
 |---|---|
-| Kai no corre migraciones en deploy | `ensure-tables.ts` extendido idempotente (ALTER TYPE ADD VALUE IF NOT EXISTS, ADD COLUMN IF NOT EXISTS, CREATE TABLE IF NOT EXISTS); migración drizzle 0002 también idempotente |
+| Kai no corre migraciones en deploy | `ensure-tables.ts` extendido idempotente (ALTER TYPE ADD VALUE IF NOT EXISTS, CREATE TABLE, luego ADD COLUMN IF NOT EXISTS — **en ese orden**); migración drizzle 0002 también idempotente |
+| Redirect del link corto `/r/CODE` | Vive en el repo de LeadPrime (su dominio), no en Kai — spec de hand-off en `docs/partner-portal/LEADPRIME_REPO_CHANGES.md`, revisión de Gelasio antes de prod |
 | Ciclo de imports invitaciones↔motor | El motor importa `syncInvitationStatuses` con `import()` dinámico (sin ciclo estático) |
 | Firma de documentos | Se firman por LeadSign (externo); el portal solo almacena/muestra estado — reflejado en la UI |
 | Aprobación de invitaciones | Default `auto`; `approval` configurable desde admin |
@@ -125,4 +152,9 @@ Motor de comisión validado por Manus, atribución por `?ref=`, aislamiento mult
 
 ## LISTO PARA VALIDACIÓN DE MANUS
 
-Pendientes para Gelasio (no codificables desde aquí): los **links exactos** de LeadPrime (landing/producción) — mientras tanto configurables desde Ajustes; decidir si las invitaciones van **automáticas o con aprobación** (default automático, cambiable con un clic). Todo lo demás está implementado, probado (20/20 + 46/46 E2E + screenshots web/móvil) y sin tocar los sistemas protegidos.
+Todo lo del lado de Kai está implementado, probado (18 unit + 21/21 + 46/46 E2E + fresh-DB bootstrap + screenshots web/móvil) y sin tocar los sistemas protegidos. El review adversarial corrió y sus 2 hallazgos reales ya están corregidos y verificados — **Manus valida esta versión final**.
+
+**Pendientes para Gelasio / repo de LeadPrime:**
+1. **Redirect `/r/CODE` en el repo de LeadPrime** (spec listo en `docs/partner-portal/LEADPRIME_REPO_CHANGES.md`, agrupado con la captura de `?ref=`). Toca el signup de producción → tu revisión antes de aplicar. Manus valida que `/r/CODE` atribuya idéntico a `?ref=CODE` en Neon y que el signup no tenga regresión.
+2. **Links exactos** de LeadPrime (landing/producción/base del link corto) — configurables desde Ajustes con defaults hasta definirlos.
+3. **Modo de invitaciones**: automático (default) o con aprobación — cambiable con un clic en Ajustes.

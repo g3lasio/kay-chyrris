@@ -173,9 +173,9 @@ function DashboardContent() {
     );
   }
 
-  const copyLink = async () => {
+  const copyLink = async (link: string) => {
     try {
-      await navigator.clipboard.writeText(data.referralLink);
+      await navigator.clipboard.writeText(link);
       toast.success("Enlace copiado");
     } catch {
       toast.error("No se pudo copiar. Selecciona el texto manualmente.");
@@ -240,18 +240,31 @@ function DashboardContent() {
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              Comparte este enlace: cada contratista que se registre con él queda atribuido a ti
-              (código <strong>{data.referralCode}</strong>).
+              Compártelo donde quieras (bio de TikTok, Instagram, WhatsApp). Cada contratista que se
+              registre con él queda atribuido a ti (código <strong>{data.referralCode}</strong>).
             </p>
+            {/* Short link = primary (pretty, for social bios) */}
             <div className="flex gap-2">
-              <code className="flex-1 min-w-0 truncate text-xs sm:text-sm bg-muted rounded-lg px-3 py-2.5 border">
-                {data.referralLink}
+              <code className="flex-1 min-w-0 truncate text-sm bg-muted rounded-lg px-3 py-2.5 border font-medium">
+                {data.shortReferralLink}
               </code>
-              <Button onClick={copyLink} size="sm" className="shrink-0 h-auto">
+              <Button onClick={() => copyLink(data.shortReferralLink)} size="sm" className="shrink-0 h-auto">
                 <Copy className="w-4 h-4 sm:mr-2" />
                 <span className="hidden sm:inline">Copiar</span>
               </Button>
             </div>
+            {/* Long form kept as a fallback */}
+            <details className="text-xs text-muted-foreground">
+              <summary className="cursor-pointer hover:text-foreground">Ver enlace largo</summary>
+              <div className="flex gap-2 mt-2">
+                <code className="flex-1 min-w-0 truncate bg-muted rounded-lg px-3 py-2 border">
+                  {data.referralLink}
+                </code>
+                <Button onClick={() => copyLink(data.referralLink)} size="sm" variant="outline" className="shrink-0 h-auto">
+                  <Copy className="w-4 h-4" />
+                </Button>
+              </div>
+            </details>
           </CardContent>
         </Card>
       </div>

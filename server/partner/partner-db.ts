@@ -18,7 +18,8 @@ import {
   type ReferralPartner,
 } from "../../drizzle/schema";
 import { storagePut, storageGet } from "../storage";
-import { buildReferralLink, fetchReferredUsersInfo, reversalKey } from "./commission-engine";
+import { buildReferralLink, buildShortReferralLink, fetchReferredUsersInfo, reversalKey } from "./commission-engine";
+import { getPortalSettings } from "./app-settings";
 
 // ── Onboarding journey — 3 unlockable stages (brief §1) ────────────────────
 // Stage 1 "materiales": partner reviewed the informational docs LeadPrime
@@ -267,6 +268,10 @@ export interface PartnerDashboard {
     threshold: number;
     achieved: boolean;
   };
+  // shortReferralLink is the PRIMARY link to share (pretty, for social bios);
+  // referralLink is the canonical ?ref= long form kept as fallback. Both
+  // attribute identically.
+  shortReferralLink: string;
   referralLink: string;
   referralCode: string;
 }
@@ -312,6 +317,7 @@ export async function getPartnerDashboard(partner: ReferralPartner): Promise<Par
     .from(referralCommissions)
     .where(and(eq(referralCommissions.partnerId, partner.id), eq(referralCommissions.payoutStatus, "pending")));
 
+  const settings = await getPortalSettings();
   const activeCount = counts[0]?.active ?? 0;
   return {
     kpis: {
@@ -328,6 +334,7 @@ export async function getPartnerDashboard(partner: ReferralPartner): Promise<Par
       threshold: partner.freeAccountThreshold,
       achieved: activeCount >= partner.freeAccountThreshold,
     },
+    shortReferralLink: buildShortReferralLink(partner.referralCode, settings.shortLinkBase),
     referralLink: buildReferralLink(partner.referralCode),
     referralCode: partner.referralCode,
   };

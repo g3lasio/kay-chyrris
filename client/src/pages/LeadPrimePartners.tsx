@@ -249,6 +249,7 @@ function PortalSettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCha
   });
   const [landing, setLanding] = useState("");
   const [production, setProduction] = useState("");
+  const [shortBase, setShortBase] = useState("");
   const [mode, setMode] = useState<"auto" | "approval">("auto");
 
   // Seed the form once settings load.
@@ -258,6 +259,7 @@ function PortalSettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCha
     seededRef.current = true;
     setLanding(loaded.leadprimeLandingUrl);
     setProduction(loaded.leadprimeProductionUrl);
+    setShortBase(loaded.shortLinkBase);
     setMode(loaded.invitationMode);
   }
 
@@ -283,6 +285,13 @@ function PortalSettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCha
               <Input value={production} onChange={e => setProduction(e.target.value)} placeholder="https://app.leadprime.chyrris.com" />
             </div>
             <div className="space-y-1">
+              <label className="text-sm font-medium">Base del link corto de referido</label>
+              <Input value={shortBase} onChange={e => setShortBase(e.target.value)} placeholder="https://leadprime.chyrris.com" />
+              <p className="text-xs text-muted-foreground">
+                Se muestra como leadprime.chyrris.com/r/CODIGO. El redirect /r/CODE vive en el repo de LeadPrime.
+              </p>
+            </div>
+            <div className="space-y-1">
               <label className="text-sm font-medium">Modo de invitaciones</label>
               <select
                 value={mode}
@@ -300,6 +309,7 @@ function PortalSettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCha
                   update.mutate({
                     leadprimeLandingUrl: landing.trim(),
                     leadprimeProductionUrl: production.trim(),
+                    shortLinkBase: shortBase.trim(),
                     invitationMode: mode,
                   })
                 }
@@ -542,11 +552,11 @@ function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClos
                 variant="outline"
                 onClick={() =>
                   navigator.clipboard
-                    .writeText(`https://leadprime.chyrris.com/signup?ref=${partner.referralCode}`)
-                    .then(() => toast.success("Enlace de referido copiado"))
+                    .writeText(`https://leadprime.chyrris.com/r/${partner.referralCode.toLowerCase()}`)
+                    .then(() => toast.success("Link corto de referido copiado"))
                 }
               >
-                <Copy className="w-4 h-4 mr-1" /> Enlace
+                <Copy className="w-4 h-4 mr-1" /> Link corto
               </Button>
               <Button size="sm" variant="outline" onClick={() => resendInvite.mutate({ partnerId })} disabled={resendInvite.isPending}>
                 <Mail className="w-4 h-4 mr-1" /> Reenviar invitación

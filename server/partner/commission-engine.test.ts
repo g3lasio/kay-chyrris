@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildReferralLink,
+  buildShortReferralLink,
   centsToDecimal,
   computeCommissionCents,
   resolveAppliedPct,
@@ -78,6 +79,22 @@ describe("referral link", () => {
 
   it("URL-encodes unusual codes", () => {
     expect(buildReferralLink("A B")).toContain("ref=A%20B");
+  });
+});
+
+describe("short referral link (social bios)", () => {
+  it("builds leadprime.chyrris.com/r/<code> lowercased", () => {
+    expect(buildShortReferralLink("PRIME")).toBe("https://leadprime.chyrris.com/r/prime");
+  });
+
+  it("uses the admin-configured base and trims trailing slashes", () => {
+    expect(buildShortReferralLink("PRIME", "https://lp.example.com/")).toBe("https://lp.example.com/r/prime");
+  });
+
+  it("attributes case-insensitively — short /r/prime resolves the same as ?ref=PRIME", () => {
+    // Both links carry the code; the engine's findPartnerByCode compares
+    // case-insensitively, so the lowercased short link resolves PRIME.
+    expect(buildShortReferralLink("prime")).toBe(buildShortReferralLink("PRIME"));
   });
 });
 

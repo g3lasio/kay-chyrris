@@ -145,7 +145,9 @@ export async function resolveInvitationRedirect(token: string): Promise<string |
     .where(eq(partnerInvitations.token, token))
     .limit(1);
   const row = rows[0];
-  if (!row || row.status === "inactive") return null;
+  // Paused and inactive partners don't attribute — consistent with
+  // /api/referrals/validate. Fall back to the plain signup (caller handles null).
+  if (!row || row.status === "inactive" || row.status === "paused") return null;
   const { buildReferralLink } = await import("./commission-engine");
   return buildReferralLink(row.referralCode);
 }

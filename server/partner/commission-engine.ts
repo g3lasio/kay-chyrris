@@ -102,7 +102,7 @@ function emptySummary(): SyncSummary {
   };
 }
 
-/** The public signup link shown to partners: <base>?ref=<CODE> */
+/** The canonical signup link (long form): <base>?ref=<CODE> */
 export function getReferralSignupBase(): string {
   return process.env.REFERRAL_SIGNUP_URL || "https://leadprime.chyrris.com/signup";
 }
@@ -111,6 +111,19 @@ export function buildReferralLink(referralCode: string): string {
   const base = getReferralSignupBase();
   const sep = base.includes("?") ? "&" : "?";
   return `${base}${sep}ref=${encodeURIComponent(referralCode)}`;
+}
+
+/**
+ * Pretty SHORT referral link for social bios (leadprime.chyrris.com/r/CODE).
+ * The /r/CODE redirect that turns this into ?ref=CODE lives in the LeadPrime
+ * app (its own domain/repo), NOT here — Kai only DISPLAYS this link. The code
+ * is lowercased for a clean look; attribution is case-insensitive, so
+ * /r/prime resolves the same partner as ?ref=PRIME. Base is admin-configurable
+ * (app_settings) with a default; pass it in when settings are available.
+ */
+export function buildShortReferralLink(referralCode: string, base?: string): string {
+  const b = (base || process.env.REFERRAL_SHORT_LINK_BASE || "https://leadprime.chyrris.com").replace(/\/+$/, "");
+  return `${b}/r/${encodeURIComponent(referralCode.toLowerCase())}`;
 }
 
 /** Validate a referral code → partner (case-insensitive), or null. */

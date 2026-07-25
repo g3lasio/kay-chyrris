@@ -169,10 +169,16 @@ export async function ensurePartnerTables(): Promise<void> {
         await db.execute(sql.raw(`ALTER TYPE "${name}" ADD VALUE IF NOT EXISTS '${value}'`));
       }
     }
-    for (const statement of ADDED_COLUMNS) {
+    // ORDER MATTERS: create tables BEFORE altering them. On a fresh database
+    // partner_documents / referral_partners do not exist yet, so running the
+    // ADD COLUMN statements first would throw and (via the outer catch) abort
+    // the whole bootstrap, leaving ZERO tables created. CREATE TABLE first, then
+    // the ADD COLUMN IF NOT EXISTS is a harmless no-op on fresh DBs and the
+    // actual upgrade path on existing ones.
+    for (const statement of TABLE_STATEMENTS) {
       await db.execute(sql.raw(statement));
     }
-    for (const statement of TABLE_STATEMENTS) {
+    for (const statement of ADDED_COLUMNS) {
       await db.execute(sql.raw(statement));
     }
     console.log("[Partner Tables] referral_* tables ensured (v2)");

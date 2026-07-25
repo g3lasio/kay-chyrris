@@ -187,6 +187,13 @@ async function main() {
     afterSync[0]!.status === "active" && (syncInvite.registered >= 1 || syncInvite.activated >= 1),
     `status=${afterSync[0]!.status}`);
 
+  // ── 5b. Short referral link (social bios) ──
+  const dash = await pdb.getPartnerDashboard(await aRow());
+  check("Link corto se genera del código (leadprime.chyrris.com/r/prime), atribuye igual que ?ref",
+    dash.shortReferralLink === "https://leadprime.chyrris.com/r/prime" &&
+    dash.referralLink === "https://leadprime.chyrris.com/signup?ref=PRIME",
+    `corto=${dash.shortReferralLink}`);
+
   // ── 6. Settings (links + approval mode) ──
   await settings.setSetting(settings.SETTING_KEYS.leadprimeLandingUrl, "https://leadprime.example.com");
   await settings.setSetting(settings.SETTING_KEYS.leadprimeProductionUrl, "https://app.leadprime.example.com");

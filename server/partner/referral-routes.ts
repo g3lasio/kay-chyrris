@@ -41,6 +41,7 @@ export function registerReferralRoutes(app: Express): void {
   // themselves (consent). Unknown/inactive tokens fall back to the plain
   // signup so the link never dead-ends.
   app.get("/i/:token", async (req: Request, res: Response) => {
+    if (rateLimited(req)) return res.status(429).send("Too many requests");
     try {
       const token = String(req.params.token ?? "").trim();
       const target =
