@@ -89,8 +89,10 @@ export default function OnboardingChecklist() {
   }
 
   const pct = Math.round((journey.completedStages / journey.totalStages) * 100);
-  const materials = (documentsQuery.data ?? []).filter(
-    d => d.uploadedBy === "admin" || Object.keys(INFO_DOC_LABEL).includes(d.docType)
+  // Stage 1 shows only informational materials — reports are post-onboarding
+  // deliverables and live in the Documentación → Reportes section.
+  const materials = (documentsQuery.data ?? []).filter(d =>
+    Object.keys(INFO_DOC_LABEL).includes(d.docType)
   );
 
   const stageStatus = (n: number): StageStatus => {

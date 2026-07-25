@@ -12,9 +12,13 @@ import { serial } from "drizzle-orm/pg-core";
 
 export const roleEnum = pgEnum("role", ["super_admin", "admin", "viewer"]);
 export const referralPartnerStatusEnum = pgEnum("referral_partner_status", ["invited", "active", "paused", "inactive"]);
-// Document types. Informational (admin-uploaded, no signature): revenue_projection,
-// features, term_sheet_info. Signed by the partner via LeadSign (partner-uploaded):
-// term_sheet_signed, contract, ach_authorization, w9. 'other' is a catch-all.
+// Document types.
+//  - Informational (admin-uploaded, no signature): revenue_projection, features,
+//    term_sheet_info — shown in the partner's "Materiales de LeadPrime".
+//  - report (admin-uploaded, free title): recurring deliverables like quarterly
+//    referral reports — shown in the partner's "Reportes" section.
+//  - Signed by the partner via LeadSign: term_sheet_signed, contract,
+//    ach_authorization, w9. 'other' is a catch-all.
 export const partnerDocTypeEnum = pgEnum("partner_doc_type", [
   "contract",
   "w9",
@@ -24,6 +28,7 @@ export const partnerDocTypeEnum = pgEnum("partner_doc_type", [
   "features",
   "term_sheet_info",
   "term_sheet_signed",
+  "report",
 ]);
 export const partnerDocStatusEnum = pgEnum("partner_doc_status", ["pending", "uploaded", "verified"]);
 export const attributionStatusEnum = pgEnum("attribution_status", ["pending_first_payment", "active", "inactive"]);
@@ -305,11 +310,14 @@ export const partnerDocuments = pgTable("partner_documents", {
   id: serial("id").primaryKey(),
   partnerId: integer("partner_id").notNull().references(() => referralPartners.id, { onDelete: "cascade" }),
   docType: partnerDocTypeEnum("doc_type").notNull(),
+  // Admin-given display title (e.g. "Reporte Q3 2026 de referidos"). Used for
+  // 'report' docs; null for the rest (they display by type label).
+  title: varchar("title", { length: 255 }),
   fileUrl: text("file_url"),
   fileName: varchar("file_name", { length: 255 }),
   status: partnerDocStatusEnum("status").default("pending").notNull(),
-  // Who uploaded it: 'admin' (LeadPrime informational docs) or 'partner'
-  // (signed docs). Drives the split in the enriched Documentación section.
+  // Who uploaded it: 'admin' (LeadPrime informational docs + reports) or
+  // 'partner' (signed docs). Drives the split in the Documentación section.
   uploadedBy: varchar("uploaded_by", { length: 20 }).default("partner").notNull(),
   uploadedAt: timestamp("uploaded_at"),
   verifiedAt: timestamp("verified_at"),

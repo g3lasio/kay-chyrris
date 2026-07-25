@@ -407,23 +407,31 @@ export const partnerAdminRouter = router({
       return { success: true, document: rows[0] };
     }),
 
-  // LeadPrime (admin) uploads an INFORMATIONAL document for a specific partner
-  // — revenue projection, features, informational term sheet. Appears in that
-  // partner's Stage 1 materials only (multi-tenant isolation).
+  // LeadPrime (admin) uploads a document FOR a specific partner:
+  //  - informational materials (revenue projection / features / term sheet info)
+  //    → the partner's "Materiales de LeadPrime".
+  //  - 'report' (with a free title, e.g. "Reporte Q3 2026 de referidos")
+  //    → the partner's "Reportes" section.
+  // Multi-tenant: assigned to input.partnerId only.
   uploadDocument: protectedProcedure
     .input(
       z.object({
         partnerId: z.number().int().positive(),
-        docType: z.enum(["revenue_projection", "features", "term_sheet_info"]),
+        docType: z.enum(["revenue_projection", "features", "term_sheet_info", "report"]),
+        title: z.string().max(255).optional(),
         fileName: z.string().min(1).max(255),
         contentType: z.string().min(3).max(100),
         base64Data: z.string().min(1),
       })
     )
     .mutation(async ({ input }) => {
+      if (input.docType === "report" && !input.title?.trim()) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "El reporte necesita un título" });
+      }
       const doc = await adminUploadPartnerDocument({
         partnerId: input.partnerId,
         docType: input.docType,
+        title: input.title,
         fileName: input.fileName,
         contentType: input.contentType,
         base64Data: input.base64Data,

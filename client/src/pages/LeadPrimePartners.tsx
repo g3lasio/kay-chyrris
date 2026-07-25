@@ -51,48 +51,153 @@ function money(value: string | number): string {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
-/** Small admin file-picker → reads the file as base64 and hands it up. */
-function AdminDocUpload({
-  label,
-  disabled,
-  onFile,
+type AdminDocCategory = "revenue_projection" | "features" | "term_sheet_info" | "report";
+
+const ADMIN_DOC_CATEGORIES: Array<{ value: AdminDocCategory; label: string; group: string }> = [
+  { value: "revenue_projection", label: "Proyección de revenue", group: "Materiales informativos" },
+  { value: "features", label: "Documento de features", group: "Materiales informativos" },
+  { value: "term_sheet_info", label: "Term sheet informativo", group: "Materiales informativos" },
+  { value: "report", label: "Reporte (con título)", group: "Reportes" },
+];
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const r = String(reader.result ?? "");
+      resolve(r.includes(",") ? r.split(",")[1]! : r);
+    };
+    reader.onerror = () => reject(new Error("No se pudo leer el archivo"));
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Admin document upload dialog for a partner: pick a category (informational
+ * materials or a titled report), choose a file, upload. Assigned to that
+ * partner only (multi-tenant isolation enforced server-side).
+ */
+function AdminUploadDialog({
+  open,
+  onOpenChange,
+  onUpload,
+  pending,
 }: {
-  label: string;
-  disabled?: boolean;
-  onFile: (fileName: string, contentType: string, base64Data: string) => void;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onUpload: (input: {
+    docType: AdminDocCategory;
+    title?: string;
+    fileName: string;
+    contentType: string;
+    base64Data: string;
+  }) => Promise<void>;
+  pending: boolean;
 }) {
+  const [category, setCategory] = useState<AdminDocCategory>("revenue_projection");
+  const [title, setTitle] = useState("");
+  const [file, setFile] = useState<File | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const isReport = category === "report";
+
+  const reset = () => {
+    setCategory("revenue_projection");
+    setTitle("");
+    setFile(null);
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  const submit = async () => {
+    if (!file) {
+      toast.error("Elige un archivo");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("El archivo supera 10 MB");
+      return;
+    }
+    if (isReport && !title.trim()) {
+      toast.error("El reporte necesita un título");
+      return;
+    }
+    const base64Data = await readFileAsBase64(file);
+    await onUpload({
+      docType: category,
+      title: isReport ? title.trim() : undefined,
+      fileName: file.name,
+      contentType: file.type || "application/pdf",
+      base64Data,
+    });
+    reset();
+  };
+
   return (
-    <>
-      <input
-        ref={inputRef}
-        type="file"
-        accept=".pdf,.png,.jpg,.jpeg,.webp"
-        className="hidden"
-        onChange={async e => {
-          const file = e.target.files?.[0];
-          if (!file) return;
-          if (file.size > 10 * 1024 * 1024) {
-            toast.error("El archivo supera 10 MB");
-            return;
-          }
-          const base64Data = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => {
-              const r = String(reader.result ?? "");
-              resolve(r.includes(",") ? r.split(",")[1]! : r);
-            };
-            reader.onerror = () => reject(new Error("No se pudo leer el archivo"));
-            reader.readAsDataURL(file);
-          });
-          onFile(file.name, file.type || "application/pdf", base64Data);
-          if (inputRef.current) inputRef.current.value = "";
-        }}
-      />
-      <Button size="sm" variant="outline" disabled={disabled} onClick={() => inputRef.current?.click()}>
-        <Upload className="w-4 h-4 mr-1" /> {label}
-      </Button>
-    </>
+    <Dialog
+      open={open}
+      onOpenChange={v => {
+        if (!v) reset();
+        onOpenChange(v);
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Subir documento para el socio</DialogTitle>
+          <DialogDescription>
+            Se asigna solo a este socio y aparece en su portal. PDF o imagen, máx 10 MB.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Categoría</label>
+            <select
+              value={category}
+              onChange={e => setCategory(e.target.value as AdminDocCategory)}
+              className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <optgroup label="Materiales informativos (Etapa 1 del socio)">
+                {ADMIN_DOC_CATEGORIES.filter(c => c.group === "Materiales informativos").map(c => (
+                  <option key={c.value} value={c.value}>{c.label}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Reportes (documento recurrente)">
+                <option value="report">Reporte (con título)</option>
+              </optgroup>
+            </select>
+          </div>
+
+          {isReport && (
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Título del reporte</label>
+              <Input
+                value={title}
+                onChange={e => setTitle(e.target.value)}
+                placeholder="Reporte Q3 2026 de referidos"
+                maxLength={255}
+              />
+            </div>
+          )}
+
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Archivo</label>
+            <input
+              ref={inputRef}
+              type="file"
+              accept=".pdf,.png,.jpg,.jpeg,.webp"
+              className="block w-full text-sm text-muted-foreground file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-primary file:text-primary-foreground file:cursor-pointer"
+              onChange={e => setFile(e.target.files?.[0] ?? null)}
+            />
+          </div>
+
+          <DialogFooter className="pt-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
+            <Button onClick={submit} disabled={pending || !file || (isReport && !title.trim())}>
+              {pending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+              Subir documento
+            </Button>
+          </DialogFooter>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -112,9 +217,14 @@ function statusBadge(status: string) {
 }
 
 const DOC_LABEL: Record<string, string> = {
-  contract: "Contrato",
+  contract: "Contrato firmado",
+  term_sheet_signed: "Term sheet firmado",
   w9: "W-9",
   ach_authorization: "ACH",
+  revenue_projection: "Proyección de revenue",
+  features: "Documento de features",
+  term_sheet_info: "Term sheet informativo",
+  report: "Reporte",
   other: "Otro",
 };
 
@@ -499,9 +609,10 @@ function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClos
     onError: err => toast.error(err.message),
   });
   const uploadDoc = trpc.partnerAdmin.uploadDocument.useMutation({
-    onSuccess: () => { toast.success("Documento informativo subido"); invalidate(); },
+    onSuccess: () => { toast.success("Documento subido y asignado al socio"); invalidate(); },
     onError: err => toast.error(err.message),
   });
+  const [docUploadOpen, setDocUploadOpen] = useState(false);
   const deleteDoc = trpc.partnerAdmin.deleteDocument.useMutation({
     onSuccess: () => { toast.success("Documento eliminado"); invalidate(); },
     onError: err => toast.error(err.message),
@@ -713,32 +824,34 @@ function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClos
               </TabsContent>
 
               <TabsContent value="documents" className="space-y-4">
-                {/* Admin uploads INFORMATIONAL docs for this partner (brief §2) */}
-                <div className="border rounded-lg p-3 space-y-2">
-                  <p className="text-sm font-medium">Subir documento informativo para este socio</p>
-                  <p className="text-xs text-muted-foreground">
-                    Aparece en la Etapa 1 del socio. Solo lo ve este socio (aislamiento multi-tenant).
-                  </p>
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    {([
-                      ["revenue_projection", "Proyección de revenue"],
-                      ["features", "Documento de features"],
-                      ["term_sheet_info", "Term sheet informativo"],
-                    ] as const).map(([docType, label]) => (
-                      <AdminDocUpload
-                        key={docType}
-                        label={label}
-                        disabled={uploadDoc.isPending}
-                        onFile={(fileName, contentType, base64Data) =>
-                          uploadDoc.mutate({ partnerId, docType, fileName, contentType, base64Data })
-                        }
-                      />
-                    ))}
+                {/* Admin uploads documents FOR this partner (materiales + reportes) */}
+                <div className="flex flex-wrap items-center justify-between gap-2 border rounded-lg p-3">
+                  <div>
+                    <p className="text-sm font-medium">Documentos del socio</p>
+                    <p className="text-xs text-muted-foreground">
+                      Sube materiales informativos o reportes para este socio. Solo él los ve
+                      (aislamiento multi-tenant). Aquí también ves lo que el socio subió firmado.
+                    </p>
                   </div>
+                  <Button size="sm" onClick={() => setDocUploadOpen(true)}>
+                    <Upload className="w-4 h-4 mr-1" /> Subir documento
+                  </Button>
                 </div>
 
+                <AdminUploadDialog
+                  open={docUploadOpen}
+                  onOpenChange={setDocUploadOpen}
+                  pending={uploadDoc.isPending}
+                  onUpload={async ({ docType, title, fileName, contentType, base64Data }) => {
+                    await uploadDoc.mutateAsync({ partnerId, docType, title, fileName, contentType, base64Data });
+                    setDocUploadOpen(false);
+                  }}
+                />
+
                 {data.documents.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-6">Sin documentos subidos.</p>
+                  <p className="text-sm text-muted-foreground text-center py-6">
+                    Sin documentos aún. Usa "Subir documento" para agregar materiales o reportes.
+                  </p>
                 ) : (
                   <div className="overflow-x-auto">
                     <Table>
@@ -755,7 +868,12 @@ function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClos
                         {data.documents.map(doc => (
                           <TableRow key={doc.id}>
                             <TableCell className="font-medium">
-                              {DOC_LABEL[doc.docType] ?? doc.docType}
+                              {doc.docType === "report" && doc.title ? doc.title : DOC_LABEL[doc.docType] ?? doc.docType}
+                              {doc.docType === "report" && (
+                                <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400">
+                                  Reporte
+                                </span>
+                              )}
                               <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded-full ${doc.uploadedBy === "admin" ? "bg-blue-500/15 text-blue-400" : "bg-zinc-500/15 text-zinc-400"}`}>
                                 {doc.uploadedBy === "admin" ? "LeadPrime" : "Socio"}
                               </span>

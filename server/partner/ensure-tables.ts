@@ -25,12 +25,13 @@ const ENUMS: Array<[string, string[]]> = [
 // ... ADD VALUE IF NOT EXISTS runs outside a transaction (autocommit) and is a
 // no-op once present, so this is safe on every boot.
 const ENUM_ADDED_VALUES: Array<[string, string[]]> = [
-  ["partner_doc_type", ["revenue_projection", "features", "term_sheet_info", "term_sheet_signed"]],
+  ["partner_doc_type", ["revenue_projection", "features", "term_sheet_info", "term_sheet_signed", "report"]],
 ];
 
 // Columns added to existing tables (additive). ADD COLUMN IF NOT EXISTS.
 const ADDED_COLUMNS: string[] = [
   `ALTER TABLE partner_documents ADD COLUMN IF NOT EXISTS uploaded_by varchar(20) DEFAULT 'partner' NOT NULL`,
+  `ALTER TABLE partner_documents ADD COLUMN IF NOT EXISTS title varchar(255)`,
   `ALTER TABLE referral_partners ADD COLUMN IF NOT EXISTS materials_reviewed_at timestamp`,
 ];
 

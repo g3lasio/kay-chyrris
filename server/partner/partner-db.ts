@@ -30,8 +30,10 @@ import { getPortalSettings } from "./app-settings";
 // Stage 3 "pago": partner uploads ACH authorization AND confirms contact.
 // Completing all three unlocks the referrals/commissions dashboard.
 
-// Informational doc types (admin-uploaded) shown in stage 1 / Documentación.
+// Informational doc types (admin-uploaded) shown in stage 1 / "Materiales".
 export const INFORMATIONAL_DOC_TYPES = ["revenue_projection", "features", "term_sheet_info"] as const;
+// Report doc types (admin-uploaded, free title) shown in "Reportes".
+export const REPORT_DOC_TYPES = ["report"] as const;
 // Signed doc types (partner-uploaded via LeadSign).
 export const SIGNED_DOC_TYPES = ["term_sheet_signed", "contract", "ach_authorization", "w9"] as const;
 
@@ -137,7 +139,8 @@ const ALLOWED_DOC_MIME = new Set([
 ]);
 
 export type PartnerUploadDocType = "term_sheet_signed" | "contract" | "ach_authorization" | "w9" | "other";
-export type AdminUploadDocType = "revenue_projection" | "features" | "term_sheet_info";
+// Admin-uploaded types: informational materials + free-form reports.
+export type AdminUploadDocType = "revenue_projection" | "features" | "term_sheet_info" | "report";
 
 async function storeDocument(input: {
   partnerId: number;
@@ -146,6 +149,7 @@ async function storeDocument(input: {
   contentType: string;
   base64Data: string;
   uploadedBy: "partner" | "admin";
+  title?: string | null;
 }): Promise<PartnerDocument> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -168,6 +172,7 @@ async function storeDocument(input: {
     .values({
       partnerId: input.partnerId,
       docType: input.docType,
+      title: input.title?.trim() || null,
       fileUrl: url,
       fileName: safeName,
       status: "uploaded",
@@ -190,9 +195,11 @@ export async function uploadPartnerDocument(input: {
 }
 
 /**
- * Admin (LeadPrime) uploads an INFORMATIONAL document for a specific partner
- * (uploaded_by='admin'). These appear in the partner's Stage 1 materials and
- * are auto-marked 'verified' (informational, no verification workflow needed).
+ * Admin (LeadPrime) uploads a document FOR a specific partner (uploaded_by=
+ * 'admin'): informational materials (Stage 1 "Materiales de LeadPrime") or a
+ * free-form 'report' (with an admin title, e.g. "Reporte Q3 2026"). Both are
+ * auto-marked 'verified' — the admin is the source of truth, no verification
+ * workflow needed. Multi-tenant: assigned to input.partnerId only.
  */
 export async function adminUploadPartnerDocument(input: {
   partnerId: number;
@@ -200,7 +207,11 @@ export async function adminUploadPartnerDocument(input: {
   fileName: string;
   contentType: string;
   base64Data: string;
+  title?: string | null;
 }): Promise<PartnerDocument> {
+  if (input.docType === "report" && !input.title?.trim()) {
+    throw new Error("El reporte necesita un título");
+  }
   const doc = await storeDocument({ ...input, uploadedBy: "admin" });
   const db = await getDb();
   if (db) {
