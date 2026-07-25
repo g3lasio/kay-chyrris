@@ -16,7 +16,7 @@ process.env.LEADPRIME_DATABASE_URL =
 delete process.env.RESEND_API_KEY; // emails no-op in this run
 delete process.env.STRIPE_SECRET_KEY;
 
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 async function main() {
   const { ensurePartnerTables } = await import("../server/partner/ensure-tables");
@@ -124,6 +124,29 @@ async function main() {
   const allCodes = await db.select().from(schema.partnerAuthCodes).where(eq(schema.partnerAuthCodes.partnerId, prime!.id));
   check("Rate limit: máx 5 códigos por email por hora", allCodes.length === 5, `${allCodes.length} códigos en la última hora`);
 
+  // OTP brute-force race (review #1): fire many CONCURRENT wrong-code verifies
+  // against a single fresh code; the atomic counter must cap attempts at 5 so
+  // the code cannot be brute-forced past its limit.
+  const bcryptEarly = (await import("bcryptjs")).default;
+  await db.delete(schema.partnerAuthCodes).where(eq(schema.partnerAuthCodes.partnerId, prime!.id));
+  const raceHash = await bcryptEarly.hash("111111", 10);
+  const [raceCode] = await db.insert(schema.partnerAuthCodes).values({
+    partnerId: prime!.id,
+    code: raceHash,
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+  }).returning();
+  await Promise.all(
+    Array.from({ length: 25 }, (_, i) =>
+      auth.verifyPartnerOtp("socios@primecontractors.edu", String(100000 + i).padStart(6, "0"))
+    )
+  );
+  const raceAfter = await db.select().from(schema.partnerAuthCodes).where(eq(schema.partnerAuthCodes.id, raceCode!.id));
+  check(
+    "OTP anti-brute-force: 25 verificaciones concurrentes NO superan el tope de 5 intentos (contador atómico)",
+    raceAfter[0]!.attempts <= 5,
+    `attempts=${raceAfter[0]!.attempts} (esperado ≤ 5)`
+  );
+
   // ── 4. Attribution ──
   // 4a. Via public endpoint logic (?ref= capture path)
   const attr1 = await engine.createAttribution({ referralCode: "prime", referredUserId: "ctr_ref_pays" });
@@ -222,33 +245,52 @@ async function main() {
   const otherDocUrl = await pdb.getPartnerDocumentUrl(other!.id, 99999);
   check("AISLAMIENTO: socio B no puede leer documentos por ID ajeno", otherDocUrl === null);
 
-  // ── 8. Onboarding gate ──
+  // ── 8. Onboarding gate (3-stage journey) ──
   const ob1 = await pdb.getOnboardingState(primeRow);
-  check("Onboarding inicia 0/4, dashboard bloqueado", ob1.completedCount === 0 && !ob1.complete);
-  // Complete the 4 steps (docs directly — upload path needs the storage proxy)
+  check("Onboarding inicia en etapa 1, dashboard bloqueado",
+    ob1.completedStages === 0 && ob1.currentStage === 1 && !ob1.complete);
+  // Complete the 3 stages (docs directly + flags — upload path needs the proxy).
+  await db.update(schema.referralPartners).set({ materialsReviewedAt: new Date() }).where(eq(schema.referralPartners.id, prime!.id));
   await db.insert(schema.partnerDocuments).values([
-    { partnerId: prime!.id, docType: "contract", status: "verified", fileName: "contrato.pdf", uploadedAt: new Date(), verifiedAt: new Date() },
-    { partnerId: prime!.id, docType: "w9", status: "uploaded", fileName: "w9.pdf", uploadedAt: new Date() },
-    { partnerId: prime!.id, docType: "ach_authorization", status: "uploaded", fileName: "ach.pdf", uploadedAt: new Date() },
+    { partnerId: prime!.id, docType: "term_sheet_signed", status: "uploaded", fileName: "ts.pdf", uploadedBy: "partner", uploadedAt: new Date() },
+    { partnerId: prime!.id, docType: "contract", status: "verified", fileName: "contrato.pdf", uploadedBy: "partner", uploadedAt: new Date(), verifiedAt: new Date() },
+    { partnerId: prime!.id, docType: "ach_authorization", status: "uploaded", fileName: "ach.pdf", uploadedBy: "partner", uploadedAt: new Date() },
   ]);
   await db.update(schema.referralPartners).set({ contactConfirmedAt: new Date() }).where(eq(schema.referralPartners.id, prime!.id));
   const primeRow2 = (await db.select().from(schema.referralPartners).where(eq(schema.referralPartners.id, prime!.id)))[0]!;
   const ob2 = await pdb.getOnboardingState(primeRow2);
   const primeRow3 = (await db.select().from(schema.referralPartners).where(eq(schema.referralPartners.id, prime!.id)))[0]!;
-  check("Onboarding 4/4 → onboarding_complete persiste y desbloquea",
-    ob2.complete && primeRow3.onboardingComplete === true, `${ob2.completedCount}/4`);
+  check("Onboarding 3/3 etapas → onboarding_complete persiste y desbloquea",
+    ob2.complete && primeRow3.onboardingComplete === true, `${ob2.completedStages}/3`);
 
-  // ── 9. Payout ──
-  const payout = await pdb.adminGeneratePayout({
-    partnerId: prime!.id,
-    periodStart: new Date("2025-01-01"),
-    periodEnd: new Date("2026-12-31"),
-    method: "ACH",
-  });
+  // ── 9. Payout (double-generation race, review #5) ──
+  // Fire two CONCURRENT generations for the same period. The guarded UPDATE
+  // must let exactly ONE claim the commissions; the other gets zero rows and
+  // rolls back — no commission may ever be stamped by two payouts.
+  const raceResults = await Promise.allSettled([
+    pdb.adminGeneratePayout({ partnerId: prime!.id, periodStart: new Date("2025-01-01"), periodEnd: new Date("2026-12-31"), method: "ACH" }),
+    pdb.adminGeneratePayout({ partnerId: prime!.id, periodStart: new Date("2025-01-01"), periodEnd: new Date("2026-12-31"), method: "ACH" }),
+  ]);
+  const succeeded = raceResults.filter(r => r.status === "fulfilled") as PromiseFulfilledResult<any>[];
+  const allPayouts = await db.select().from(schema.referralPayouts).where(eq(schema.referralPayouts.partnerId, prime!.id));
+  const nonEmptyPayouts = allPayouts.filter(p => parseFloat(p.totalAmount) > 0);
+  check(
+    "Liquidación concurrente: exactamente UNA reclama las comisiones (sin doble pago)",
+    succeeded.length === 1 && nonEmptyPayouts.length === 1,
+    `${succeeded.length} generaciones OK, ${nonEmptyPayouts.length} payouts con monto`
+  );
+  const payout = succeeded[0]!.value;
   // pending before payout: 30+30+10+30+100+50-30(reversal) = 220.00
   check("Liquidación suma pendientes netos (reversiones incluidas)",
     payout.payout.totalAmount === "220.00" && payout.commissionCount === 7,
     `total=${payout.payout.totalAmount} (${payout.commissionCount} filas)`);
+
+  // Every claimed commission points at exactly the one payout (no split).
+  const claimedComms = await db.select().from(schema.referralCommissions)
+    .where(and(eq(schema.referralCommissions.partnerId, prime!.id), sql`${schema.referralCommissions.payoutId} IS NOT NULL`));
+  check("Ninguna comisión quedó vinculada a dos liquidaciones",
+    claimedComms.every(c => c.payoutId === payout.payout.id));
+
   await pdb.adminMarkPayoutPaid(payout.payout.id, "ACH");
   const paidComms = await db.select().from(schema.referralCommissions).where(eq(schema.referralCommissions.payoutId, payout.payout.id));
   check("Marcar pagada propaga payout_status a las comisiones",

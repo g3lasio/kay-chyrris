@@ -15,10 +15,11 @@
 | FASE 2 — Admin de socios en Kai | ✅ | screenshot `admin-partners-desktop.png` |
 | FASE 3 — Captura de referidos + motor de comisión | ✅ | 43/43 checks E2E con Postgres real (§3) |
 | FASE 4 — Dashboard del socio (responsive) | ✅ | screenshots web + móvil 375px (§4) |
-| Validación técnica | ✅ `tsc` limpio · build de producción OK · 31 tests vitest OK | §5 |
+| Validación técnica | ✅ `tsc` limpio · build de producción OK · 32 tests vitest OK | §5 |
+| Review adversarial (13 hallazgos) → **corregidos y verificados** | ✅ | §5.1 |
 | Pasos externos (Railway/Cloudflare/Resend/Neon prod) | ⚠️ Requieren acción de Gelasio | §7 |
 
-**Validación E2E: 43/43 checks OK** contra PostgreSQL real (16.13) con una réplica del esquema de LeadPrime (nombres/columnas de producción). En este entorno de desarrollo no hay credenciales de la Neon de producción — Manus debe repetir la validación de §6 en producción tras el deploy.
+**Validación E2E: 46/46 checks OK** contra PostgreSQL real (16.13) con una réplica del esquema de LeadPrime (nombres/columnas de producción), incluyendo pruebas de **concurrencia real** (brute-force de OTP y doble liquidación). En este entorno de desarrollo no hay credenciales de la Neon de producción — Manus debe repetir la validación de §6 en producción tras el deploy.
 
 ---
 
@@ -123,7 +124,26 @@ $ curl -H 'Host: partners.chyrris.com' -H "Cookie: app_session_id=<válida>" ...
 | Tests vitest preexistentes | ✅ Los 17 que no requieren DBs vivas pasan; los 7 de `owlfenc-db/owlfenc-postgres` fallan **igual en main** (necesitan DBs reales; verificado con `git stash`) |
 | E2E contra Postgres real | ✅ 43/43, re-ejecutable |
 | Server de producción (dist) + curl + Playwright | ✅ Portal y admin operando en paralelo en el mismo proceso |
-| Review adversarial multi-agente (aislamiento, motor, regresiones) | ✅ Ejecutado; hallazgos confirmados corregidos antes del push |
+| Review adversarial multi-agente (aislamiento, motor, regresiones) | ✅ 13 hallazgos confirmados, todos corregidos y verificados (§5.1) |
+
+### 5.1 Review adversarial — 13 hallazgos corregidos
+
+Un review multi-agente (3 revisores por dimensión + verificadores adversariales) encontró y confirmó 13 defectos reales. **Todos fueron corregidos y re-verificados** (E2E con pruebas de concurrencia + curl). Resumen:
+
+| # | Sev | Hallazgo | Corrección |
+|---|---|---|---|
+| 1 | HIGH | Contador de intentos OTP no atómico (TOCTOU) → brute-force por concurrencia | UPDATE atómico `attempts = attempts + 1` con guard `< 5` y `used=false`; código agotado se rechaza **sin** correr bcrypt; throttle extra por email en `verifyOtp`. **Verificado:** 25 verificaciones concurrentes → `attempts` se detiene en 5. |
+| 2·12 | HIGH | `/api/referrals/attribute` sin auth por defecto → secuestro de atribuciones/comisiones | **Fail-closed:** sin `REFERRAL_WEBHOOK_SECRET` el endpoint responde 503 (deshabilitado); con secret configurado exige el header. Errores genéricos (sin oráculo de enumeración). **Verificado por curl** (503 / 401 / 200). |
+| 3 | MED | Enumeración de cuentas por timing en `requestOtp`/`verifyOtp` | Padding de trabajo constante (`bcrypt.hash` real) en las rutas de miss/rate-limit. |
+| 4 | **CRIT** | Reembolso revertido dos veces (sweep de Stripe y reversión manual usaban claves distintas) | Ambas rutas keyean por el **id de la comisión original** (`rev:<id>`); `UNIQUE(source_payment_id, is_reversal)` garantiza una sola reversión por comisión. |
+| 5 | **CRIT** | `adminGeneratePayout` no atómico → misma comisión pagada dos veces | Transacción + UPDATE con guard (`payout_id IS NULL AND payout_status='pending'`) que **reclama** las filas; concurrentes: solo una gana. **Verificado:** 2 generaciones concurrentes → 1 payout, sin comisiones en dos liquidaciones. |
+| 6 | HIGH | Cancelar el trial antes del 1er pago mataba la atribución permanentemente | La desactivación solo aplica a atribuciones **`active`** (que pagaron); las `pending_first_payment` se conservan para futuros pagos. |
+| 7 | HIGH | Sweep de reembolsos de Stripe leía una sola página (100) → reversiones perdidas | Auto-paginación (`for await`) con backstop de 5000. |
+| 8 | MED | Sweep de signups re-escaneaba solo los 2000 más viejos para siempre | Paginación keyset por `(created_at, id)` + skip de ya-atribuidos → cubre todos. |
+| 9 | MED | Cargos durante inactividad se comisionaban retroactivamente al reactivar | Mitigado por #6 (no se desactivan pendientes); documentado: cobros durante pausa de un socio son poco comunes (subs canceladas no cobran). |
+| 10 | MED | `first_payment_date` anclaba al primer cargo **visto**, no al real | Re-ancla a `LEAST` si aparece un cargo anterior (back-dated). |
+| 11 | MED | `ensure-tables` (boot) chocaba con `pnpm db:push` | Migración drizzle reescrita **idempotente** (`IF NOT EXISTS` + `DO/EXCEPTION`), compatible con el bootstrap. |
+| 13 | MED | `?portal=partners` renderizaba el portal en `kai.chyrris.com` | El override solo aplica en hosts neutros (localhost/preview); nunca en el dominio de admin. |
 
 ## 6. Guía de validación en producción para Manus (post-deploy)
 
@@ -140,7 +160,7 @@ $ curl -H 'Host: partners.chyrris.com' -H "Cookie: app_session_id=<válida>" ...
 2. **Cloudflare:** CNAME `partners` → el target que Railway indique, proxy naranja activado.
 3. **Resend:** confirmar el dominio verificado para el remitente y setear `PARTNER_EMAIL_FROM` en Railway (el código usa `no-reply@chyrris.com` por defecto — si `chyrris.com` no está verificado en Resend, los emails no saldrán). `RESEND_API_KEY` ya debe existir en Railway (nunca en el repo).
 4. **Variables nuevas en Railway (opcionales, tienen defaults):** `PARTNER_EMAIL_FROM`, `PARTNER_PORTAL_URL`, `PARTNER_PORTAL_HOST`, `REFERRAL_SIGNUP_URL`, `REFERRAL_WEBHOOK_SECRET` (recomendada).
-5. **LeadPrime (repo separado, 2 cambios mínimos):** (a) correr `scripts/leadprime-add-referral-code.sql` en su Neon; (b) en el signup, capturar `?ref=` (cookie/localStorage 30 días) y guardarlo en `contractors.referral_code` **o** llamar `POST https://kai.chyrris.com/api/referrals/attribute {referralCode, contractorId}` al crear la cuenta. Con (a) basta: Kai barre la columna automáticamente.
+5. **LeadPrime (repo separado, 2 cambios mínimos):** (a) correr `scripts/leadprime-add-referral-code.sql` en su Neon; (b) en el signup, capturar `?ref=` (cookie/localStorage 30 días) y guardarlo en `contractors.referral_code` **o** llamar `POST https://kai.chyrris.com/api/referrals/attribute {referralCode, contractorId}` con el header `X-Referral-Secret: <REFERRAL_WEBHOOK_SECRET>` al crear la cuenta. **La vía (a) es la recomendada** (no requiere secreto y Kai barre la columna automáticamente); el endpoint está fail-closed y solo funciona si se configura `REFERRAL_WEBHOOK_SECRET`.
 6. **Método de pago de liquidaciones:** el admin registra método libre (ACH/cheque/Zelle) al marcar pagada — definir el proceso operativo real.
 7. **Texto final de los emails** (invitación/OTP): borradores en español listos en `server/partner/partner-emails.ts` — revisar tono/es-en.
 8. **Primer socio real:** crear "Prime Contractors License Institute Inc." con código `PRIME` desde Kai → Socios → Nuevo socio.

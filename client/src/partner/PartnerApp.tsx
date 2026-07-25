@@ -10,6 +10,7 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import PartnerLogin from "./pages/PartnerLogin";
 import PartnerDashboard from "./pages/PartnerDashboard";
 import PartnerDocuments from "./pages/PartnerDocuments";
+import PartnerInvitations from "./pages/PartnerInvitations";
 import PartnerProtectedRoute from "./PartnerProtectedRoute";
 import "./partner.css";
 
@@ -40,6 +41,11 @@ export default function PartnerApp() {
             <Route path="/">
               <PartnerProtectedRoute>
                 <PartnerDashboard />
+              </PartnerProtectedRoute>
+            </Route>
+            <Route path="/invitaciones">
+              <PartnerProtectedRoute>
+                <PartnerInvitations />
               </PartnerProtectedRoute>
             </Route>
             <Route path="/documentos">

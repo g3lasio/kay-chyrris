@@ -3,11 +3,12 @@
  * simple nav (Panel / Documentos) and logout. Mobile-first.
  */
 import { Link, useLocation } from "wouter";
-import { FileText, LayoutDashboard, LogOut } from "lucide-react";
+import { FileText, LayoutDashboard, LogOut, UserPlus } from "lucide-react";
 import { usePartnerAuth } from "./usePartnerAuth";
 
 const NAV = [
   { path: "/", label: "Panel", icon: LayoutDashboard },
+  { path: "/invitaciones", label: "Invitar", icon: UserPlus },
   { path: "/documentos", label: "Documentos", icon: FileText },
 ];
 
@@ -85,8 +86,9 @@ export default function PartnerLayout({ children }: { children: React.ReactNode 
         <div className="mx-auto max-w-6xl px-4 py-6 sm:py-8">{children}</div>
       </main>
 
-      <footer className="py-6 text-center text-xs text-muted-foreground">
-        Portal de Socios de LeadPrime · Comisiones sobre revenue efectivamente cobrado
+      <footer className="py-6 text-center text-xs text-muted-foreground space-y-1">
+        <p className="italic text-muted-foreground/80">El que no vive para servir, no sirve para vivir.</p>
+        <p>Portal de Socios de LeadPrime · Comisiones sobre revenue efectivamente cobrado</p>
       </footer>
     </div>
   );

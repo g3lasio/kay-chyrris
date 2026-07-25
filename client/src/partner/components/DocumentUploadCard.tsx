@@ -13,7 +13,7 @@ import { CheckCircle2, Loader2, Upload } from "lucide-react";
 const ACCEPT = ".pdf,.png,.jpg,.jpeg,.webp";
 const MAX_BYTES = 10 * 1024 * 1024;
 
-type DocType = "contract" | "w9" | "ach_authorization" | "other";
+type DocType = "term_sheet_signed" | "contract" | "w9" | "ach_authorization" | "other";
 
 export default function DocumentUploadCard({
   docType,

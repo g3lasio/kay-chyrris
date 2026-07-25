@@ -11,7 +11,7 @@
  *  - Max 5 OTP requests per email per hour; max 5 verify attempts per code.
  *  - No self-registration: login only works for partners created by admin.
  */
-import { and, desc, eq, gt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, lt, sql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
 import { getDb } from "../db";
@@ -27,6 +27,34 @@ const OTP_EXPIRY_MINUTES = 10;
 const OTP_MAX_REQUESTS_PER_HOUR = 5;
 const OTP_MAX_ATTEMPTS = 5;
 const SESSION_EXPIRY_DAYS = 7;
+const BCRYPT_COST = 10;
+// Second-layer throttle on verifyOtp itself (defense in depth on top of the
+// atomic per-code counter): cap verify attempts per email per rolling window.
+const VERIFY_MAX_PER_WINDOW = 20;
+const VERIFY_WINDOW_MS = 10 * 60 * 1000;
+const verifyAttempts = new Map<string, number[]>();
+
+function verifyThrottled(email: string): boolean {
+  const now = Date.now();
+  const key = email.toLowerCase();
+  const hits = (verifyAttempts.get(key) ?? []).filter(t => t > now - VERIFY_WINDOW_MS);
+  hits.push(now);
+  verifyAttempts.set(key, hits);
+  if (verifyAttempts.size > 10_000) verifyAttempts.clear(); // growth guard
+  return hits.length > VERIFY_MAX_PER_WINDOW;
+}
+
+// Burn a comparable amount of CPU to the real bcrypt work (hash on the OTP
+// request path, compare on the verify path) so response time does not leak
+// account/code existence — constant-work padding for the neutral-response
+// guarantee. Uses a real bcrypt.hash so the work is genuinely equivalent.
+async function burnTiming(): Promise<void> {
+  try {
+    await bcrypt.hash("timing-pad-probe", BCRYPT_COST);
+  } catch {
+    /* best-effort padding */
+  }
+}
 
 // Same short-lived cache trick as admin validateSession — partner dashboard
 // fires several queries per page and each one resolves the session.
@@ -75,6 +103,10 @@ export async function requestPartnerOtp(email: string): Promise<{ success: true;
 
     const partner = await findLoginPartner(email);
     if (!partner) {
+      // Burn a comparable amount of CPU to the existing-partner path (which
+      // runs a bcrypt.hash below) so response time cannot be used to
+      // enumerate accounts — keeps the neutral-response guarantee real.
+      await burnTiming();
       console.log("[Partner Auth] OTP requested for unknown/inactive email (neutral response)");
       return neutral;
     }
@@ -90,12 +122,13 @@ export async function requestPartnerOtp(email: string): Promise<{ success: true;
         )
       );
     if ((recentCount[0]?.count ?? 0) >= OTP_MAX_REQUESTS_PER_HOUR) {
+      await burnTiming();
       console.warn(`[Partner Auth] OTP rate limit hit for partner ${partner.id}`);
       return neutral;
     }
 
     const code = generateOtpCode();
-    const codeHash = await bcrypt.hash(code, 10);
+    const codeHash = await bcrypt.hash(code, BCRYPT_COST);
     const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
 
     await db.insert(partnerAuthCodes).values({
@@ -131,8 +164,17 @@ export async function verifyPartnerOtp(
     const db = await getDb();
     if (!db) return { success: false, error: "Service unavailable" };
 
+    // Second-layer throttle so brute force is capped even if the per-code
+    // counter is ever bypassed. Applied before the lookup and independent
+    // of account existence (still burns timing on the miss path).
+    if (verifyThrottled(email)) {
+      await burnTiming();
+      return { success: false, error: "Demasiados intentos. Espera unos minutos." };
+    }
+
     const partner = await findLoginPartner(email);
     if (!partner) {
+      await burnTiming();
       return { success: false, error: "Código inválido o expirado" };
     }
 
@@ -152,17 +194,30 @@ export async function verifyPartnerOtp(
 
     const authCode = rows[0];
     if (!authCode) {
+      await burnTiming();
       return { success: false, error: "Código inválido o expirado" };
     }
-    if (authCode.attempts >= OTP_MAX_ATTEMPTS) {
+
+    // ATOMIC attempt counter: increment only while under the cap, unused and
+    // unexpired, using a SQL expression (attempts = attempts + 1) so
+    // concurrent verify calls cannot all read attempts=0 and bypass the cap
+    // (TOCTOU). If zero rows match, the code is exhausted/used → reject
+    // WITHOUT running bcrypt, so a burned-out code cannot be brute-forced.
+    const bumped = await db
+      .update(partnerAuthCodes)
+      .set({ attempts: sql`${partnerAuthCodes.attempts} + 1` })
+      .where(
+        and(
+          eq(partnerAuthCodes.id, authCode.id),
+          eq(partnerAuthCodes.used, false),
+          lt(partnerAuthCodes.attempts, OTP_MAX_ATTEMPTS)
+        )
+      )
+      .returning({ id: partnerAuthCodes.id });
+    if (bumped.length === 0) {
+      await burnTiming();
       return { success: false, error: "Demasiados intentos. Solicita un código nuevo." };
     }
-
-    // Count the attempt before comparing so a failed compare still burns one.
-    await db
-      .update(partnerAuthCodes)
-      .set({ attempts: authCode.attempts + 1 })
-      .where(eq(partnerAuthCodes.id, authCode.id));
 
     const matches = await bcrypt.compare(code.trim(), authCode.code);
     if (!matches) {

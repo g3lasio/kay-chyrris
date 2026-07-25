@@ -1,10 +1,17 @@
-CREATE TYPE "public"."attribution_status" AS ENUM('pending_first_payment', 'active', 'inactive');--> statement-breakpoint
-CREATE TYPE "public"."commission_payout_status" AS ENUM('pending', 'paid');--> statement-breakpoint
-CREATE TYPE "public"."partner_doc_status" AS ENUM('pending', 'uploaded', 'verified');--> statement-breakpoint
-CREATE TYPE "public"."partner_doc_type" AS ENUM('contract', 'w9', 'ach_authorization', 'other');--> statement-breakpoint
-CREATE TYPE "public"."payout_status" AS ENUM('pending', 'paid');--> statement-breakpoint
-CREATE TYPE "public"."referral_partner_status" AS ENUM('invited', 'active', 'paused', 'inactive');--> statement-breakpoint
-CREATE TABLE "partner_auth_codes" (
+-- Partner Referral Portal — additive, IDEMPOTENT migration.
+--
+-- Written idempotent (guarded CREATEs) on purpose: the app also creates these
+-- objects at boot via server/partner/ensure-tables.ts (Kai's deploy runs
+-- `pnpm start`, not `drizzle-kit migrate`). Guards let `pnpm db:push` run
+-- safely against a database that already booted the new code, and vice versa,
+-- without "type/relation already exists" failures.
+DO $$ BEGIN CREATE TYPE "public"."attribution_status" AS ENUM('pending_first_payment', 'active', 'inactive'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;--> statement-breakpoint
+DO $$ BEGIN CREATE TYPE "public"."commission_payout_status" AS ENUM('pending', 'paid'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;--> statement-breakpoint
+DO $$ BEGIN CREATE TYPE "public"."partner_doc_status" AS ENUM('pending', 'uploaded', 'verified'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;--> statement-breakpoint
+DO $$ BEGIN CREATE TYPE "public"."partner_doc_type" AS ENUM('contract', 'w9', 'ach_authorization', 'other'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;--> statement-breakpoint
+DO $$ BEGIN CREATE TYPE "public"."payout_status" AS ENUM('pending', 'paid'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;--> statement-breakpoint
+DO $$ BEGIN CREATE TYPE "public"."referral_partner_status" AS ENUM('invited', 'active', 'paused', 'inactive'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "partner_auth_codes" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"partner_id" integer NOT NULL,
 	"code" varchar(100) NOT NULL,
@@ -14,7 +21,7 @@ CREATE TABLE "partner_auth_codes" (
 	"created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "partner_documents" (
+CREATE TABLE IF NOT EXISTS "partner_documents" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"partner_id" integer NOT NULL,
 	"doc_type" "partner_doc_type" NOT NULL,
@@ -26,7 +33,7 @@ CREATE TABLE "partner_documents" (
 	"created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "partner_sessions" (
+CREATE TABLE IF NOT EXISTS "partner_sessions" (
 	"id" varchar(255) PRIMARY KEY NOT NULL,
 	"partner_id" integer NOT NULL,
 	"ip_address" varchar(45),
@@ -35,7 +42,7 @@ CREATE TABLE "partner_sessions" (
 	"created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "referral_attributions" (
+CREATE TABLE IF NOT EXISTS "referral_attributions" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"partner_id" integer NOT NULL,
 	"referred_user_id" varchar(100) NOT NULL,
@@ -48,7 +55,7 @@ CREATE TABLE "referral_attributions" (
 	CONSTRAINT "referral_attributions_referred_user_id_unique" UNIQUE("referred_user_id")
 );
 --> statement-breakpoint
-CREATE TABLE "referral_commissions" (
+CREATE TABLE IF NOT EXISTS "referral_commissions" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"partner_id" integer NOT NULL,
 	"attribution_id" integer NOT NULL,
@@ -63,7 +70,7 @@ CREATE TABLE "referral_commissions" (
 	"created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "referral_partners" (
+CREATE TABLE IF NOT EXISTS "referral_partners" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"name" varchar(255) NOT NULL,
 	"referral_code" varchar(50) NOT NULL,
@@ -82,7 +89,7 @@ CREATE TABLE "referral_partners" (
 	CONSTRAINT "referral_partners_contact_email_unique" UNIQUE("contact_email")
 );
 --> statement-breakpoint
-CREATE TABLE "referral_payouts" (
+CREATE TABLE IF NOT EXISTS "referral_payouts" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"partner_id" integer NOT NULL,
 	"period_start" timestamp NOT NULL,
@@ -95,16 +102,16 @@ CREATE TABLE "referral_payouts" (
 	"created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-ALTER TABLE "partner_auth_codes" ADD CONSTRAINT "partner_auth_codes_partner_id_referral_partners_id_fk" FOREIGN KEY ("partner_id") REFERENCES "public"."referral_partners"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "partner_documents" ADD CONSTRAINT "partner_documents_partner_id_referral_partners_id_fk" FOREIGN KEY ("partner_id") REFERENCES "public"."referral_partners"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "partner_sessions" ADD CONSTRAINT "partner_sessions_partner_id_referral_partners_id_fk" FOREIGN KEY ("partner_id") REFERENCES "public"."referral_partners"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "referral_attributions" ADD CONSTRAINT "referral_attributions_partner_id_referral_partners_id_fk" FOREIGN KEY ("partner_id") REFERENCES "public"."referral_partners"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "referral_commissions" ADD CONSTRAINT "referral_commissions_partner_id_referral_partners_id_fk" FOREIGN KEY ("partner_id") REFERENCES "public"."referral_partners"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "referral_commissions" ADD CONSTRAINT "referral_commissions_attribution_id_referral_attributions_id_fk" FOREIGN KEY ("attribution_id") REFERENCES "public"."referral_attributions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "referral_commissions" ADD CONSTRAINT "referral_commissions_payout_id_referral_payouts_id_fk" FOREIGN KEY ("payout_id") REFERENCES "public"."referral_payouts"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "referral_payouts" ADD CONSTRAINT "referral_payouts_partner_id_referral_partners_id_fk" FOREIGN KEY ("partner_id") REFERENCES "public"."referral_partners"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-CREATE INDEX "idx_partner_auth_codes_partner" ON "partner_auth_codes" USING btree ("partner_id","created_at");--> statement-breakpoint
-CREATE INDEX "idx_partner_documents_partner" ON "partner_documents" USING btree ("partner_id","doc_type");--> statement-breakpoint
-CREATE INDEX "idx_referral_attributions_partner" ON "referral_attributions" USING btree ("partner_id","status");--> statement-breakpoint
-CREATE UNIQUE INDEX "uq_referral_commissions_source" ON "referral_commissions" USING btree ("source_payment_id","is_reversal");--> statement-breakpoint
-CREATE INDEX "idx_referral_commissions_partner" ON "referral_commissions" USING btree ("partner_id","payout_status","charge_date");
+DO $$ BEGIN ALTER TABLE "partner_auth_codes" ADD CONSTRAINT "partner_auth_codes_partner_id_referral_partners_id_fk" FOREIGN KEY ("partner_id") REFERENCES "public"."referral_partners"("id") ON DELETE cascade ON UPDATE no action; EXCEPTION WHEN duplicate_object THEN NULL; END $$;--> statement-breakpoint
+DO $$ BEGIN ALTER TABLE "partner_documents" ADD CONSTRAINT "partner_documents_partner_id_referral_partners_id_fk" FOREIGN KEY ("partner_id") REFERENCES "public"."referral_partners"("id") ON DELETE cascade ON UPDATE no action; EXCEPTION WHEN duplicate_object THEN NULL; END $$;--> statement-breakpoint
+DO $$ BEGIN ALTER TABLE "partner_sessions" ADD CONSTRAINT "partner_sessions_partner_id_referral_partners_id_fk" FOREIGN KEY ("partner_id") REFERENCES "public"."referral_partners"("id") ON DELETE cascade ON UPDATE no action; EXCEPTION WHEN duplicate_object THEN NULL; END $$;--> statement-breakpoint
+DO $$ BEGIN ALTER TABLE "referral_attributions" ADD CONSTRAINT "referral_attributions_partner_id_referral_partners_id_fk" FOREIGN KEY ("partner_id") REFERENCES "public"."referral_partners"("id") ON DELETE cascade ON UPDATE no action; EXCEPTION WHEN duplicate_object THEN NULL; END $$;--> statement-breakpoint
+DO $$ BEGIN ALTER TABLE "referral_commissions" ADD CONSTRAINT "referral_commissions_partner_id_referral_partners_id_fk" FOREIGN KEY ("partner_id") REFERENCES "public"."referral_partners"("id") ON DELETE cascade ON UPDATE no action; EXCEPTION WHEN duplicate_object THEN NULL; END $$;--> statement-breakpoint
+DO $$ BEGIN ALTER TABLE "referral_commissions" ADD CONSTRAINT "referral_commissions_attribution_id_referral_attributions_id_fk" FOREIGN KEY ("attribution_id") REFERENCES "public"."referral_attributions"("id") ON DELETE cascade ON UPDATE no action; EXCEPTION WHEN duplicate_object THEN NULL; END $$;--> statement-breakpoint
+DO $$ BEGIN ALTER TABLE "referral_commissions" ADD CONSTRAINT "referral_commissions_payout_id_referral_payouts_id_fk" FOREIGN KEY ("payout_id") REFERENCES "public"."referral_payouts"("id") ON DELETE set null ON UPDATE no action; EXCEPTION WHEN duplicate_object THEN NULL; END $$;--> statement-breakpoint
+DO $$ BEGIN ALTER TABLE "referral_payouts" ADD CONSTRAINT "referral_payouts_partner_id_referral_partners_id_fk" FOREIGN KEY ("partner_id") REFERENCES "public"."referral_partners"("id") ON DELETE cascade ON UPDATE no action; EXCEPTION WHEN duplicate_object THEN NULL; END $$;--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_partner_auth_codes_partner" ON "partner_auth_codes" USING btree ("partner_id","created_at");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_partner_documents_partner" ON "partner_documents" USING btree ("partner_id","doc_type");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_referral_attributions_partner" ON "referral_attributions" USING btree ("partner_id","status");--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_referral_commissions_source" ON "referral_commissions" USING btree ("source_payment_id","is_reversal");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_referral_commissions_partner" ON "referral_commissions" USING btree ("partner_id","payout_status","charge_date");

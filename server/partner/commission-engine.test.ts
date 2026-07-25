@@ -5,9 +5,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildReferralLink,
+  buildShortReferralLink,
   centsToDecimal,
   computeCommissionCents,
   resolveAppliedPct,
+  reversalKey,
 } from "./commission-engine";
 import { allowAdminSession, allowPartnerSession, isNeutralHost, isPartnerHost } from "./hostname";
 
@@ -60,6 +62,16 @@ describe("commission amounts", () => {
   });
 });
 
+describe("reversal idempotency key", () => {
+  it("both the Stripe sweep and the manual admin reversal key by the original commission id", () => {
+    // Same original commission → same key → UNIQUE(source,is_reversal) dedupes
+    // across both paths, so a charge is reversed at most once.
+    expect(reversalKey(42)).toBe("rev:42");
+    expect(reversalKey(42)).toBe(reversalKey(42));
+    expect(reversalKey(42)).not.toBe(reversalKey(43));
+  });
+});
+
 describe("referral link", () => {
   it("builds the signup link with the code", () => {
     expect(buildReferralLink("PRIME")).toBe("https://leadprime.chyrris.com/signup?ref=PRIME");
@@ -67,6 +79,22 @@ describe("referral link", () => {
 
   it("URL-encodes unusual codes", () => {
     expect(buildReferralLink("A B")).toContain("ref=A%20B");
+  });
+});
+
+describe("short referral link (social bios)", () => {
+  it("builds leadprime.chyrris.com/r/<code> lowercased", () => {
+    expect(buildShortReferralLink("PRIME")).toBe("https://leadprime.chyrris.com/r/prime");
+  });
+
+  it("uses the admin-configured base and trims trailing slashes", () => {
+    expect(buildShortReferralLink("PRIME", "https://lp.example.com/")).toBe("https://lp.example.com/r/prime");
+  });
+
+  it("attributes case-insensitively — short /r/prime resolves the same as ?ref=PRIME", () => {
+    // Both links carry the code; the engine's findPartnerByCode compares
+    // case-insensitively, so the lowercased short link resolves PRIME.
+    expect(buildShortReferralLink("prime")).toBe(buildShortReferralLink("PRIME"));
   });
 });
 

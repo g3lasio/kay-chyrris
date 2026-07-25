@@ -39,12 +39,61 @@ import {
   Play,
   Plus,
   RefreshCcw,
+  Settings,
+  Trash2,
   Undo2,
+  Upload,
 } from "lucide-react";
+import { useRef } from "react";
 
 function money(value: string | number): string {
   const n = typeof value === "number" ? value : parseFloat(value || "0");
   return n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
+/** Small admin file-picker → reads the file as base64 and hands it up. */
+function AdminDocUpload({
+  label,
+  disabled,
+  onFile,
+}: {
+  label: string;
+  disabled?: boolean;
+  onFile: (fileName: string, contentType: string, base64Data: string) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".pdf,.png,.jpg,.jpeg,.webp"
+        className="hidden"
+        onChange={async e => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          if (file.size > 10 * 1024 * 1024) {
+            toast.error("El archivo supera 10 MB");
+            return;
+          }
+          const base64Data = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              const r = String(reader.result ?? "");
+              resolve(r.includes(",") ? r.split(",")[1]! : r);
+            };
+            reader.onerror = () => reject(new Error("No se pudo leer el archivo"));
+            reader.readAsDataURL(file);
+          });
+          onFile(file.name, file.type || "application/pdf", base64Data);
+          if (inputRef.current) inputRef.current.value = "";
+        }}
+      />
+      <Button size="sm" variant="outline" disabled={disabled} onClick={() => inputRef.current?.click()}>
+        <Upload className="w-4 h-4 mr-1" /> {label}
+      </Button>
+    </>
+  );
 }
 
 function shortDate(value: string | Date): string {
@@ -84,6 +133,7 @@ export default function LeadPrimePartners() {
   });
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [detailId, setDetailId] = useState<number | null>(null);
 
   const partners = listQuery.data ?? [];
@@ -100,6 +150,9 @@ export default function LeadPrimePartners() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" size="icon" onClick={() => setSettingsOpen(true)} title="Ajustes del portal">
+            <Settings className="w-4 h-4" />
+          </Button>
           <Button variant="outline" onClick={() => runSync.mutate()} disabled={runSync.isPending}>
             {runSync.isPending ? (
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -178,10 +231,98 @@ export default function LeadPrimePartners() {
       </Card>
 
       <CreatePartnerDialog open={createOpen} onOpenChange={setCreateOpen} />
+      <PortalSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       {detailId !== null && (
         <PartnerDetailDialog partnerId={detailId} onClose={() => setDetailId(null)} />
       )}
     </div>
+  );
+}
+
+// ── Ajustes del portal (links de LeadPrime + modo de invitación) ────────────
+
+function PortalSettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const settingsQuery = trpc.partnerAdmin.getSettings.useQuery(undefined, { enabled: open });
+  const update = trpc.partnerAdmin.updateSettings.useMutation({
+    onSuccess: () => { toast.success("Ajustes guardados"); onOpenChange(false); },
+    onError: err => toast.error(err.message),
+  });
+  const [landing, setLanding] = useState("");
+  const [production, setProduction] = useState("");
+  const [shortBase, setShortBase] = useState("");
+  const [mode, setMode] = useState<"auto" | "approval">("auto");
+
+  // Seed the form once settings load.
+  const loaded = settingsQuery.data;
+  const seededRef = useRef(false);
+  if (loaded && !seededRef.current) {
+    seededRef.current = true;
+    setLanding(loaded.leadprimeLandingUrl);
+    setProduction(loaded.leadprimeProductionUrl);
+    setShortBase(loaded.shortLinkBase);
+    setMode(loaded.invitationMode);
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={v => { if (!v) seededRef.current = false; onOpenChange(v); }}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Ajustes del Portal de Socios</DialogTitle>
+          <DialogDescription>
+            Links de LeadPrime que el socio comparte, y cómo se manejan las invitaciones.
+          </DialogDescription>
+        </DialogHeader>
+        {settingsQuery.isLoading ? (
+          <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div>
+        ) : (
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Landing page</label>
+              <Input value={landing} onChange={e => setLanding(e.target.value)} placeholder="https://leadprime.chyrris.com" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Sitio de producción</label>
+              <Input value={production} onChange={e => setProduction(e.target.value)} placeholder="https://app.leadprime.chyrris.com" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Base del link corto de referido</label>
+              <Input value={shortBase} onChange={e => setShortBase(e.target.value)} placeholder="https://leadprime.chyrris.com" />
+              <p className="text-xs text-muted-foreground">
+                Se muestra como leadprime.chyrris.com/r/CODIGO. El redirect /r/CODE vive en el repo de LeadPrime.
+              </p>
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Modo de invitaciones</label>
+              <select
+                value={mode}
+                onChange={e => setMode(e.target.value as "auto" | "approval")}
+                className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="auto">Automático (se envían al instante)</option>
+                <option value="approval">Con aprobación de LeadPrime</option>
+              </select>
+            </div>
+            <DialogFooter className="pt-2">
+              <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
+              <Button
+                onClick={() =>
+                  update.mutate({
+                    leadprimeLandingUrl: landing.trim(),
+                    leadprimeProductionUrl: production.trim(),
+                    shortLinkBase: shortBase.trim(),
+                    invitationMode: mode,
+                  })
+                }
+                disabled={update.isPending}
+              >
+                {update.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                Guardar
+              </Button>
+            </DialogFooter>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -357,6 +498,19 @@ function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClos
     },
     onError: err => toast.error(err.message),
   });
+  const uploadDoc = trpc.partnerAdmin.uploadDocument.useMutation({
+    onSuccess: () => { toast.success("Documento informativo subido"); invalidate(); },
+    onError: err => toast.error(err.message),
+  });
+  const deleteDoc = trpc.partnerAdmin.deleteDocument.useMutation({
+    onSuccess: () => { toast.success("Documento eliminado"); invalidate(); },
+    onError: err => toast.error(err.message),
+  });
+  const invitationsQuery = trpc.partnerAdmin.listInvitations.useQuery({ partnerId });
+  const approveInvitation = trpc.partnerAdmin.approveInvitation.useMutation({
+    onSuccess: () => { toast.success("Invitación aprobada y enviada"); invitationsQuery.refetch(); },
+    onError: err => toast.error(err.message),
+  });
 
   const [manualContractorId, setManualContractorId] = useState("");
   const now = new Date();
@@ -398,11 +552,11 @@ function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClos
                 variant="outline"
                 onClick={() =>
                   navigator.clipboard
-                    .writeText(`https://leadprime.chyrris.com/signup?ref=${partner.referralCode}`)
-                    .then(() => toast.success("Enlace de referido copiado"))
+                    .writeText(`https://leadprime.chyrris.com/r/${partner.referralCode.toLowerCase()}`)
+                    .then(() => toast.success("Link corto de referido copiado"))
                 }
               >
-                <Copy className="w-4 h-4 mr-1" /> Enlace
+                <Copy className="w-4 h-4 mr-1" /> Link corto
               </Button>
               <Button size="sm" variant="outline" onClick={() => resendInvite.mutate({ partnerId })} disabled={resendInvite.isPending}>
                 <Mail className="w-4 h-4 mr-1" /> Reenviar invitación
@@ -426,6 +580,7 @@ function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClos
                 <TabsTrigger value="referrals">Referidos ({data.attributions.length})</TabsTrigger>
                 <TabsTrigger value="commissions">Comisiones ({data.commissions.length})</TabsTrigger>
                 <TabsTrigger value="documents">Documentos ({data.documents.length})</TabsTrigger>
+                <TabsTrigger value="invitations">Invitaciones ({invitationsQuery.data?.length ?? 0})</TabsTrigger>
                 <TabsTrigger value="payouts">Liquidaciones ({data.payouts.length})</TabsTrigger>
               </TabsList>
 
@@ -557,7 +712,31 @@ function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClos
                 )}
               </TabsContent>
 
-              <TabsContent value="documents">
+              <TabsContent value="documents" className="space-y-4">
+                {/* Admin uploads INFORMATIONAL docs for this partner (brief §2) */}
+                <div className="border rounded-lg p-3 space-y-2">
+                  <p className="text-sm font-medium">Subir documento informativo para este socio</p>
+                  <p className="text-xs text-muted-foreground">
+                    Aparece en la Etapa 1 del socio. Solo lo ve este socio (aislamiento multi-tenant).
+                  </p>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {([
+                      ["revenue_projection", "Proyección de revenue"],
+                      ["features", "Documento de features"],
+                      ["term_sheet_info", "Term sheet informativo"],
+                    ] as const).map(([docType, label]) => (
+                      <AdminDocUpload
+                        key={docType}
+                        label={label}
+                        disabled={uploadDoc.isPending}
+                        onFile={(fileName, contentType, base64Data) =>
+                          uploadDoc.mutate({ partnerId, docType, fileName, contentType, base64Data })
+                        }
+                      />
+                    ))}
+                  </div>
+                </div>
+
                 {data.documents.length === 0 ? (
                   <p className="text-sm text-muted-foreground text-center py-6">Sin documentos subidos.</p>
                 ) : (
@@ -575,7 +754,12 @@ function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClos
                       <TableBody>
                         {data.documents.map(doc => (
                           <TableRow key={doc.id}>
-                            <TableCell className="font-medium">{DOC_LABEL[doc.docType] ?? doc.docType}</TableCell>
+                            <TableCell className="font-medium">
+                              {DOC_LABEL[doc.docType] ?? doc.docType}
+                              <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded-full ${doc.uploadedBy === "admin" ? "bg-blue-500/15 text-blue-400" : "bg-zinc-500/15 text-zinc-400"}`}>
+                                {doc.uploadedBy === "admin" ? "LeadPrime" : "Socio"}
+                              </span>
+                            </TableCell>
                             <TableCell className="text-sm text-muted-foreground max-w-[240px] truncate">
                               {doc.fileUrl ? (
                                 <a href={doc.fileUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline">
@@ -594,14 +778,79 @@ function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClos
                               {doc.uploadedAt ? shortDate(doc.uploadedAt) : "—"}
                             </TableCell>
                             <TableCell>
-                              {doc.status !== "verified" && (
+                              <div className="flex gap-1">
+                                {doc.uploadedBy === "partner" && doc.status !== "verified" && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => verifyDoc.mutate({ documentId: doc.id })}
+                                    disabled={verifyDoc.isPending}
+                                  >
+                                    <BadgeCheck className="w-4 h-4 mr-1" /> Verificar
+                                  </Button>
+                                )}
+                                {doc.uploadedBy === "admin" && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="text-destructive"
+                                    onClick={() => {
+                                      if (window.confirm("¿Eliminar este documento informativo?")) {
+                                        deleteDoc.mutate({ documentId: doc.id });
+                                      }
+                                    }}
+                                    disabled={deleteDoc.isPending}
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </Button>
+                                )}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </TabsContent>
+
+              <TabsContent value="invitations">
+                {invitationsQuery.isLoading ? (
+                  <div className="flex justify-center py-6">
+                    <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                  </div>
+                ) : (invitationsQuery.data?.length ?? 0) === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-6">
+                    Este socio no ha enviado invitaciones.
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Correo</TableHead>
+                          <TableHead>Estado</TableHead>
+                          <TableHead>Enviada</TableHead>
+                          <TableHead>Registrada</TableHead>
+                          <TableHead />
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {invitationsQuery.data!.map(inv => (
+                          <TableRow key={inv.id}>
+                            <TableCell className="font-medium max-w-[220px] truncate">{inv.email}</TableCell>
+                            <TableCell><Badge variant="outline">{inv.status}</Badge></TableCell>
+                            <TableCell className="text-sm text-muted-foreground">{inv.sentAt ? shortDate(inv.sentAt) : "—"}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">{inv.registeredAt ? shortDate(inv.registeredAt) : "—"}</TableCell>
+                            <TableCell>
+                              {inv.status === "pending_approval" && (
                                 <Button
                                   size="sm"
                                   variant="outline"
-                                  onClick={() => verifyDoc.mutate({ documentId: doc.id })}
-                                  disabled={verifyDoc.isPending}
+                                  onClick={() => approveInvitation.mutate({ invitationId: inv.id })}
+                                  disabled={approveInvitation.isPending}
                                 >
-                                  <BadgeCheck className="w-4 h-4 mr-1" /> Verificar
+                                  Aprobar y enviar
                                 </Button>
                               )}
                             </TableCell>

@@ -29,7 +29,7 @@
  */
 import { Pool } from "pg";
 import { addMonths } from "date-fns";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import {
   referralAttributions,
@@ -102,7 +102,7 @@ function emptySummary(): SyncSummary {
   };
 }
 
-/** The public signup link shown to partners: <base>?ref=<CODE> */
+/** The canonical signup link (long form): <base>?ref=<CODE> */
 export function getReferralSignupBase(): string {
   return process.env.REFERRAL_SIGNUP_URL || "https://leadprime.chyrris.com/signup";
 }
@@ -111,6 +111,19 @@ export function buildReferralLink(referralCode: string): string {
   const base = getReferralSignupBase();
   const sep = base.includes("?") ? "&" : "?";
   return `${base}${sep}ref=${encodeURIComponent(referralCode)}`;
+}
+
+/**
+ * Pretty SHORT referral link for social bios (leadprime.chyrris.com/r/CODE).
+ * The /r/CODE redirect that turns this into ?ref=CODE lives in the LeadPrime
+ * app (its own domain/repo), NOT here — Kai only DISPLAYS this link. The code
+ * is lowercased for a clean look; attribution is case-insensitive, so
+ * /r/prime resolves the same partner as ?ref=PRIME. Base is admin-configurable
+ * (app_settings) with a default; pass it in when settings are available.
+ */
+export function buildShortReferralLink(referralCode: string, base?: string): string {
+  const b = (base || process.env.REFERRAL_SHORT_LINK_BASE || "https://leadprime.chyrris.com").replace(/\/+$/, "");
+  return `${b}/r/${encodeURIComponent(referralCode.toLowerCase())}`;
 }
 
 /** Validate a referral code → partner (case-insensitive), or null. */
@@ -186,36 +199,60 @@ async function syncAttributionsFromSignups(summary: SyncSummary): Promise<void> 
   const db = await getDb();
   if (!db) return;
 
-  const pool = getLeadPrimePool();
-  const res = await pool.query(
-    `SELECT id, referral_code, created_at
-     FROM contractors
-     WHERE referral_code IS NOT NULL AND TRIM(referral_code) <> ''
-     ORDER BY created_at ASC
-     LIMIT 2000`
-  );
-  if (res.rows.length === 0) return;
-  if (res.rows.length === 2000) {
-    console.warn("[Commission Engine] Signup sweep hit the 2000-row cap; remaining rows sync next run");
-  }
-
   const partners = await db.select().from(referralPartners);
   const byCode = new Map(partners.map(p => [p.referralCode.toUpperCase(), p]));
 
-  for (const row of res.rows) {
-    const partner = byCode.get(String(row.referral_code).trim().toUpperCase());
-    if (!partner || partner.status === "inactive") continue;
-    const inserted = await db
-      .insert(referralAttributions)
-      .values({
-        partnerId: partner.id,
-        referredUserId: row.id,
-        referralCode: partner.referralCode,
-        signupDate: row.created_at ?? new Date(),
-      })
-      .onConflictDoNothing({ target: referralAttributions.referredUserId })
-      .returning({ id: referralAttributions.id });
-    if (inserted.length > 0) summary.attributionsCreated += 1;
+  // Already-attributed users (Kai's own table, cheap) so the sweep skips them
+  // in code — combined with the created_at cursor below this guarantees ALL
+  // referral-coded contractors are eventually processed, not just the oldest
+  // page (no re-scanning the same rows forever).
+  const existing = await db
+    .select({ id: referralAttributions.referredUserId })
+    .from(referralAttributions);
+  const attributed = new Set(existing.map(e => e.id));
+
+  const pool = getLeadPrimePool();
+  const BATCH = 1000;
+  const MAX_BATCHES = 50; // 50k coded contractors per run — backstop
+  // Keyset pagination on (created_at, id) — a stable composite cursor so
+  // rows with identical created_at can never be skipped or duplicated.
+  let cursorTs = "1970-01-01T00:00:00Z";
+  let cursorId = "";
+  for (let batch = 0; batch < MAX_BATCHES; batch++) {
+    const res = await pool.query(
+      `SELECT id, referral_code, created_at
+       FROM contractors
+       WHERE referral_code IS NOT NULL AND TRIM(referral_code) <> ''
+         AND (created_at, id) > ($1::timestamp, $2)
+       ORDER BY created_at ASC, id ASC
+       LIMIT $3`,
+      [cursorTs, cursorId, BATCH]
+    );
+    if (res.rows.length === 0) break;
+
+    for (const row of res.rows) {
+      cursorTs = row.created_at ? new Date(row.created_at).toISOString() : cursorTs;
+      cursorId = String(row.id);
+      if (attributed.has(String(row.id))) continue;
+      const partner = byCode.get(String(row.referral_code).trim().toUpperCase());
+      if (!partner || partner.status === "inactive") continue;
+      const inserted = await db
+        .insert(referralAttributions)
+        .values({
+          partnerId: partner.id,
+          referredUserId: row.id,
+          referralCode: partner.referralCode,
+          signupDate: row.created_at ?? new Date(),
+        })
+        .onConflictDoNothing({ target: referralAttributions.referredUserId })
+        .returning({ id: referralAttributions.id });
+      if (inserted.length > 0) summary.attributionsCreated += 1;
+    }
+
+    if (res.rows.length < BATCH) break; // last page
+    if (batch === MAX_BATCHES - 1) {
+      console.warn("[Commission Engine] Signup sweep hit the batch cap; remaining rows sync next run");
+    }
   }
 }
 
@@ -354,8 +391,8 @@ async function syncCommissionCharges(summary: SyncSummary): Promise<void> {
     if (charge.amountCents <= 0) continue;
 
     // First collected payment anchors the 12-month clock and activates the
-    // attribution (charges are processed oldest-first, so the anchor is the
-    // true first payment).
+    // attribution. Charges are processed oldest-first, so the first one seen
+    // is the true first payment within a run.
     if (!attribution.firstPaymentDate) {
       attribution.firstPaymentDate = charge.chargeDate;
       attribution.status = "active";
@@ -373,6 +410,20 @@ async function syncCommissionCharges(summary: SyncSummary): Promise<void> {
           )
         );
       summary.firstPaymentsAnchored += 1;
+    } else if (charge.chargeDate.getTime() < attribution.firstPaymentDate.getTime()) {
+      // A charge older than the recorded anchor arrived out of order (e.g. a
+      // back-dated invoice mirrored after a prior sweep). Correct the anchor
+      // to the true earliest so the 12-month stage boundary stays accurate.
+      attribution.firstPaymentDate = charge.chargeDate;
+      await db
+        .update(referralAttributions)
+        .set({ firstPaymentDate: charge.chargeDate, updatedAt: new Date() })
+        .where(
+          and(
+            eq(referralAttributions.id, attribution.id),
+            gt(referralAttributions.firstPaymentDate, charge.chargeDate)
+          )
+        );
     }
 
     const { pct } = resolveAppliedPct(
@@ -404,10 +455,23 @@ async function syncCommissionCharges(summary: SyncSummary): Promise<void> {
 /**
  * Refund sweep (best effort): looks at Stripe refunds from the last 90 days
  * and, when a refund's charge belongs to an invoice we paid commission on,
- * writes a compensating negative row keyed by the refund id (idempotent).
- * Skips silently when Stripe is not configured. The admin reversal mutation
- * covers anything this misses (wallet top-up refunds, chargebacks).
+ * VOIDS that commission with one compensating negative row.
+ *
+ * Idempotency & no-double-reversal (fixes the cross-path collision): every
+ * reversal — from this sweep OR from the admin manual mutation — is keyed by
+ * the ORIGINAL commission id (`rev:<id>`), so UNIQUE(source_payment_id,
+ * is_reversal) guarantees a charge's commission is reversed AT MOST ONCE
+ * regardless of which path fires first. A refund voids the whole commission
+ * for that charge ("anular la comisión correspondiente" — term sheet §6.3),
+ * which is conservative and keeps the ledger simple.
+ *
+ * Pagination: Stripe returns newest-first, max 100/page; we auto-paginate so
+ * a busy account's older refunds are not missed (missed reversal = overpay).
  */
+export function reversalKey(originalCommissionId: number): string {
+  return `rev:${originalCommissionId}`;
+}
+
 async function syncRefundsFromStripe(summary: SyncSummary): Promise<void> {
   let stripe: any = null;
   try {
@@ -436,29 +500,20 @@ async function syncRefundsFromStripe(summary: SyncSummary): Promise<void> {
     invoiceCommissions.map(c => [c.sourcePaymentId.slice("lp-inv:".length), c])
   );
 
-  // Sources already compensated MANUALLY (admin reversal keeps the original
-  // source_payment_id). Skipping them here prevents double compensation when
-  // the Stripe sweep later sees the same refund.
-  const manualReversals = await db
-    .select({ sourcePaymentId: referralCommissions.sourcePaymentId })
-    .from(referralCommissions)
-    .where(
-      and(
-        eq(referralCommissions.isReversal, true),
-        sql`${referralCommissions.sourcePaymentId} LIKE 'lp-inv:%'`
-      )
-    );
-  const manuallyReversed = new Set(manualReversals.map(r => r.sourcePaymentId));
-
   try {
     const since = Math.floor(Date.now() / 1000) - 90 * 24 * 60 * 60;
-    const refunds = await stripe.refunds.list({
+    const MAX_REFUNDS = 5000; // backstop
+    let processed = 0;
+    // stripe-node exposes async iteration that transparently paginates.
+    for await (const refund of stripe.refunds.list({
       created: { gte: since },
       limit: 100,
       expand: ["data.charge"],
-    });
-
-    for (const refund of refunds.data as any[]) {
+    })) {
+      if (++processed > MAX_REFUNDS) {
+        summary.errors.push("Stripe refund sweep hit MAX_REFUNDS cap");
+        break;
+      }
       if (refund.status && refund.status !== "succeeded") continue;
       const charge = typeof refund.charge === "object" ? refund.charge : null;
       const invoiceId =
@@ -468,21 +523,19 @@ async function syncRefundsFromStripe(summary: SyncSummary): Promise<void> {
       if (!invoiceId) continue;
       const original = byInvoiceId.get(invoiceId);
       if (!original) continue;
-      if (manuallyReversed.has(original.sourcePaymentId)) continue;
+      if ((refund.amount ?? 0) <= 0) continue;
 
-      const refundCents = refund.amount ?? 0;
-      if (refundCents <= 0) continue;
-      const reversalCents = computeCommissionCents(refundCents, original.appliedPct);
-
+      // Void the whole commission for this charge, keyed by the original id so
+      // it can never collide with (or double up on) a manual reversal.
       const inserted = await db
         .insert(referralCommissions)
         .values({
           partnerId: original.partnerId,
           attributionId: original.attributionId,
-          sourcePaymentId: `lp-refund:${refund.id}`,
-          chargeAmount: centsToDecimal(-refundCents),
+          sourcePaymentId: reversalKey(original.id),
+          chargeAmount: centsToDecimal(-Math.round(parseFloat(original.chargeAmount) * 100)),
           appliedPct: original.appliedPct,
-          commissionAmount: centsToDecimal(-reversalCents),
+          commissionAmount: centsToDecimal(-Math.round(parseFloat(original.commissionAmount) * 100)),
           chargeDate: new Date((refund.created ?? Math.floor(Date.now() / 1000)) * 1000),
           isReversal: true,
         })
@@ -540,7 +593,14 @@ async function syncAttributionLifecycle(summary: SyncSummary): Promise<void> {
       continue;
     }
 
-    if (attribution.status !== "inactive" && state.has_any_sub && !state.has_live_sub) {
+    // Only deactivate an ACTIVE (previously-paying) attribution when its
+    // subscriptions all lapse. A 'pending_first_payment' one that cancels a
+    // trial before ever paying must STAY pending — never generated commission,
+    // and if the user re-subscribes and pays later it should still count
+    // (brief §6.3). Deactivating it here would permanently freeze it: the
+    // charge sweep can only anchor+activate a pending/active row, and the
+    // reactivation branch below requires a firstPaymentDate it will never have.
+    if (attribution.status === "active" && state.has_any_sub && !state.has_live_sub) {
       await db
         .update(referralAttributions)
         .set({ status: "inactive", updatedAt: new Date() })
@@ -565,6 +625,7 @@ export interface ReferredUserInfo {
   businessName: string | null;
   plan: string | null;
   subscriptionStatus: string | null;
+  planPriceCents: number | null;
 }
 
 /**
@@ -578,14 +639,16 @@ export async function fetchReferredUsersInfo(
   const result = new Map<string, ReferredUserInfo>();
   if (contractorIds.length === 0) return result;
   const pool = getLeadPrimePool();
+  // base_price_cents is the plan's monthly cost (used for the dashboard's
+  // "plan + cost" column). It is billing config, not the contractor's PII.
   const res = await pool.query(
     `SELECT c.id,
             COALESCE(NULLIF(TRIM(cp.business_name), ''), NULLIF(TRIM(c.company_name), ''), NULLIF(TRIM(c.name), '')) AS business_name,
-            s.plan, s.status AS sub_status
+            s.plan, s.status AS sub_status, s.base_price_cents
      FROM contractors c
      LEFT JOIN company_profiles cp ON cp.contractor_id = c.id
      LEFT JOIN LATERAL (
-       SELECT COALESCE(NULLIF(TRIM(plan_name), ''), plan) AS plan, status
+       SELECT COALESCE(NULLIF(TRIM(plan_name), ''), plan) AS plan, status, base_price_cents
        FROM subscriptions
        WHERE contractor_id = c.id
        ORDER BY CASE status
@@ -605,9 +668,37 @@ export async function fetchReferredUsersInfo(
       businessName: row.business_name ?? null,
       plan: row.plan ?? null,
       subscriptionStatus: row.sub_status ?? null,
+      planPriceCents: row.base_price_cents != null ? parseInt(row.base_price_cents, 10) : null,
     });
   }
   return result;
+}
+
+/** Look up LeadPrime contractors by email (for invitation status matching). */
+export async function findContractorsByEmails(
+  emails: string[]
+): Promise<Map<string, { id: string; createdAt: Date | null }>> {
+  const map = new Map<string, { id: string; createdAt: Date | null }>();
+  if (emails.length === 0) return map;
+  const pool = getLeadPrimePool();
+  const res = await pool.query(
+    `SELECT id, email, created_at FROM contractors WHERE LOWER(email) = ANY($1)`,
+    [emails.map(e => e.toLowerCase())]
+  );
+  for (const row of res.rows) {
+    if (row.email) map.set(String(row.email).toLowerCase(), { id: row.id, createdAt: row.created_at ?? null });
+  }
+  return map;
+}
+
+// Invitation status matching runs as the last sweep step. Dynamic import
+// avoids a static import cycle (partner-invitations imports this module).
+async function syncInvitationsStep(summary: SyncSummary): Promise<void> {
+  const { syncInvitationStatuses } = await import("./partner-invitations");
+  const res = await syncInvitationStatuses();
+  if (res.registered || res.activated) {
+    console.log(`[Commission Engine] Invitations: +${res.registered} registered, +${res.activated} active`);
+  }
 }
 
 let syncInFlight: Promise<SyncSummary> | null = null;
@@ -622,6 +713,7 @@ export async function syncReferralSystem(): Promise<SyncSummary> {
       ["charges", syncCommissionCharges],
       ["refunds", syncRefundsFromStripe],
       ["lifecycle", syncAttributionLifecycle],
+      ["invitations", syncInvitationsStep],
     ];
     for (const [name, step] of steps) {
       try {
