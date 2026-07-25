@@ -7,7 +7,7 @@ import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Download, ExternalLink, FileText, Info, Loader2, ShieldCheck } from "lucide-react";
+import { Download, ExternalLink, FileBarChart, FileText, Info, Loader2, ShieldCheck } from "lucide-react";
 import PartnerLayout from "../PartnerLayout";
 import DocumentUploadCard from "../components/DocumentUploadCard";
 
@@ -19,6 +19,7 @@ const DOC_LABEL: Record<string, string> = {
   revenue_projection: "Proyección de revenue",
   features: "Documento de features",
   term_sheet_info: "Term sheet (informativo)",
+  report: "Reporte",
   other: "Otro documento",
 };
 
@@ -53,7 +54,8 @@ export default function PartnerDocuments() {
 
   const allDocs = documentsQuery.data ?? [];
   const informational = allDocs.filter(d => INFORMATIONAL.has(d.docType));
-  const signed = allDocs.filter(d => !INFORMATIONAL.has(d.docType));
+  const reports = allDocs.filter(d => d.docType === "report");
+  const signed = allDocs.filter(d => !INFORMATIONAL.has(d.docType) && d.docType !== "report");
 
   const DocTable = ({ docs, source }: { docs: typeof allDocs; source: "admin" | "partner" }) => (
     <div className="overflow-x-auto">
@@ -72,7 +74,9 @@ export default function PartnerDocuments() {
         <tbody>
           {docs.map(doc => (
             <tr key={doc.id} className="border-b last:border-0">
-              <td className="py-2.5 font-medium">{DOC_LABEL[doc.docType] ?? doc.docType}</td>
+              <td className="py-2.5 font-medium">
+                {doc.docType === "report" && doc.title ? doc.title : DOC_LABEL[doc.docType] ?? doc.docType}
+              </td>
               <td className="py-2.5 hidden sm:table-cell text-muted-foreground truncate max-w-[200px]">
                 {doc.fileName ?? "—"}
               </td>
@@ -124,6 +128,28 @@ export default function PartnerDocuments() {
               </p>
             ) : (
               <DocTable docs={informational} source="admin" />
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Reports from LeadPrime (quarterly referral reports, etc.) */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <FileBarChart className="w-5 h-5 text-[var(--lp-gold)]" /> Reportes
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {documentsQuery.isLoading ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="w-6 h-6 animate-spin text-primary" />
+              </div>
+            ) : reports.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">
+                Aquí verás los reportes que LeadPrime comparta contigo (p. ej. reportes trimestrales de referidos).
+              </p>
+            ) : (
+              <DocTable docs={reports} source="admin" />
             )}
           </CardContent>
         </Card>

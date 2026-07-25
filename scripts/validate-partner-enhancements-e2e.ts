@@ -98,6 +98,39 @@ async function main() {
   const bOb = await pdb.getOnboardingState(pb!);
   check("AISLAMIENTO: onboarding de B no cuenta materiales de A", bOb.stages.materials.materialsCount === 0);
 
+  // ── 2b. Reports (admin-uploaded, titled) — new category ──
+  // Insert a report for A directly (storeDocument needs the storage proxy).
+  await db.insert(schema.partnerDocuments).values({
+    partnerId: pa!.id,
+    docType: "report",
+    title: "Reporte Q3 2026 de referidos",
+    fileName: "reporte_q3.pdf",
+    fileUrl: "partner-documents/1/report/reporte_q3.pdf",
+    status: "verified",
+    uploadedBy: "admin",
+    uploadedAt: new Date(),
+    verifiedAt: new Date(),
+  });
+  const aDocsAll = await pdb.listPartnerDocuments(pa!.id);
+  const aReport = aDocsAll.find(d => d.docType === "report");
+  check("Reporte asignado al socio con título libre y verificado",
+    !!aReport && aReport.title === "Reporte Q3 2026 de referidos" && aReport.status === "verified" && aReport.uploadedBy === "admin",
+    `title=${aReport?.title}`);
+  // report title is required at the router level
+  const reportNoTitle = await pdb
+    .adminUploadPartnerDocument({ partnerId: pa!.id, docType: "report", fileName: "x.pdf", contentType: "application/pdf", base64Data: Buffer.from("x").toString("base64"), title: "" })
+    .then(() => "no-throw")
+    .catch((e: any) => e.message);
+  check("Reporte sin título es rechazado", reportNoTitle !== "no-throw", String(reportNoTitle).slice(0, 40));
+  // AISLAMIENTO: B does not see A's report
+  const bDocs2 = await pdb.listPartnerDocuments(pb!.id);
+  check("AISLAMIENTO: socio B no ve el reporte de A", bDocs2.every(d => d.docType !== "report"));
+  // report does NOT count toward onboarding materials (stage 1)
+  const obWithReport = await pdb.getOnboardingState(await aRow());
+  check("El reporte NO cuenta como material de onboarding (etapa 1)",
+    obWithReport.stages.materials.materialsCount === 1,
+    `materiales=${obWithReport.stages.materials.materialsCount}`);
+
   // ── 3. Staged progression ──
   await pdb.markMaterialsReviewed(pa!.id);
   ob = await pdb.getOnboardingState(await aRow());
