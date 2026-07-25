@@ -247,19 +247,16 @@ export async function getPartnerDocumentUrl(
     .limit(1);
   const doc = rows[0];
   if (!doc?.fileUrl) return null;
-  // Re-sign through the storage proxy when the stored URL is a key-style path.
-  try {
-    const marker = "partner-documents/";
-    const idx = doc.fileUrl.indexOf(marker);
-    if (idx >= 0) {
-      const key = doc.fileUrl.slice(doc.fileUrl.indexOf(marker));
-      const { url } = await storageGet(key.split("?")[0]!);
-      return url;
-    }
-  } catch {
-    // fall through to the stored URL
-  }
-  return doc.fileUrl;
+
+  // Legacy rows may hold an absolute URL; everything stored on R2 is a KEY,
+  // which we turn into a fresh short-lived presigned URL on every request.
+  if (/^https?:\/\//i.test(doc.fileUrl)) return doc.fileUrl;
+
+  const marker = "partner-documents/";
+  const idx = doc.fileUrl.indexOf(marker);
+  const key = (idx >= 0 ? doc.fileUrl.slice(idx) : doc.fileUrl).split("?")[0]!;
+  const { url } = await storageGet(key);
+  return url;
 }
 
 // ── Dashboard (brief §7.2) ────────────────────────────────────────────────

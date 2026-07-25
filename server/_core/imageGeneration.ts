@@ -15,7 +15,7 @@
  *     }]
  *   });
  */
-import { storagePut } from "server/storage";
+import { storageGet, storagePut } from "server/storage";
 import { ENV } from "./env";
 
 export type GenerateImageOptions = {
@@ -80,12 +80,14 @@ export async function generateImage(
   const base64Data = result.image.b64Json;
   const buffer = Buffer.from(base64Data, "base64");
 
-  // Save to S3
-  const { url } = await storagePut(
+  // Save to R2 (private bucket) and hand back a presigned URL — storagePut
+  // returns the object KEY, which is not directly fetchable.
+  const { key } = await storagePut(
     `generated/${Date.now()}.png`,
     buffer,
     result.image.mimeType
   );
+  const { url } = await storageGet(key);
   return {
     url,
   };
