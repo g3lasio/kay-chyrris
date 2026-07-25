@@ -16,7 +16,13 @@
  *   Account/endpoint : R2_ENDPOINT  (or R2_ACCOUNT_ID / CLOUDFLARE_ACCOUNT_ID)
  *   Access key       : R2_ACCESS_KEY_ID     | CLOUDFLARE_R2_ACCESS_KEY_ID | S3_ACCESS_KEY_ID
  *   Secret key       : R2_SECRET_ACCESS_KEY | CLOUDFLARE_R2_SECRET_ACCESS_KEY | S3_SECRET_ACCESS_KEY
- *   Bucket           : R2_BUCKET | R2_BUCKET_NAME | CLOUDFLARE_R2_BUCKET (default "leadprime-documents")
+ *   Bucket           : R2_BUCKET | R2_BUCKET_NAME | CLOUDFLARE_R2_BUCKET  (REQUIRED — no default)
+ *
+ * The bucket has NO fallback on purpose. Partner documents live in their own
+ * isolated bucket (partner-portal-documents); guessing a default meant that
+ * losing R2_BUCKET — a deleted variable, a cloned service — would silently
+ * write partner documents into LeadPrime's production bucket with no error to
+ * betray it. Failing loudly is the safe direction.
  */
 import {
   DeleteObjectCommand,
@@ -26,7 +32,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-const DEFAULT_BUCKET = "leadprime-documents";
+const BUCKET_ENV_VARS = ["R2_BUCKET", "R2_BUCKET_NAME", "CLOUDFLARE_R2_BUCKET", "S3_BUCKET"] as const;
 const DOWNLOAD_URL_TTL_SECONDS = 60 * 15; // 15 min — long enough to open/download
 
 function firstEnv(...names: string[]): string | undefined {
@@ -49,14 +55,32 @@ function resolveEndpoint(): string | undefined {
   return undefined;
 }
 
-export function getBucketName(): string {
-  return firstEnv("R2_BUCKET", "R2_BUCKET_NAME", "CLOUDFLARE_R2_BUCKET", "S3_BUCKET") || DEFAULT_BUCKET;
+const MISSING_BUCKET_MESSAGE =
+  "Cloudflare R2: bucket no configurado — set R2_BUCKET=partner-portal-documents en Railway " +
+  `(alias aceptados: ${BUCKET_ENV_VARS.slice(1).join(", ")}). ` +
+  "No se usa un bucket por defecto a propósito: escribir documentos de socios en el bucket " +
+  "equivocado en silencio es peor que fallar.";
+
+function resolveBucket(): string | undefined {
+  return firstEnv(...BUCKET_ENV_VARS);
 }
 
-/** True when R2 is configured — lets callers degrade gracefully. */
+/**
+ * The configured bucket. Throws when none is set — never falls back to a
+ * guessed name, so a missing variable can't route partner documents into
+ * somebody else's bucket without anyone noticing.
+ */
+export function getBucketName(): string {
+  const bucket = resolveBucket();
+  if (!bucket) throw new Error(MISSING_BUCKET_MESSAGE);
+  return bucket;
+}
+
+/** True when R2 is fully configured — lets callers degrade gracefully. */
 export function isStorageConfigured(): boolean {
   return Boolean(
     resolveEndpoint() &&
+      resolveBucket() &&
       firstEnv("R2_ACCESS_KEY_ID", "CLOUDFLARE_R2_ACCESS_KEY_ID", "S3_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID") &&
       firstEnv(
         "R2_SECRET_ACCESS_KEY",
@@ -84,14 +108,17 @@ function getClient(): R2Config {
     "AWS_SECRET_ACCESS_KEY"
   );
 
+  const bucket = resolveBucket();
+
   const missing: string[] = [];
   if (!endpoint) missing.push("R2_ENDPOINT (o R2_ACCOUNT_ID)");
   if (!accessKeyId) missing.push("R2_ACCESS_KEY_ID");
   if (!secretAccessKey) missing.push("R2_SECRET_ACCESS_KEY");
+  if (!bucket) missing.push("R2_BUCKET");
   if (missing.length > 0) {
     throw new Error(
-      `Cloudflare R2 no está configurado. Faltan variables de entorno en Railway: ${missing.join(", ")}. ` +
-        `Bucket usado: "${getBucketName()}".`
+      `Cloudflare R2 no está configurado. Faltan variables de entorno en Railway: ${missing.join(", ")}.` +
+        (bucket ? ` Bucket usado: "${bucket}".` : ` ${MISSING_BUCKET_MESSAGE}`)
     );
   }
 
@@ -102,7 +129,7 @@ function getClient(): R2Config {
       endpoint,
       credentials: { accessKeyId: accessKeyId!, secretAccessKey: secretAccessKey! },
     }),
-    bucket: getBucketName(),
+    bucket: bucket!,
   };
   console.log(`[Storage] Cloudflare R2 ready (bucket: ${cached.bucket})`);
   return cached;

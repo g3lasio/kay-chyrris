@@ -193,7 +193,23 @@ async function main() {
   check("Error de storage nombra las variables R2 que faltan (no BUILT_IN_FORGE_*)",
     /R2_/.test(String(storageErr)) && !/FORGE/i.test(String(storageErr)),
     String(storageErr).slice(0, 70));
-  check("El bucket por defecto es leadprime-documents", storage.getBucketName() === "leadprime-documents");
+  // Sin bucket configurado NO se adivina un default: fallar es más seguro que
+  // escribir documentos de socios en el bucket de producción de LeadPrime.
+  const bucketErr = (() => {
+    try {
+      return `no-throw: ${storage.getBucketName()}`;
+    } catch (e: any) {
+      return e.message as string;
+    }
+  })();
+  check("Sin R2_BUCKET el storage falla explícito (no cae a un bucket por defecto)",
+    /R2_BUCKET/.test(bucketErr) && !/no-throw/.test(bucketErr) && !/leadprime-documents/.test(bucketErr),
+    bucketErr.slice(0, 70));
+
+  process.env.R2_BUCKET = "partner-portal-documents";
+  check("Con R2_BUCKET seteada resuelve el bucket aislado del portal",
+    storage.getBucketName() === "partner-portal-documents");
+  delete process.env.R2_BUCKET;
 
   // ── Summary ──
   const failed = results.filter(r => !r[1]);

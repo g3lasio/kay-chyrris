@@ -10,20 +10,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
+/** Every var the module reads — the whole set must be cleared per test, or a
+ *  leaked bucket/credential from the host env would mask a regression. */
 const R2_ENV_KEYS = [
   "R2_ENDPOINT",
+  "CLOUDFLARE_R2_ENDPOINT",
+  "S3_ENDPOINT",
   "R2_ACCOUNT_ID",
-  "R2_ACCESS_KEY_ID",
-  "R2_SECRET_ACCESS_KEY",
-  "R2_BUCKET",
   "CLOUDFLARE_ACCOUNT_ID",
+  "CLOUDFLARE_R2_ACCOUNT_ID",
+  "R2_ACCESS_KEY_ID",
   "CLOUDFLARE_R2_ACCESS_KEY_ID",
-  "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
   "S3_ACCESS_KEY_ID",
-  "S3_SECRET_ACCESS_KEY",
   "AWS_ACCESS_KEY_ID",
+  "R2_SECRET_ACCESS_KEY",
+  "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+  "S3_SECRET_ACCESS_KEY",
   "AWS_SECRET_ACCESS_KEY",
+  "R2_BUCKET",
+  "R2_BUCKET_NAME",
+  "CLOUDFLARE_R2_BUCKET",
+  "S3_BUCKET",
 ];
+
+const PARTNER_BUCKET = "partner-portal-documents";
 
 function clearR2Env() {
   for (const key of R2_ENV_KEYS) delete process.env[key];
@@ -47,27 +57,71 @@ describe("R2 configuration", () => {
   it("fails with a message naming the missing Railway variables (not Forge)", async () => {
     const storage = await loadStorage();
     await expect(storage.storagePut("x/y.pdf", Buffer.from("hi"))).rejects.toThrow(
-      /Cloudflare R2 no está configurado.*R2_ENDPOINT.*R2_ACCESS_KEY_ID.*R2_SECRET_ACCESS_KEY/s
+      /Cloudflare R2 no está configurado.*R2_ENDPOINT.*R2_ACCESS_KEY_ID.*R2_SECRET_ACCESS_KEY.*R2_BUCKET/s
     );
     // The old Forge error must be gone — that was the bug blocking uploads.
     await expect(storage.storagePut("x/y.pdf", Buffer.from("hi"))).rejects.not.toThrow(/FORGE/i);
-  });
-
-  it("defaults to the leadprime-documents bucket", async () => {
-    const storage = await loadStorage();
-    expect(storage.getBucketName()).toBe("leadprime-documents");
   });
 
   it("derives the R2 endpoint from the account id and accepts credential aliases", async () => {
     process.env.CLOUDFLARE_ACCOUNT_ID = "acct123";
     process.env.CLOUDFLARE_R2_ACCESS_KEY_ID = "key";
     process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY = "secret";
+    process.env.R2_BUCKET_NAME = PARTNER_BUCKET; // alias of R2_BUCKET — Railway sets both
     const storage = await loadStorage();
     expect(storage.isStorageConfigured()).toBe(true);
     const { url } = await storage.storageGet("partner-documents/1/report/a.pdf");
     // The SDK addresses R2 virtual-hosted style: <bucket>.<account>.r2.cloudflarestorage.com
     expect(url).toContain("acct123.r2.cloudflarestorage.com");
-    expect(url).toContain("leadprime-documents");
+    expect(url).toContain(PARTNER_BUCKET);
+  });
+});
+
+/**
+ * The bucket has NO default on purpose. A fallback name meant that deleting
+ * R2_BUCKET (or cloning the Railway service without it) would silently write
+ * partner documents into LeadPrime's production bucket — no error, no trace.
+ */
+describe("bucket resolution has no silent fallback", () => {
+  beforeEach(clearR2Env);
+  afterEach(clearR2Env);
+
+  it("throws instead of guessing a bucket when none is configured", async () => {
+    const storage = await loadStorage();
+    expect(() => storage.getBucketName()).toThrow(/bucket no configurado.*R2_BUCKET/s);
+  });
+
+  it("never falls back to LeadPrime's production bucket", async () => {
+    const storage = await loadStorage();
+    // Neither the return value nor the failure may point at the LeadPrime bucket.
+    let outcome = "";
+    try {
+      outcome = storage.getBucketName();
+    } catch (error) {
+      outcome = (error as Error).message;
+    }
+    expect(outcome).not.toContain("leadprime-documents");
+  });
+
+  it("is 'not configured' when credentials are present but the bucket is missing", async () => {
+    process.env.R2_ENDPOINT = "https://acct.r2.cloudflarestorage.com";
+    process.env.R2_ACCESS_KEY_ID = "test-key";
+    process.env.R2_SECRET_ACCESS_KEY = "test-secret";
+    const storage = await loadStorage();
+    expect(storage.isStorageConfigured()).toBe(false);
+    // ...and an upload fails loudly rather than landing in an unknown bucket.
+    await expect(
+      storage.storagePut("partner-documents/1/x.pdf", Buffer.from("hi"))
+    ).rejects.toThrow(/R2_BUCKET/);
+  });
+
+  it("reads each accepted bucket alias", async () => {
+    for (const alias of ["R2_BUCKET", "R2_BUCKET_NAME", "CLOUDFLARE_R2_BUCKET", "S3_BUCKET"]) {
+      clearR2Env();
+      process.env[alias] = PARTNER_BUCKET;
+      const storage = await loadStorage();
+      expect(storage.getBucketName(), `alias ${alias}`).toBe(PARTNER_BUCKET);
+    }
   });
 });
 
@@ -77,7 +131,7 @@ describe("presigned download URLs", () => {
     process.env.R2_ENDPOINT = "https://acct.r2.cloudflarestorage.com";
     process.env.R2_ACCESS_KEY_ID = "test-key";
     process.env.R2_SECRET_ACCESS_KEY = "test-secret";
-    process.env.R2_BUCKET = "leadprime-documents";
+    process.env.R2_BUCKET = PARTNER_BUCKET;
   });
   afterEach(clearR2Env);
 
@@ -87,7 +141,7 @@ describe("presigned download URLs", () => {
     const { url, key: outKey } = await storage.storageGet(key);
     expect(outKey).toBe(key);
     // Bucket + full key must both be addressed (style may be virtual-hosted).
-    expect(url).toContain("leadprime-documents");
+    expect(url).toContain(PARTNER_BUCKET);
     expect(url).toContain("partner-documents/7/report/1234-reporte.pdf");
     // Signed and expiring — this is what keeps documents private per tenant.
     expect(url).toContain("X-Amz-Signature=");
@@ -127,7 +181,7 @@ describe("upload against an S3-compatible endpoint", () => {
     process.env.R2_ENDPOINT = `http://127.0.0.1:${port}`;
     process.env.R2_ACCESS_KEY_ID = "test-key";
     process.env.R2_SECRET_ACCESS_KEY = "test-secret";
-    process.env.R2_BUCKET = "leadprime-documents";
+    process.env.R2_BUCKET = PARTNER_BUCKET;
   });
 
   afterEach(async () => {
@@ -148,7 +202,7 @@ describe("upload against an S3-compatible endpoint", () => {
     expect(received!.method).toBe("PUT");
     // The SDK appends ?x-id=PutObject; assert on the path.
     expect(received!.url.split("?")[0]).toBe(
-      "/leadprime-documents/partner-documents/3/report/999-reporte_q3.pdf"
+      `/${PARTNER_BUCKET}/partner-documents/3/report/999-reporte_q3.pdf`
     );
     expect(received!.body.toString()).toBe("%PDF-1.4 fake report");
     expect(received!.contentType).toBe("application/pdf");

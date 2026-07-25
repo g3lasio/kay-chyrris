@@ -11,7 +11,7 @@ Tres arreglos en el admin del Portal de Socios, sobre lo que ya está en `main` 
 | 2 | **Eliminar socio** (faltaba por completo) | ✅ | E2E · `v4-delete-archive`, `v4-delete-hard` |
 | 3 | **Storage de documentos → Cloudflare R2** (bug que bloqueaba subidas) | ✅ | 8 tests de storage con PUT real |
 
-**Validación:** `tsc` limpio · build OK · **26 unit tests** · **E2E admin 20/20** · **E2E mejoras 25/25** · **E2E base (motor) 46/46 sin regresión**.
+**Validación:** `tsc` limpio · build OK · **32 unit tests** · **E2E admin 21/21** · **E2E mejoras 25/25** · **E2E base (motor) 46/46 sin regresión**.
 
 ---
 
@@ -50,26 +50,34 @@ Razón: el ledger de comisiones/liquidaciones es el registro de dinero debido y 
 
 **El arreglo:** `server/storage.ts` reescrito sobre **Cloudflare R2** (S3-compatible) con `@aws-sdk/client-s3`, que ya estaba en `package.json` sin usarse.
 
-- **Bucket:** `leadprime-documents` (el único que existe en la cuenta de Cloudflare — verificado directamente contra la API). Configurable con `R2_BUCKET`.
+- **Bucket:** `partner-portal-documents` — bucket **aislado**, separado del almacenamiento de LeadPrime. Se lee de `R2_BUCKET` (o `R2_BUCKET_NAME`).
 - **Objetos privados + URLs firmadas:** `storagePut` guarda la **key**; `storageGet` genera una URL prefirmada de **15 minutos** en cada request. Esto refuerza el aislamiento multi-tenant: aunque una URL se filtre, expira, y el permiso siempre pasa por el filtro `partner_id` de la sesión.
 - **Compatibilidad:** se persiste la key (no una URL firmada, que caducaría). Las filas antiguas con URL absoluta siguen funcionando.
 - Se corrigió también el admin, que renderizaba `fileUrl` crudo como enlace: ahora abre vía URL prefirmada (`partnerAdmin.documentUrl`).
 - `imageGeneration.ts` (código muerto, sin llamadas) se ajustó para seguir devolviendo una URL usable en vez de una key.
 
-### ⚠️ Variables que Gelasio debe agregar en Railway
-
-Kai **no tenía ninguna** credencial R2 configurada (cero referencias a R2 en el repo). El código acepta varios alias para encajar con lo que ya exista en Railway, pero al menos un juego debe estar presente:
+### Variables en Railway (ya configuradas)
 
 ```
 R2_ACCOUNT_ID=<account id de Cloudflare>     # o directamente R2_ENDPOINT=https://<account>.r2.cloudflarestorage.com
 R2_ACCESS_KEY_ID=<R2 API token — Object Read & Write>
 R2_SECRET_ACCESS_KEY=<secret del token>
-R2_BUCKET=leadprime-documents                # opcional, es el default
+R2_BUCKET=partner-portal-documents           # REQUERIDA — sin default
 ```
 
-Alias aceptados: `CLOUDFLARE_R2_*`, `S3_*`, `AWS_*` (para access key/secret) y `CLOUDFLARE_ACCOUNT_ID`. Documentado en `.env.example`.
+Alias aceptados: `R2_BUCKET_NAME` / `CLOUDFLARE_R2_BUCKET` / `S3_BUCKET` para el bucket, y `CLOUDFLARE_R2_*` / `S3_*` / `AWS_*` para access key y secret. Documentado en `.env.example`.
 
-Sin estas variables el error ahora es explícito y accionable (*"Cloudflare R2 no está configurado. Faltan variables de entorno en Railway: R2_ENDPOINT (o R2_ACCOUNT_ID), R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY"*) en vez del mensaje engañoso de Forge.
+Sin estas variables el error ahora es explícito y accionable (*"Cloudflare R2 no está configurado. Faltan variables de entorno en Railway: …"*) en vez del mensaje engañoso de Forge.
+
+### ⚠️ El bucket NO tiene default (a propósito)
+
+La primera versión caía a `leadprime-documents` cuando `R2_BUCKET` no estaba seteada — el único bucket que existía en la cuenta cuando escribí el adaptador. Eso es una mina: si esa variable se borra, o el servicio de Railway se clona sin ella, los documentos de socios se escribirían **en silencio** en el bucket de producción de LeadPrime, sin ningún error que lo delatara.
+
+Ahora `getBucketName()` **lanza un error explícito** en vez de adivinar:
+
+> *"Cloudflare R2: bucket no configurado — set R2_BUCKET=partner-portal-documents en Railway (alias aceptados: R2_BUCKET_NAME, CLOUDFLARE_R2_BUCKET, S3_BUCKET). No se usa un bucket por defecto a propósito: escribir documentos de socios en el bucket equivocado en silencio es peor que fallar."*
+
+`isStorageConfigured()` también cuenta el bucket, así que un entorno sin él se reporta como "no configurado" en vez de aparentar estar listo. Cubierto por 5 tests, incluido uno que verifica que **ni el valor devuelto ni el mensaje de error** mencionan nunca `leadprime-documents`.
 
 ## Validación ejecutada
 
@@ -77,8 +85,8 @@ Sin estas variables el error ahora es explícito y accionable (*"Cloudflare R2 n
 |---|---|
 | `pnpm run check` (tsc) | ✅ |
 | `pnpm run build` | ✅ |
-| Unit tests | ✅ 26/26 (18 de comisión/hostname + **8 nuevos de storage R2**) |
-| **E2E admin** (`validate-partner-admin-e2e.ts`) | ✅ **20/20** |
+| Unit tests | ✅ 32/32 (18 de comisión/hostname + 3 de sesión + **11 de storage R2**) |
+| **E2E admin** (`validate-partner-admin-e2e.ts`) | ✅ **21/21** |
 | E2E mejoras | ✅ 25/25 (sin regresión) |
 | E2E base — motor de comisión | ✅ 46/46 (sin regresión) |
 
@@ -99,7 +107,9 @@ Los tests de storage incluyen un **PUT real contra un endpoint S3-compatible loc
 ✅ El historial financiero se conserva al archivar
 ✅ Un socio archivado ya no puede pedir código de acceso
 ✅ Error de storage nombra las variables R2 que faltan (no BUILT_IN_FORGE_*)
-══════ ADMIN: 20/20 checks OK ══════
+✅ Sin R2_BUCKET el storage falla explícito (no cae a un bucket por defecto)
+✅ Con R2_BUCKET seteada resuelve el bucket aislado del portal
+══════ ADMIN: 21/21 checks OK ══════
 ```
 
 Screenshots (web + móvil 375px) en `docs/partner-portal/screenshots/`: `v4-edit-dialog-desktop`, `v4-edit-dialog-mobile`, `v4-delete-archive`, `v4-delete-hard`.
@@ -116,7 +126,7 @@ Motor de comisión, aislamiento multi-tenant y lógica de atribución: intactos 
 
 1. Editar un socio guarda los cambios y **no rompe atribuciones existentes**; el código queda bloqueado si ya tiene referidos; cambiar el email mueve el login.
 2. Eliminar respeta la protección: con historial financiero → archivado (`status='inactive'`, comisiones intactas); sin historial → borrado completo.
-3. **Requiere las credenciales R2 en Railway (§3)**: con ellas, un documento subido desde el admin se guarda físicamente en `leadprime-documents` y es visible/descargable desde el portal del socio, con el aislamiento intacto (socio B no ve documentos de socio A).
+3. **Storage R2 (§3)**: un documento subido desde el admin se guarda físicamente en `partner-portal-documents` y es visible/descargable desde el portal del socio, con el aislamiento intacto (socio B no ve documentos de socio A). Ya verificado en producción con una subida real; LeadPrime intacto.
 
 ---
 
