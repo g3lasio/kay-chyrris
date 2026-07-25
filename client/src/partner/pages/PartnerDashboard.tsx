@@ -3,6 +3,7 @@
  * referral link, sanitized referrals table and payout history.
  * The whole page is locked behind the 4-step onboarding.
  */
+import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -32,13 +33,90 @@ import {
   Globe,
   Link2,
   Loader2,
+  PartyPopper,
   Rocket,
   TrendingUp,
   Users,
   Wallet,
+  X,
 } from "lucide-react";
 import PartnerLayout from "../PartnerLayout";
 import OnboardingChecklist from "../components/OnboardingChecklist";
+import { usePartnerAuth } from "../usePartnerAuth";
+
+/**
+ * The welcome moment: shown the first time the dashboard unlocks, i.e. right
+ * after the third onboarding stage closes. It mirrors the email that goes out
+ * at the same instant. Dismissed per partner in localStorage — the celebration
+ * is for arriving, and it shouldn't nag on every visit afterwards.
+ */
+function WelcomeBanner() {
+  const { partner } = usePartnerAuth();
+  const storageKey = partner ? `lp_partner_welcome_seen_${partner.id}` : null;
+  const [dismissed, setDismissed] = useState(true);
+
+  useEffect(() => {
+    if (!storageKey) return;
+    try {
+      setDismissed(localStorage.getItem(storageKey) === "1");
+    } catch {
+      setDismissed(false); // storage blocked (private mode) — still show it once
+    }
+  }, [storageKey]);
+
+  if (!partner || dismissed) return null;
+
+  const dismiss = () => {
+    setDismissed(true);
+    try {
+      if (storageKey) localStorage.setItem(storageKey, "1");
+    } catch {
+      /* nothing to persist — banner just returns on the next load */
+    }
+  };
+
+  return (
+    <Card className="border-[var(--lp-green)]/40 bg-gradient-to-br from-[var(--lp-green)]/10 to-transparent">
+      <CardContent className="pt-6 relative">
+        <button
+          onClick={dismiss}
+          aria-label="Cerrar bienvenida"
+          className="absolute top-3 right-3 text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <X className="w-4 h-4" />
+        </button>
+        <div className="flex flex-col sm:flex-row gap-4 sm:items-start pr-6">
+          <div className="w-11 h-11 rounded-xl bg-[var(--lp-green)] flex items-center justify-center shrink-0">
+            <PartyPopper className="w-5 h-5 text-white" />
+          </div>
+          <div className="space-y-3 min-w-0">
+            <div>
+              <h2 className="text-lg font-bold text-foreground">
+                ¡Bienvenido, {partner.contactName || partner.name}!
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                Tu registro está completo y ya eres socio activo de LeadPrime. Te enviamos los
+                detalles a tu correo.
+              </p>
+            </div>
+            <blockquote className="border-l-4 border-[var(--lp-gold,#C79A45)] pl-3 py-1">
+              <p className="text-sm italic text-foreground">
+                El que no vive para servir, no sirve para vivir.
+              </p>
+            </blockquote>
+            <p className="text-sm text-muted-foreground">
+              Eso es lo que empieza hoy. Cada contratista que llegue por tu recomendación es alguien
+              a quien le abres una puerta. La comisión es la consecuencia, no el objetivo —{" "}
+              <span className="text-foreground font-medium">
+                sirve bien y lo demás llega solo.
+              </span>
+            </p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 function money(value: string | number): string {
   const n = typeof value === "number" ? value : parseFloat(value || "0");
@@ -194,6 +272,8 @@ function DashboardContent() {
 
   return (
     <div className="space-y-6">
+      <WelcomeBanner />
+
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <KpiCard icon={Users} label="Referidos totales" value={String(data.kpis.totalReferrals)} />

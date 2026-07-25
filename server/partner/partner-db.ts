@@ -20,6 +20,7 @@ import {
 import { storagePut, storageGet } from "../storage";
 import { buildReferralLink, buildShortReferralLink, fetchReferredUsersInfo, reversalKey } from "./commission-engine";
 import { getPortalSettings } from "./app-settings";
+import { isPartnerEmailConfigured, sendPartnerOnboardingCompleteEmail } from "./partner-emails";
 
 // ── Onboarding journey — 3 unlockable stages (brief §1) ────────────────────
 // Stage 1 "materiales": partner reviewed the informational docs LeadPrime
@@ -115,7 +116,60 @@ export async function getOnboardingState(partner: ReferralPartner): Promise<Onbo
       .where(eq(referralPartners.id, partner.id));
   }
 
+  if (complete) await sendWelcomeEmailOnce(partner);
+
   return { stages, currentStage, completedStages, totalStages: 3, complete };
+}
+
+/**
+ * Welcome email for finishing the journey — sent ONCE, ever.
+ *
+ * The send is CLAIMED with a guarded UPDATE (welcome_email_sent_at IS NULL) and
+ * only the winner sends, so two dashboard loads racing each other can't both
+ * fire it, and a partner who briefly drops out of "complete" (a document gets
+ * rejected, then re-uploaded) doesn't get a second one.
+ *
+ * If the send fails the claim is RELEASED so a later load retries — a welcome
+ * lost to a transient Resend error would never come back otherwise. When email
+ * isn't configured at all nothing is claimed, so the partner still gets it once
+ * RESEND_API_KEY exists.
+ */
+async function sendWelcomeEmailOnce(partner: ReferralPartner): Promise<void> {
+  if (!isPartnerEmailConfigured() || !partner.contactEmail) return;
+  if (partner.welcomeEmailSentAt) return; // fast path — avoids a write per load
+
+  const db = await getDb();
+  if (!db) return;
+
+  const claimed = await db
+    .update(referralPartners)
+    .set({ welcomeEmailSentAt: new Date() })
+    .where(and(eq(referralPartners.id, partner.id), isNull(referralPartners.welcomeEmailSentAt)))
+    .returning({ id: referralPartners.id });
+  if (claimed.length === 0) return; // already sent, or another request won
+
+  const settings = await getPortalSettings();
+  const result = await sendPartnerOnboardingCompleteEmail({
+    to: partner.contactEmail,
+    partnerName: partner.name,
+    contactName: partner.contactName,
+    referralLink: buildReferralLink(partner.referralCode),
+    shortLink: buildShortReferralLink(partner.referralCode, settings.shortLinkBase),
+    tierYear1Pct: partner.tierYear1Pct,
+    tierYear2Pct: partner.tierYear2Pct,
+  });
+
+  if (!result.success) {
+    await db
+      .update(referralPartners)
+      .set({ welcomeEmailSentAt: null })
+      .where(eq(referralPartners.id, partner.id));
+    console.error(
+      `[Partner Portal] Welcome email to partner ${partner.id} failed, claim released for retry: ${result.error}`
+    );
+  } else {
+    console.log(`[Partner Portal] Welcome email sent to partner ${partner.id} (onboarding complete)`);
+  }
 }
 
 /** Stage 1 acknowledgement: partner marks the informational materials reviewed. */

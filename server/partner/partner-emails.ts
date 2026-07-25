@@ -62,6 +62,87 @@ function layout(title: string, bodyHtml: string): string {
 </body></html>`;
 }
 
+/** Whether transactional email can be sent at all (RESEND_API_KEY present). */
+export function isPartnerEmailConfigured(): boolean {
+  return Boolean(resend);
+}
+
+/**
+ * Sent ONCE when a partner finishes the 3-stage onboarding journey. This is the
+ * moment the referrals dashboard unlocks, so the email doubles as the welcome
+ * to the program proper and hands them their referral links.
+ *
+ * The caller claims the send atomically (referral_partners.welcome_email_sent_at)
+ * before calling this, so it can never go out twice.
+ */
+export async function sendPartnerOnboardingCompleteEmail(params: {
+  to: string;
+  partnerName: string;
+  contactName?: string | null;
+  referralLink: string;
+  shortLink: string;
+  tierYear1Pct: string;
+  tierYear2Pct: string;
+}): Promise<{ success: boolean; error?: string }> {
+  if (!resend) {
+    console.error("[Partner Emails] Resend not configured (RESEND_API_KEY missing)");
+    return { success: false, error: "Email service not configured" };
+  }
+  try {
+    const portalUrl = getPortalUrl();
+    const greeting = params.contactName ? `${esc(params.contactName)},` : "¡Hola!";
+    const year1 = esc(String(Number(params.tierYear1Pct)));
+    const year2 = esc(String(Number(params.tierYear2Pct)));
+    const html = layout(
+      "Tu registro está completo",
+      `<p style="color:#3d4a58;font-size:15px;line-height:1.6;">${greeting}</p>
+       <p style="color:#3d4a58;font-size:15px;line-height:1.6;">Completaste las tres etapas y <strong>${esc(params.partnerName)}</strong> ya es socio activo de LeadPrime. Tu panel de referidos y comisiones está desbloqueado.</p>
+
+       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:24px 0;">
+         <tr><td style="border-left:4px solid ${BRAND.gold};background:${BRAND.bg};padding:18px 20px;border-radius:0 10px 10px 0;">
+           <p style="margin:0;color:${BRAND.navy};font-size:16px;line-height:1.5;font-style:italic;">El que no vive para servir, no sirve para vivir.</p>
+         </td></tr>
+       </table>
+
+       <p style="color:#3d4a58;font-size:15px;line-height:1.6;">Eso es exactamente lo que empieza hoy. Cada contratista que llegue a LeadPrime por tu recomendación es alguien a quien le abres una puerta: más trabajo, mejor organización, un negocio que crece. La comisión es la consecuencia, no el objetivo. Sirve bien y lo demás llega solo.</p>
+
+       <p style="color:#3d4a58;font-size:15px;line-height:1.6;">Tu enlace de referido — compártelo con confianza:</p>
+       <div style="margin:16px 0;">
+         <div style="background:${BRAND.bg};border:1px solid #dbe4ec;border-radius:10px;padding:12px 16px;margin-bottom:8px;">
+           <span style="display:block;color:#7b8a99;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Enlace corto (para tu bio)</span>
+           <a href="${esc(params.shortLink)}" style="color:${BRAND.blue};font-size:15px;font-weight:bold;text-decoration:none;word-break:break-all;">${esc(params.shortLink.replace(/^https?:\/\//, ""))}</a>
+         </div>
+         <div style="background:${BRAND.bg};border:1px solid #dbe4ec;border-radius:10px;padding:12px 16px;">
+           <span style="display:block;color:#7b8a99;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Enlace completo</span>
+           <a href="${esc(params.referralLink)}" style="color:${BRAND.blue};font-size:13px;text-decoration:none;word-break:break-all;">${esc(params.referralLink)}</a>
+         </div>
+       </div>
+
+       <p style="color:#3d4a58;font-size:14px;line-height:1.6;">Ganas <strong>${year1}%</strong> de lo que cada referido pague durante su primer año, y <strong>${year2}%</strong> durante el segundo. Puedes seguirlo todo en tiempo real desde tu portal.</p>
+
+       <div style="text-align:center;margin:28px 0;">
+         <a href="${portalUrl}" style="display:inline-block;background:${BRAND.green};color:#ffffff;text-decoration:none;font-size:15px;font-weight:bold;padding:14px 32px;border-radius:10px;">Ver mi panel de referidos</a>
+       </div>
+
+       <p style="color:#7b8a99;font-size:12px;line-height:1.6;">Bienvenido de verdad. Cualquier cosa que necesites, estamos de tu lado.</p>`
+    );
+    const result = await resend.emails.send({
+      from: getFrom(),
+      to: params.to,
+      subject: "¡Listo! Ya eres socio activo de LeadPrime",
+      html,
+    });
+    if (result.error) {
+      console.error("[Partner Emails] Welcome send failed:", result.error);
+      return { success: false, error: result.error.message };
+    }
+    return { success: true };
+  } catch (error: any) {
+    console.error("[Partner Emails] Welcome send error:", error);
+    return { success: false, error: error.message };
+  }
+}
+
 export async function sendPartnerOtpEmail(
   to: string,
   code: string
