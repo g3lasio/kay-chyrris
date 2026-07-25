@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/sidebar";
 
 import { useIsMobile } from "@/hooks/useMobile";
-import { ArrowLeft, PanelLeft, LogOut, LayoutDashboard, Bug, Users, ShieldCheck, TrendingUp, Inbox } from "lucide-react";
+import { ArrowLeft, PanelLeft, LogOut, LayoutDashboard, Bug, Users, ShieldCheck, TrendingUp, Inbox, Handshake } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Button } from "./ui/button";
@@ -45,6 +45,7 @@ const menuItems = [
   { icon: LayoutDashboard, label: "Overview", path: "/leadprime" },
   { icon: Users, label: "Usuarios", path: "/leadprime/users" },
   { icon: Inbox, label: "Suscripciones", path: "/leadprime/pending-subs" },
+  { icon: Handshake, label: "Socios", path: "/leadprime/partners" },
   { icon: TrendingUp, label: "Finanzas", path: "/leadprime/finance" },
   { icon: ShieldCheck, label: "System Health", path: "/leadprime/health" },
   { icon: Bug, label: "System Issues", path: "/leadprime/system-issues" },
