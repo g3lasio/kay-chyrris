@@ -57,6 +57,12 @@ export default function PartnerDocuments() {
   const reports = allDocs.filter(d => d.docType === "report");
   const signed = allDocs.filter(d => !INFORMATIONAL.has(d.docType) && d.docType !== "report");
 
+  // A type counts as delivered once a file for it is uploaded or verified — the
+  // same rule the onboarding journey uses. Without this the card invites you to
+  // "Subir contrato" while the table right below already says "Verificado".
+  const hasDoc = (docType: string) =>
+    signed.some(d => d.docType === docType && (d.status === "uploaded" || d.status === "verified"));
+
   const DocTable = ({ docs, source }: { docs: typeof allDocs; source: "admin" | "partner" }) => (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -165,15 +171,25 @@ export default function PartnerDocuments() {
             <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div className="border rounded-xl p-3 space-y-2">
                 <p className="text-sm font-medium">Term sheet</p>
-                <DocumentUploadCard docType="term_sheet_signed" label="term sheet" compact />
+                <DocumentUploadCard
+                  docType="term_sheet_signed"
+                  label="term sheet"
+                  done={hasDoc("term_sheet_signed")}
+                  compact
+                />
               </div>
               <div className="border rounded-xl p-3 space-y-2">
                 <p className="text-sm font-medium">Contrato</p>
-                <DocumentUploadCard docType="contract" label="contrato" compact />
+                <DocumentUploadCard docType="contract" label="contrato" done={hasDoc("contract")} compact />
               </div>
               <div className="border rounded-xl p-3 space-y-2">
                 <p className="text-sm font-medium">Autorización ACH</p>
-                <DocumentUploadCard docType="ach_authorization" label="ACH" compact />
+                <DocumentUploadCard
+                  docType="ach_authorization"
+                  label="ACH"
+                  done={hasDoc("ach_authorization")}
+                  compact
+                />
               </div>
               <div className="border rounded-xl p-3 space-y-2">
                 <p className="text-sm font-medium">W-9</p>
@@ -183,7 +199,7 @@ export default function PartnerDocuments() {
                       <Download className="w-4 h-4 mr-1" /> W-9 IRS
                     </a>
                   </Button>
-                  <DocumentUploadCard docType="w9" label="W-9" compact />
+                  <DocumentUploadCard docType="w9" label="W-9" done={hasDoc("w9")} compact />
                 </div>
               </div>
             </div>

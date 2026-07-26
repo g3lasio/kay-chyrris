@@ -14,9 +14,29 @@
  *       If REFERRAL_WEBHOOK_SECRET is set, the X-Referral-Secret header
  *       must match (recommended in production).
  */
+import { timingSafeEqual } from "node:crypto";
 import type { Express, Request, Response } from "express";
 import { createAttribution, findPartnerByCode } from "./commission-engine";
 import { resolveInvitationRedirect } from "./partner-invitations";
+
+/**
+ * Constant-time comparison of the webhook secret. A plain `!==` leaks the
+ * shared secret one byte at a time to anyone who can measure response time,
+ * and this secret is what stands between the public internet and the ability
+ * to hijack referral attributions.
+ */
+function secretMatches(provided: unknown, expected: string): boolean {
+  if (typeof provided !== "string") return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  // timingSafeEqual throws on length mismatch, so equalize first — the length
+  // itself is not the secret.
+  if (a.length !== b.length) {
+    timingSafeEqual(b, b); // keep the work comparable on the mismatch path
+    return false;
+  }
+  return timingSafeEqual(a, b);
+}
 
 // Simple in-memory throttle: max N requests per IP per minute.
 const RATE_LIMIT_PER_MINUTE = 60;
@@ -87,7 +107,7 @@ export function registerReferralRoutes(app: Express): void {
         );
         return res.status(503).json({ success: false, error: "Attribution endpoint not configured" });
       }
-      if (req.headers["x-referral-secret"] !== secret) {
+      if (!secretMatches(req.headers["x-referral-secret"], secret)) {
         return res.status(401).json({ success: false, error: "Unauthorized" });
       }
 

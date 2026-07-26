@@ -81,6 +81,19 @@ async function main() {
              referral_commissions, referral_payouts, referral_attributions,
              referral_partners RESTART IDENTITY CASCADE`);
 
+  /**
+   * The send is deliberately fire-and-forget (it must not block the onboarding
+   * query), so assertions wait for the mailbox to settle instead of assuming
+   * the email already landed when getOnboardingState() resolves.
+   */
+  const settle = async (expected: number, timeoutMs = 4000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (sent.length < expected && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 50));
+    }
+    await new Promise(r => setTimeout(r, 250)); // catch an unexpected extra send
+  };
+
   const rowOf = (id: number) =>
     db.select().from(schema.referralPartners).where(eq(schema.referralPartners.id, id)).limit(1).then(r => r[0]!);
 
@@ -113,6 +126,7 @@ async function main() {
   // ── 1. No email while the journey is incomplete ──
   const aId = await newPartner("Prime Contractors Institute", "socios@primecontractors.edu", "PRIME");
   await pdb.getOnboardingState(await rowOf(aId));
+  await settle(1, 800);
   check("Socio recién creado: no se envía bienvenida", sent.length === 0, `enviados=${sent.length}`);
 
   await pdb.markMaterialsReviewed(aId);
@@ -120,6 +134,7 @@ async function main() {
   await addDoc(aId, "term_sheet_signed");
   await addDoc(aId, "contract");
   await pdb.getOnboardingState(await rowOf(aId));
+  await settle(1, 800);
   check("Etapas 1 y 2 completas: sigue sin enviarse (falta pago)", sent.length === 0, `enviados=${sent.length}`);
 
   // ── 2. Completing stage 3 sends exactly one welcome ──
@@ -129,6 +144,7 @@ async function main() {
     .set({ contactConfirmedAt: new Date() })
     .where(eq(schema.referralPartners.id, aId));
   const journey = await pdb.getOnboardingState(await rowOf(aId));
+  await settle(1);
   check("Onboarding marcado completo", journey.complete && journey.currentStage === 4);
   check("Al completar las 3 etapas llega la bienvenida", sent.length === 1, `enviados=${sent.length}`);
 
@@ -147,6 +163,7 @@ async function main() {
 
   // ── 3. The dashboard polls this on every load — it must NOT resend ──
   for (let i = 0; i < 5; i++) await pdb.getOnboardingState(await rowOf(aId));
+  await settle(2, 800);
   check("Recargar el dashboard 5 veces NO reenvía", sent.length === 1, `enviados=${sent.length}`);
 
   // ── 4. Dropping out of "complete" and completing again must not resend ──
@@ -157,6 +174,7 @@ async function main() {
   check("Quitar un documento revierte el onboarding a incompleto", !regressed.complete);
   await addDoc(aId, "ach_authorization");
   const recompleted = await pdb.getOnboardingState(await rowOf(aId));
+  await settle(2, 800);
   check("Volver a completar NO envía una segunda bienvenida",
     recompleted.complete && sent.length === 1, `enviados=${sent.length}`);
 
@@ -170,6 +188,7 @@ async function main() {
     pdb.getOnboardingState(cRow),
     pdb.getOnboardingState(cRow),
   ]);
+  await settle(2);
   const cMails = sent.filter(m => m.to === "concurrente@test.com");
   check("4 cargas simultáneas envían UNA sola bienvenida (claim atómico)",
     cMails.length === 1, `enviados=${cMails.length}`);
@@ -179,11 +198,13 @@ async function main() {
   const bId = await newPartner("Otra Escuela", "otra@test.com", "OTRA");
   await completeJourney(bId);
   await pdb.getOnboardingState(await rowOf(bId));
+  await settle(3);
   check("Si el envío falla, la marca se libera (no se pierde la bienvenida)",
     (await rowOf(bId)).welcomeEmailSentAt == null);
 
   failNextSends = false;
   await pdb.getOnboardingState(await rowOf(bId));
+  await settle(3);
   const bMails = sent.filter(m => m.to === "otra@test.com");
   check("La siguiente carga reintenta y sí envía", bMails.length === 1, `enviados=${bMails.length}`);
 

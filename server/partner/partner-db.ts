@@ -21,6 +21,7 @@ import { storagePut, storageGet } from "../storage";
 import { buildReferralLink, buildShortReferralLink, fetchReferredUsersInfo, reversalKey } from "./commission-engine";
 import { getPortalSettings } from "./app-settings";
 import { isPartnerEmailConfigured, sendPartnerOnboardingCompleteEmail } from "./partner-emails";
+import { evictPartnerFromSessionCache } from "./partner-auth";
 
 // ── Onboarding journey — 3 unlockable stages (brief §1) ────────────────────
 // Stage 1 "materiales": partner reviewed the informational docs LeadPrime
@@ -116,7 +117,11 @@ export async function getOnboardingState(partner: ReferralPartner): Promise<Onbo
       .where(eq(referralPartners.id, partner.id));
   }
 
-  if (complete) await sendWelcomeEmailOnce(partner);
+  // Fire-and-forget: this runs inside the onboarding QUERY the dashboard hits on
+  // every load. Awaiting it would put Resend's latency (and the fetch's lack of
+  // a default timeout) on the critical path of the exact page load where the
+  // partner finishes — a hung send would turn their celebration into an error.
+  if (complete) void sendWelcomeEmailOnce(partner);
 
   return { stages, currentStage, completedStages, totalStages: 3, complete };
 }
@@ -135,6 +140,15 @@ export async function getOnboardingState(partner: ReferralPartner): Promise<Onbo
  * RESEND_API_KEY exists.
  */
 async function sendWelcomeEmailOnce(partner: ReferralPartner): Promise<void> {
+  try {
+    await sendWelcomeEmailOnceInner(partner);
+  } catch (error) {
+    // Never let a welcome email take down the onboarding query it rides on.
+    console.error(`[Partner Portal] Welcome email for partner ${partner.id} threw:`, error);
+  }
+}
+
+async function sendWelcomeEmailOnceInner(partner: ReferralPartner): Promise<void> {
   if (!isPartnerEmailConfigured() || !partner.contactEmail) return;
   if (partner.welcomeEmailSentAt) return; // fast path — avoids a write per load
 
@@ -168,6 +182,9 @@ async function sendWelcomeEmailOnce(partner: ReferralPartner): Promise<void> {
       `[Partner Portal] Welcome email to partner ${partner.id} failed, claim released for retry: ${result.error}`
     );
   } else {
+    // Drop the cached partner row so the next load takes the fast path above
+    // instead of re-running the (correctly no-op) guarded UPDATE for a minute.
+    evictPartnerFromSessionCache(partner.id);
     console.log(`[Partner Portal] Welcome email sent to partner ${partner.id} (onboarding complete)`);
   }
 }
