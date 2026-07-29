@@ -101,3 +101,70 @@ Los únicos 500 aparecen en el visor de PDF del onboarding y son R2 sin credenci
 | E2E base — motor de comisión | ✅ 46/46 |
 
 Nota: `owlfenc-postgres.test.ts` y `owlfenc-db.test.ts` (7 tests) fallan por falta de una base de OwlFenc real en este entorno. Es preexistente y ajeno al portal.
+
+---
+
+# Anexo — Móvil: el admin de socios (`kai.chyrris.com`)
+
+**Fecha:** 2026-07-26 · **Reportado por Gelasio desde el teléfono**
+
+La auditoría anterior cubrió el portal del socio (`partners.chyrris.com`), no el **admin de Kai**. Ahí estaba el problema: no se podían subir documentos desde el teléfono.
+
+## La causa
+
+`TabsTrigger` de shadcn tiene `h-[calc(100%-1px)]` — cada pestaña mide el alto del **contenedor completo**, no el de su fila. La lista tenía `flex-wrap`, así que a 375px las cinco pestañas se envolvían en tres filas y **las cinco se dibujaban a la misma altura, una encima de otra**. Las tres últimas quedaban tapadas.
+
+Reproducido con Playwright antes del arreglo:
+
+```
+pestaña Referidos:     visible=true  clic=true
+pestaña Comisiones:    visible=true  clic=true
+pestaña Documentos:    visible=true  clic=FALSE   ← la de subir archivos
+pestaña Invitaciones:  visible=true  clic=FALSE
+pestaña Liquidaciones: visible=true  clic=FALSE
+botón "Subir documento" no encontrado
+DESBORDE HORIZONTAL: 53px  (en las 4 pantallas)
+```
+
+No era un problema de estética: la pestaña Documentos era **físicamente intocable**, y es la única vía para subirle un archivo a un socio.
+
+## Los arreglos
+
+1. **Pestañas que se desplazan en vez de envolverse.** Una sola fila dentro de un contenedor con scroll horizontal, que es el patrón estándar en móvil y mantiene válido el `h-[calc(100%-1px)]`. Radix trae la pestaña activa a la vista sola.
+2. **Alto táctil.** `h-11` en teléfono (`sm:h-9` en escritorio): las pestañas medían ~30px, por debajo de cualquier objetivo cómodo para el dedo.
+3. **La fila de acciones del encabezado desbordaba** 53px — "Nuevo socio" quedaba cortado contra el borde. Le faltaba `flex-wrap`.
+4. **Selector de archivo.** El control nativo mostraba *"Choose File / No file chosen"* — texto en inglés dentro de una interfaz en español, y un objetivo diminuto. Ahora es un botón real de ancho completo que muestra el nombre y el peso del archivo elegido, igual que en el lado del socio.
+5. **Nombre del documento**, el control que se toca para abrirlo desde el teléfono: `py-2` para darle área de dedo.
+6. **La ✕ de los diálogos** pasó a `p-2` con desplazamiento compensado — misma apariencia, área táctil de dedo. Es el primitivo compartido, así que mejora todos los diálogos de Kai sin mover un pixel visible.
+
+## Verificación
+
+**Subida real de punta a punta desde un iPhone simulado** (375px, touch, user-agent de Safari iOS), con R2 apuntando a un stub S3 local:
+
+```
+abrí la ficha del socio
+toqué la pestaña Documentos
+abrí el diálogo
+elegí categoría Reporte y puse título
+el botón muestra el archivo elegido: sí
+toqué Subir documento
+
+RESULTADO: el documento aparece en la lista del socio → SÍ
+desborde horizontal: 0px
+
+PUT recibido por el stub S3:
+  /partner-portal-documents/partner-documents/1/report/…-reporte-movil.pdf  (38 bytes)
+```
+
+El PUT confirma la ruta completa: bucket aislado + prefijo por socio.
+
+**Barrido de 18 estados** — admin a 375px (lista, alta, ficha, las 5 pestañas, editar, eliminar), admin a **320px** (el ancho más estrecho aún en uso), y las 3 páginas del portal del socio:
+
+```
+--- HALLAZGOS ---
+ninguno
+```
+
+Cero desbordes horizontales, cero errores de JavaScript, cero controles por debajo de 32px de alto.
+
+Capturas: `v6-admin-detalle-movil`, `v6-admin-documentos-movil`, `v6-admin-subida-movil`, `v6-admin-detalle-320px`.

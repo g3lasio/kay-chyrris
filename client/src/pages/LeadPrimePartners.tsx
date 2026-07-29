@@ -35,6 +35,7 @@ import {
   Handshake,
   Loader2,
   Mail,
+  Paperclip,
   Pause,
   Pencil,
   Play,
@@ -178,15 +179,33 @@ function AdminUploadDialog({
             </div>
           )}
 
+          {/* The raw file control renders the browser's own "Choose File / No
+              file chosen" — English text in a Spanish UI, and a cramped tap
+              target on a phone. Hidden input + real button instead, matching
+              the partner side. */}
           <div className="space-y-1">
             <label className="text-sm font-medium">Archivo</label>
             <input
               ref={inputRef}
               type="file"
               accept=".pdf,.png,.jpg,.jpeg,.webp"
-              className="block w-full text-sm text-muted-foreground file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-primary file:text-primary-foreground file:cursor-pointer"
+              className="hidden"
               onChange={e => setFile(e.target.files?.[0] ?? null)}
             />
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full justify-start font-normal"
+              onClick={() => inputRef.current?.click()}
+            >
+              <Paperclip className="w-4 h-4 mr-2 shrink-0" />
+              <span className="truncate">{file ? file.name : "Elegir archivo…"}</span>
+            </Button>
+            {file && (
+              <p className="text-xs text-muted-foreground">
+                {(file.size / 1024 / 1024).toFixed(2)} MB
+              </p>
+            )}
           </div>
 
           <DialogFooter className="pt-2">
@@ -260,7 +279,7 @@ export default function LeadPrimePartners() {
             Programa multi-socio · portal en partners.chyrris.com · comisión 20% año 1 / 10% año 2 sobre revenue cobrado
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="icon" onClick={() => setSettingsOpen(true)} title="Ajustes del portal">
             <Settings className="w-4 h-4" />
           </Button>
@@ -978,13 +997,32 @@ function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClos
             />
 
             <Tabs defaultValue="referrals" className="mt-2">
-              <TabsList className="flex-wrap h-auto">
-                <TabsTrigger value="referrals">Referidos ({data.attributions.length})</TabsTrigger>
-                <TabsTrigger value="commissions">Comisiones ({data.commissions.length})</TabsTrigger>
-                <TabsTrigger value="documents">Documentos ({data.documents.length})</TabsTrigger>
-                <TabsTrigger value="invitations">Invitaciones ({invitationsQuery.data?.length ?? 0})</TabsTrigger>
-                <TabsTrigger value="payouts">Liquidaciones ({data.payouts.length})</TabsTrigger>
-              </TabsList>
+              {/* Scroll the strip instead of wrapping it. TabsTrigger is
+                  h-[calc(100%-1px)] — sized against the LIST, not its row — so
+                  wrapping stacked all five triggers at the same height and they
+                  covered each other: on a phone "Documentos" was physically
+                  unclickable, which is the tab that uploads files. */}
+              <div className="-mx-1 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {/* h-11 on phones: the default h-9 leaves ~30px triggers, under
+                    any comfortable touch target. */}
+                <TabsList className="w-max h-11 sm:h-9">
+                  <TabsTrigger value="referrals" className="flex-none px-3 sm:px-2">
+                    Referidos ({data.attributions.length})
+                  </TabsTrigger>
+                  <TabsTrigger value="commissions" className="flex-none px-3 sm:px-2">
+                    Comisiones ({data.commissions.length})
+                  </TabsTrigger>
+                  <TabsTrigger value="documents" className="flex-none px-3 sm:px-2">
+                    Documentos ({data.documents.length})
+                  </TabsTrigger>
+                  <TabsTrigger value="invitations" className="flex-none px-3 sm:px-2">
+                    Invitaciones ({invitationsQuery.data?.length ?? 0})
+                  </TabsTrigger>
+                  <TabsTrigger value="payouts" className="flex-none px-3 sm:px-2">
+                    Liquidaciones ({data.payouts.length})
+                  </TabsTrigger>
+                </TabsList>
+              </div>
 
               <TabsContent value="referrals" className="space-y-4">
                 <div className="flex flex-wrap items-end gap-2 border rounded-lg p-3">
@@ -1173,7 +1211,10 @@ function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClos
                               {doc.fileUrl ? (
                                 <button
                                   type="button"
-                                  className="text-primary hover:underline text-left truncate max-w-full"
+                                  // py-2 gives the filename a finger-sized hit
+                                  // area — this is the control you tap to open
+                                  // a document from a phone.
+                                  className="text-primary hover:underline text-left truncate max-w-full py-2 -my-1"
                                   onClick={() => openAdminDocument(doc.id)}
                                 >
                                   {doc.fileName ?? "ver archivo"}
