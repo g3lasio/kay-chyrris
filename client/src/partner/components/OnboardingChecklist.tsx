@@ -18,7 +18,6 @@ import {
   Banknote,
   CheckCircle2,
   Circle,
-  Download,
   FileSignature,
   FileText,
   Lock,
@@ -26,10 +25,9 @@ import {
   UserCheck,
 } from "lucide-react";
 import DocumentUploadCard from "./DocumentUploadCard";
+import W9FormDialog from "./W9FormDialog";
 import PdfViewer from "./PdfViewer";
 import { usePartnerAuth } from "../usePartnerAuth";
-
-const IRS_W9_URL = "https://www.irs.gov/pub/irs-pdf/fw9.pdf";
 
 const INFO_DOC_LABEL: Record<string, string> = {
   revenue_projection: "Proyección de revenue",
@@ -76,6 +74,7 @@ export default function OnboardingChecklist() {
   const confirmContact = trpc.partnerPortal.confirmContact.useMutation();
 
   const [ackChecked, setAckChecked] = useState(false);
+  const [w9Open, setW9Open] = useState(false);
   const [contactName, setContactName] = useState(partner?.contactName ?? "");
   const [contactPhone, setContactPhone] = useState(partner?.contactPhone ?? "");
 
@@ -355,22 +354,27 @@ export default function OnboardingChecklist() {
                 </form>
               </div>
 
-              {/* Optional W-9, not required for the gate but offered here. */}
-              <div className="flex flex-wrap items-center gap-2 border rounded-lg p-3">
-                <span className="text-sm text-muted-foreground flex-1">
-                  ¿Tienes W-9? Puedes adjuntarlo (opcional).
-                </span>
-                <Button variant="outline" size="sm" asChild>
-                  <a href={IRS_W9_URL} target="_blank" rel="noreferrer">
-                    <Download className="w-4 h-4 mr-2" /> W-9 en blanco
-                  </a>
-                </Button>
-                <DocumentUploadCard docType="w9" label="W-9" compact />
+              {/* Optional W-9 — filled and signed IN the portal (no PDFs). */}
+              <div className="border rounded-lg p-3 space-y-2">
+                <p className="text-sm font-medium flex items-center gap-2">
+                  <FileSignature className="w-4 h-4 text-primary" /> W-9 (opcional)
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Llénalo y fírmalo aquí mismo en un minuto — nosotros generamos el formulario oficial
+                  y lo guardamos por ti. Si ya tienes uno firmado, también puedes subirlo.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" onClick={() => setW9Open(true)}>
+                    <FileSignature className="w-4 h-4 mr-2" /> Llenar y firmar aquí
+                  </Button>
+                  <DocumentUploadCard docType="w9" label="W-9" compact />
+                </div>
               </div>
             </>
           )}
         </CardContent>
       </Card>
+      <W9FormDialog open={w9Open} onOpenChange={setW9Open} />
     </div>
   );
 }

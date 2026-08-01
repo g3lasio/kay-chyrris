@@ -30,6 +30,7 @@ import {
   evictPartnerFromSessionCache,
   NEUTRAL_OTP_MESSAGE,
 } from "./partner-auth";
+import { TAX_CLASSIFICATIONS, generateSubstituteW9 } from "./w9-form";
 import {
   adminGeneratePayout,
   adminGetPartnerDetail,
@@ -45,6 +46,7 @@ import {
   getPartnerReferrals,
   listPartnerDocuments,
   markMaterialsReviewed,
+  savePartnerGeneratedW9,
   uploadPartnerDocument,
 } from "./partner-db";
 import {
@@ -168,6 +170,57 @@ export const partnerPortalRouter = router({
   documents: partnerProcedure.query(async ({ ctx }) => {
     return listPartnerDocuments(ctx.partner.id);
   }),
+
+  // W-9 guiado: el socio llena sus datos y firma AQUÍ (sin ver el PDF); el
+  // servidor genera el Substitute Form W-9 (permitido por el IRS con la
+  // certificación textual) y lo guarda como su documento W-9.
+  // PRIVACIDAD: el TIN va SOLO dentro del PDF (objeto privado en R2) — nunca
+  // se persiste en la base ni se registra en logs.
+  submitW9: partnerProcedure
+    .input(
+      z.object({
+        name: z.string().trim().min(2).max(120),
+        businessName: z.string().trim().max(120).optional(),
+        taxClassification: z.enum(TAX_CLASSIFICATIONS),
+        llcClassification: z.enum(["C", "S", "P"]).optional(),
+        otherClassification: z.string().trim().max(80).optional(),
+        address: z.string().trim().min(4).max(120),
+        cityStateZip: z.string().trim().min(4).max(120),
+        tinType: z.enum(["ssn", "ein"]),
+        tin: z
+          .string()
+          .transform(v => v.replace(/\D/g, ""))
+          .refine(v => v.length === 9, "El número debe tener 9 dígitos"),
+        certify: z.literal(true),
+        signatureName: z.string().trim().min(2).max(120),
+        signatureImagePngDataUrl: z
+          .string()
+          .startsWith("data:image/png;base64,")
+          .max(400_000)
+          .optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      if (input.taxClassification === "llc" && !input.llcClassification) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Indica la clasificación fiscal de tu LLC (C, S o P)" });
+      }
+      const pdf = await generateSubstituteW9({
+        name: input.name,
+        businessName: input.businessName || null,
+        taxClassification: input.taxClassification,
+        llcClassification: input.llcClassification || null,
+        otherClassification: input.otherClassification || null,
+        address: input.address,
+        cityStateZip: input.cityStateZip,
+        tinType: input.tinType,
+        tin: input.tin,
+        signatureName: input.signatureName,
+        signatureImagePngDataUrl: input.signatureImagePngDataUrl || null,
+        signedAtIso: new Date().toISOString(),
+      });
+      const doc = await savePartnerGeneratedW9(ctx.partner.id, pdf);
+      return { success: true, documentId: doc.id };
+    }),
 
   monthlyIncome: partnerProcedure.query(async ({ ctx }) => {
     return getMonthlyIncomeHistory(ctx.partner.id);

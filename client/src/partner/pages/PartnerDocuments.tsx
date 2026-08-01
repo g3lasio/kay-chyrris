@@ -3,13 +3,15 @@
  * file in one place — informational materials LeadPrime uploaded (view-only)
  * and the signed documents the partner uploaded, each with its status.
  */
+import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Download, ExternalLink, FileBarChart, FileText, Info, Loader2, ShieldCheck } from "lucide-react";
+import { ExternalLink, FileBarChart, FileSignature, FileText, Info, Loader2, ShieldCheck } from "lucide-react";
 import PartnerLayout from "../PartnerLayout";
 import DocumentUploadCard from "../components/DocumentUploadCard";
+import W9FormDialog from "../components/W9FormDialog";
 
 const DOC_LABEL: Record<string, string> = {
   contract: "Contrato firmado",
@@ -24,7 +26,6 @@ const DOC_LABEL: Record<string, string> = {
 };
 
 const INFORMATIONAL = new Set(["revenue_projection", "features", "term_sheet_info"]);
-const IRS_W9_URL = "https://www.irs.gov/pub/irs-pdf/fw9.pdf";
 
 function StatusChip({ status }: { status: string }) {
   if (status === "verified")
@@ -42,6 +43,7 @@ function shortDate(value: string | Date | null): string {
 export default function PartnerDocuments() {
   const documentsQuery = trpc.partnerPortal.documents.useQuery();
   const utils = trpc.useUtils();
+  const [w9Open, setW9Open] = useState(false);
 
   const openDocument = async (documentId: number) => {
     try {
@@ -194,10 +196,12 @@ export default function PartnerDocuments() {
               <div className="border rounded-xl p-3 space-y-2">
                 <p className="text-sm font-medium">W-9</p>
                 <div className="flex flex-col gap-1.5">
-                  <Button variant="outline" size="sm" asChild className="w-full">
-                    <a href={IRS_W9_URL} target="_blank" rel="noreferrer">
-                      <Download className="w-4 h-4 mr-1" /> W-9 IRS
-                    </a>
+                  {/* Llenarlo y firmarlo AQUÍ es la vía principal — nada de
+                      descargar/imprimir/escanear. Subir un W-9 propio queda
+                      como alternativa para quien ya lo tiene. */}
+                  <Button size="sm" className="w-full" onClick={() => setW9Open(true)}>
+                    <FileSignature className="w-4 h-4 mr-1" />
+                    {hasDoc("w9") ? "Firmar de nuevo" : "Llenar y firmar aquí"}
                   </Button>
                   <DocumentUploadCard docType="w9" label="W-9" done={hasDoc("w9")} compact />
                 </div>
@@ -219,6 +223,7 @@ export default function PartnerDocuments() {
           </CardContent>
         </Card>
       </div>
+      <W9FormDialog open={w9Open} onOpenChange={setW9Open} />
     </PartnerLayout>
   );
 }

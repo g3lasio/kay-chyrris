@@ -254,6 +254,37 @@ async function storeDocument(input: {
   return rows[0]!;
 }
 
+/**
+ * Substitute W-9 generated IN the portal: the partner filled the guided form
+ * and signed; the server renders the official-equivalent PDF and stores it as
+ * their W-9 document. The TIN lives ONLY inside the PDF (private R2 object) —
+ * it is never persisted to the database and never logged.
+ */
+export async function savePartnerGeneratedW9(
+  partnerId: number,
+  pdfBytes: Uint8Array
+): Promise<PartnerDocument> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const key = `partner-documents/${partnerId}/w9/${Date.now()}-w9_firmado.pdf`;
+  const { url } = await storagePut(key, Buffer.from(pdfBytes), "application/pdf");
+  const rows = await db
+    .insert(partnerDocuments)
+    .values({
+      partnerId,
+      docType: "w9",
+      title: "W-9 firmado electrónicamente en el portal",
+      fileUrl: url,
+      fileName: "w9_firmado.pdf",
+      status: "uploaded",
+      uploadedBy: "partner",
+      uploadedAt: new Date(),
+    })
+    .returning();
+  console.log(`[Partner Portal] W-9 generado y firmado en el portal — partner ${partnerId} (doc ${rows[0]!.id})`);
+  return rows[0]!;
+}
+
 /** Partner uploads a signed document (uploaded_by='partner'). */
 export async function uploadPartnerDocument(input: {
   partnerId: number;
