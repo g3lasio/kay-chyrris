@@ -3,8 +3,9 @@
  * simple nav (Panel / Documentos) and logout. Mobile-first.
  */
 import { Link, useLocation } from "wouter";
-import { FileText, LayoutDashboard, LogOut, UserPlus } from "lucide-react";
+import { Copy, FileText, LayoutDashboard, Link2, LogOut, Share2, UserPlus } from "lucide-react";
 import { usePartnerAuth } from "./usePartnerAuth";
+import { copyReferralLink, shareReferralLink } from "./lib/referral-share";
 
 const NAV = [
   { path: "/", label: "Panel", icon: LayoutDashboard },
@@ -81,6 +82,35 @@ export default function PartnerLayout({ children }: { children: React.ReactNode 
           })}
         </div>
       </nav>
+
+      {/* Referral link — SIEMPRE a la mano, en todas las páginas del portal.
+          Sticky bajo el topbar; en móvil es la vía principal para copiar o
+          compartir el enlace sin buscarlo dentro del panel. */}
+      {partner?.onboardingComplete && (partner.shortReferralLink || partner.referralLink) && (
+        <div className="sticky top-16 z-30 bg-[var(--lp-blue)] text-white shadow-md">
+          <div className="mx-auto max-w-6xl px-4 py-2 flex items-center gap-2">
+            <Link2 className="w-4 h-4 shrink-0 opacity-90" aria-hidden />
+            <span className="hidden sm:inline text-xs font-medium opacity-90 shrink-0">Tu enlace de referido:</span>
+            <code className="flex-1 min-w-0 truncate text-sm font-semibold">
+              {(partner.shortReferralLink || partner.referralLink).replace(/^https?:\/\//, "")}
+            </code>
+            <button
+              onClick={() => copyReferralLink(partner.shortReferralLink || partner.referralLink)}
+              className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-white/15 hover:bg-white/25 transition-colors shrink-0"
+              aria-label="Copiar enlace de referido"
+            >
+              <Copy className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => shareReferralLink(partner.shortReferralLink || partner.referralLink)}
+              className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-white text-[var(--lp-blue)] hover:bg-white/90 transition-colors shrink-0"
+              aria-label="Compartir enlace de referido"
+            >
+              <Share2 className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       <main className="flex-1">
         <div className="mx-auto max-w-6xl px-4 py-6 sm:py-8">{children}</div>

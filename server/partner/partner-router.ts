@@ -49,6 +49,7 @@ import {
 } from "./partner-db";
 import {
   buildReferralLink,
+  buildShortReferralLink,
   createAttribution,
   syncReferralSystem,
 } from "./commission-engine";
@@ -63,8 +64,11 @@ import { getPortalSettings, setSetting, SETTING_KEYS } from "./app-settings";
 
 const PARTNER_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** Public partner shape — the partner's own record, nothing else. */
-function toPartnerProfile(p: typeof referralPartners.$inferSelect) {
+/** Public partner shape — the partner's own record, nothing else. The referral
+ *  links ride on the profile so EVERY page of the portal (layout bar included)
+ *  has them at hand without loading the full dashboard. */
+async function toPartnerProfile(p: typeof referralPartners.$inferSelect) {
+  const settings = await getPortalSettings();
   return {
     id: p.id,
     name: p.name,
@@ -79,6 +83,7 @@ function toPartnerProfile(p: typeof referralPartners.$inferSelect) {
     onboardingComplete: p.onboardingComplete,
     contactConfirmedAt: p.contactConfirmedAt,
     referralLink: buildReferralLink(p.referralCode),
+    shortReferralLink: buildShortReferralLink(p.referralCode, settings.shortLinkBase),
   };
 }
 

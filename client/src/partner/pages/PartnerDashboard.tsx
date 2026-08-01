@@ -28,13 +28,13 @@ import {
 import {
   Copy,
   DollarSign,
-  ExternalLink,
   Gift,
-  Globe,
   Link2,
   Loader2,
+  MessageCircle,
+  MessageSquare,
   PartyPopper,
-  Rocket,
+  Share2,
   TrendingUp,
   Users,
   Wallet,
@@ -43,6 +43,12 @@ import {
 import PartnerLayout from "../PartnerLayout";
 import OnboardingChecklist from "../components/OnboardingChecklist";
 import { usePartnerAuth } from "../usePartnerAuth";
+import {
+  canNativeShare,
+  shareReferralLink,
+  smsShareUrl,
+  whatsappShareUrl,
+} from "../lib/referral-share";
 
 /**
  * The welcome moment: shown the first time the dashboard unlocks, i.e. right
@@ -193,54 +199,11 @@ export default function PartnerDashboard() {
   );
 }
 
-function LinkTile({
-  icon: Icon,
-  label,
-  url,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  url: string;
-}) {
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(url);
-      toast.success("Link copiado");
-    } catch {
-      toast.error("No se pudo copiar");
-    }
-  };
-  return (
-    <div className="flex items-center gap-3 border rounded-xl p-3">
-      <div className="w-9 h-9 rounded-lg bg-accent flex items-center justify-center shrink-0">
-        <Icon className="w-4 h-4 text-primary" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium">{label}</p>
-        <a href={url} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline truncate block">
-          {url.replace(/^https?:\/\//, "")}
-        </a>
-      </div>
-      <div className="flex gap-1 shrink-0">
-        <Button variant="ghost" size="sm" onClick={copy} title="Copiar">
-          <Copy className="w-4 h-4" />
-        </Button>
-        <Button variant="ghost" size="sm" asChild title="Abrir">
-          <a href={url} target="_blank" rel="noreferrer">
-            <ExternalLink className="w-4 h-4" />
-          </a>
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 function DashboardContent() {
   const dashboardQuery = trpc.partnerPortal.dashboard.useQuery();
   const referralsQuery = trpc.partnerPortal.referrals.useQuery();
   const payoutsQuery = trpc.partnerPortal.payouts.useQuery();
   const incomeQuery = trpc.partnerPortal.monthlyIncome.useQuery();
-  const linksQuery = trpc.partnerPortal.links.useQuery();
 
   const data = dashboardQuery.data;
   if (dashboardQuery.isLoading || !data) {
@@ -267,12 +230,77 @@ function DashboardContent() {
   const referrals = referralsQuery.data ?? [];
   const payouts = payoutsQuery.data ?? [];
   const income = incomeQuery.data ?? [];
-  const links = linksQuery.data;
   const hasIncome = income.some(pt => parseFloat(pt.amount) !== 0);
 
   return (
     <div className="space-y-6">
       <WelcomeBanner />
+
+      {/* Referral link — LO PRIMERO del panel: es la herramienta de trabajo
+          del socio y en móvil debe estar a la mano sin buscarla. */}
+      <Card className="border-primary/30">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Link2 className="w-5 h-5 text-primary" /> Tu enlace de referido
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Compártelo donde quieras (bio de TikTok, Instagram, WhatsApp). Cada contratista que se
+            registre con él queda atribuido a ti (código <strong>{data.referralCode}</strong>).
+          </p>
+          <div className="flex gap-2">
+            <code className="flex-1 min-w-0 truncate text-sm bg-muted rounded-lg px-3 py-2.5 border font-medium self-stretch flex items-center">
+              {data.shortReferralLink}
+            </code>
+            <Button
+              onClick={() => copyLink(data.shortReferralLink)}
+              size="sm"
+              variant="outline"
+              className="shrink-0 h-11"
+              aria-label="Copiar enlace"
+            >
+              <Copy className="w-4 h-4 sm:mr-2" />
+              <span className="hidden sm:inline">Copiar</span>
+            </Button>
+            <Button
+              onClick={() => shareReferralLink(data.shortReferralLink)}
+              size="sm"
+              className="shrink-0 h-11"
+              aria-label="Compartir enlace"
+            >
+              <Share2 className="w-4 h-4 sm:mr-2" />
+              <span className="hidden sm:inline">Compartir</span>
+            </Button>
+          </div>
+          {!canNativeShare() && (
+            <div className="flex flex-wrap gap-2">
+              <Button asChild size="sm" variant="outline" className="h-9">
+                <a href={whatsappShareUrl(data.shortReferralLink)} target="_blank" rel="noreferrer">
+                  <MessageCircle className="w-4 h-4 mr-1.5" /> WhatsApp
+                </a>
+              </Button>
+              <Button asChild size="sm" variant="outline" className="h-9">
+                <a href={smsShareUrl(data.shortReferralLink)}>
+                  <MessageSquare className="w-4 h-4 mr-1.5" /> SMS
+                </a>
+              </Button>
+            </div>
+          )}
+          {/* Long form kept as a fallback */}
+          <details className="text-xs text-muted-foreground">
+            <summary className="cursor-pointer hover:text-foreground">Ver enlace largo</summary>
+            <div className="flex gap-2 mt-2">
+              <code className="flex-1 min-w-0 truncate bg-muted rounded-lg px-3 py-2 border">
+                {data.referralLink}
+              </code>
+              <Button onClick={() => copyLink(data.referralLink)} size="sm" variant="outline" className="shrink-0 h-auto">
+                <Copy className="w-4 h-4" />
+              </Button>
+            </div>
+          </details>
+        </CardContent>
+      </Card>
 
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
@@ -292,62 +320,23 @@ function DashboardContent() {
         />
       </div>
 
-      <div className="grid lg:grid-cols-2 gap-4">
-        {/* Free account progress */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Gift className="w-5 h-5 text-[var(--lp-gold)]" /> Cuenta LeadPrime gratis
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              {data.freeAccount.achieved
-                ? "¡Meta alcanzada! Tu cuenta gratis está desbloqueada."
-                : `${data.freeAccount.current} de ${data.freeAccount.threshold} referidos activos para desbloquear tu cuenta gratis.`}
-            </p>
-            <Progress value={freePct} className="h-2.5" />
-            <p className="text-xs text-muted-foreground text-right">{freePct}%</p>
-          </CardContent>
-        </Card>
-
-        {/* Referral link */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Link2 className="w-5 h-5 text-primary" /> Tu enlace de referido
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Compártelo donde quieras (bio de TikTok, Instagram, WhatsApp). Cada contratista que se
-              registre con él queda atribuido a ti (código <strong>{data.referralCode}</strong>).
-            </p>
-            {/* Short link = primary (pretty, for social bios) */}
-            <div className="flex gap-2">
-              <code className="flex-1 min-w-0 truncate text-sm bg-muted rounded-lg px-3 py-2.5 border font-medium">
-                {data.shortReferralLink}
-              </code>
-              <Button onClick={() => copyLink(data.shortReferralLink)} size="sm" className="shrink-0 h-auto">
-                <Copy className="w-4 h-4 sm:mr-2" />
-                <span className="hidden sm:inline">Copiar</span>
-              </Button>
-            </div>
-            {/* Long form kept as a fallback */}
-            <details className="text-xs text-muted-foreground">
-              <summary className="cursor-pointer hover:text-foreground">Ver enlace largo</summary>
-              <div className="flex gap-2 mt-2">
-                <code className="flex-1 min-w-0 truncate bg-muted rounded-lg px-3 py-2 border">
-                  {data.referralLink}
-                </code>
-                <Button onClick={() => copyLink(data.referralLink)} size="sm" variant="outline" className="shrink-0 h-auto">
-                  <Copy className="w-4 h-4" />
-                </Button>
-              </div>
-            </details>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Free account progress */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Gift className="w-5 h-5 text-[var(--lp-gold)]" /> Cuenta LeadPrime gratis
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            {data.freeAccount.achieved
+              ? "¡Meta alcanzada! Tu cuenta gratis está desbloqueada."
+              : `${data.freeAccount.current} de ${data.freeAccount.threshold} referidos activos para desbloquear tu cuenta gratis.`}
+          </p>
+          <Progress value={freePct} className="h-2.5" />
+          <p className="text-xs text-muted-foreground text-right">{freePct}%</p>
+        </CardContent>
+      </Card>
 
       {/* Referrals table */}
       <Card>
@@ -480,21 +469,6 @@ function DashboardContent() {
           )}
         </CardContent>
       </Card>
-
-      {/* LeadPrime links to share (brief §6) */}
-      {links && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Globe className="w-5 h-5 text-primary" /> Links de LeadPrime para compartir
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="grid sm:grid-cols-2 gap-3">
-            <LinkTile icon={Globe} label="Landing page" url={links.landingUrl} />
-            <LinkTile icon={Rocket} label="Sitio de producción" url={links.productionUrl} />
-          </CardContent>
-        </Card>
-      )}
 
       {/* Payout history */}
       <Card>
