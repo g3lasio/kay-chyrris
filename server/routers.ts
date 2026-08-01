@@ -1251,9 +1251,74 @@ export const appRouter = router({
         }
       }),
 
+    // ─── Approved Clients Portal ────────────────────────────────────────────
+    listApprovedClients: protectedProcedure
+      .input(z.object({
+        status: z.string().optional(),
+        plan: z.string().optional(),
+        limit: z.number().optional(),
+        offset: z.number().optional(),
+      }).optional())
+      .query(async ({ input }) => {
+        try {
+          const { listApprovedClientsViaApi } = await import('./services/leadprime-db');
+          const clients = await listApprovedClientsViaApi(input ?? {});
+          return { success: true, clients };
+        } catch (error: any) {
+          return { success: false, error: error.message, clients: [] };
+        }
+      }),
+
+    createApprovedClient: protectedProcedure
+      .input(z.object({
+        contactName: z.string().min(1),
+        companyName: z.string().min(1),
+        email: z.string().email(),
+        phone: z.string().optional(),
+        plan: z.enum(['chyrris_growth', 'chyrris_legacy']),
+        monthlyPriceCents: z.number().optional(),
+        commitmentMonths: z.number().optional(),
+        specialConditions: z.string().optional(),
+        agreedGoals: z.string().optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        try {
+          const { createApprovedClientViaApi } = await import('./services/leadprime-db');
+          const client = await createApprovedClientViaApi(input);
+          return { success: true, client };
+        } catch (error: any) {
+          return { success: false, error: error.message, client: null };
+        }
+      }),
+
+    getApprovedClient: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        try {
+          const { getApprovedClientViaApi } = await import('./services/leadprime-db');
+          const data = await getApprovedClientViaApi(input.id);
+          return { success: true, ...data };
+        } catch (error: any) {
+          return { success: false, error: error.message };
+        }
+      }),
+
+    regenerateApprovedClientToken: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        try {
+          const { regenerateApprovedClientTokenViaApi } = await import('./services/leadprime-db');
+          const result = await regenerateApprovedClientTokenViaApi(input.id);
+          return { success: true, ...result };
+        } catch (error: any) {
+          return { success: false, error: error.message };
+        }
+      }),
+
   }),
 
-  // ─── END LEADPRIME CREDIT MANAGEMENT ─────────────────────────────────────
+  // ─── END LEADPRIME CREDIT MANAGEMENT ─────────────────────────────
 });
 
 export type AppRouter = typeof appRouter;

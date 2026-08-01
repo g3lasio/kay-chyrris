@@ -1725,3 +1725,56 @@ export async function addStaffViaApi(input: {
   });
   return { staffAdded: data.staffAdded ?? true, staffPhone: data.staffPhone ?? input.staff.phone };
 }
+
+// ─── Approved Clients Portal ─────────────────────────────────────────────────
+
+async function callLeadPrimeApprovedApi(method: string, path: string, body?: Record<string, any>): Promise<any> {
+  const baseUrl = process.env.LEADPRIME_API_URL || 'https://leadprime.chyrris.com';
+  const apiKey = process.env.LEADPRIME_INTERNAL_API_KEY;
+  if (!apiKey) throw new Error('LEADPRIME_INTERNAL_API_KEY no configurado');
+  const resp = await fetch(`${baseUrl}/api/join/approved/admin${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const data: any = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data?.error || `LeadPrime API error ${resp.status}`);
+  return data;
+}
+
+export async function createApprovedClientViaApi(input: {
+  contactName: string; companyName: string; email: string; phone?: string;
+  plan: 'chyrris_growth' | 'chyrris_legacy'; monthlyPriceCents?: number;
+  commitmentMonths?: number; specialConditions?: string; agreedGoals?: string; notes?: string;
+}): Promise<any> {
+  const data = await callLeadPrimeApprovedApi('POST', '/create', input);
+  return { ...data.client, portalLink: data.portalLink };
+}
+
+export async function listApprovedClientsViaApi(params?: {
+  status?: string; plan?: string; limit?: number; offset?: number;
+}): Promise<any[]> {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set('status', params.status);
+  if (params?.plan) qs.set('plan', params.plan);
+  if (params?.limit) qs.set('limit', String(params.limit));
+  if (params?.offset) qs.set('offset', String(params.offset));
+  const baseUrl = process.env.LEADPRIME_API_URL || 'https://leadprime.chyrris.com';
+  const apiKey = process.env.LEADPRIME_INTERNAL_API_KEY;
+  if (!apiKey) throw new Error('LEADPRIME_INTERNAL_API_KEY no configurado');
+  const resp = await fetch(`${baseUrl}/api/join/approved/admin/list?${qs}`, {
+    headers: { 'Authorization': `Bearer ${apiKey}` },
+  });
+  const data: any = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data?.error || `LeadPrime API error ${resp.status}`);
+  return data.clients ?? [];
+}
+
+export async function getApprovedClientViaApi(id: number): Promise<any> {
+  return callLeadPrimeApprovedApi('GET', `/${id}`);
+}
+
+export async function regenerateApprovedClientTokenViaApi(id: number): Promise<{ portalLink: string; tokenExpiresAt: string }> {
+  const data = await callLeadPrimeApprovedApi('POST', '/regenerate-token', { id });
+  return { portalLink: data.portalLink, tokenExpiresAt: data.tokenExpiresAt };
+}

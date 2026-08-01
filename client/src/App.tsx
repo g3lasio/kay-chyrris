@@ -24,6 +24,7 @@ import LeadPrimeSystemHealth from "./pages/LeadPrimeSystemHealth";
 import LeadPrimeFinance from "./pages/LeadPrimeFinance";
 import LeadPrimePendingSubscriptions from "./pages/LeadPrimePendingSubscriptions";
 import LeadPrimePartners from "./pages/LeadPrimePartners";
+import LeadPrimeApprovedClients from "./pages/LeadPrimeApprovedClients";
 import PartnerApp from "./partner/PartnerApp";
 import { isPartnerPortalHost } from "./partner/host";
 
@@ -173,6 +174,14 @@ function Router() {
         <ProtectedRoute>
           <LeadPrimeLayout>
             <LeadPrimePartners />
+          </LeadPrimeLayout>
+        </ProtectedRoute>
+      </Route>
+
+      <Route path="/leadprime/approved-clients">
+        <ProtectedRoute>
+          <LeadPrimeLayout>
+            <LeadPrimeApprovedClients />
           </LeadPrimeLayout>
         </ProtectedRoute>
       </Route>
