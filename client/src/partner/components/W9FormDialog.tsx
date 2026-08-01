@@ -144,6 +144,9 @@ export default function W9FormDialog({
   const [cityStateZip, setCityStateZip] = useState("");
   const [tinType, setTinType] = useState<"ssn" | "ein">("ssn");
   const [tin, setTin] = useState("");
+  const [exemptPayeeCode, setExemptPayeeCode] = useState("");
+  const [fatcaExemptionCode, setFatcaExemptionCode] = useState("");
+  const [accountNumbers, setAccountNumbers] = useState("");
   const [certify, setCertify] = useState(false);
   const [signaturePng, setSignaturePng] = useState<string | null>(null);
 
@@ -173,6 +176,9 @@ export default function W9FormDialog({
         taxClassification: classification as any,
         llcClassification: (llcClass || undefined) as any,
         otherClassification: otherClass.trim() || undefined,
+        exemptPayeeCode: exemptPayeeCode.trim() || undefined,
+        fatcaExemptionCode: fatcaExemptionCode.trim() || undefined,
+        accountNumbers: accountNumbers.trim() || undefined,
         address: address.trim(),
         cityStateZip: cityStateZip.trim(),
         tinType,
@@ -186,6 +192,9 @@ export default function W9FormDialog({
       setTin("");
       setCertify(false);
       setSignaturePng(null);
+      setExemptPayeeCode("");
+      setFatcaExemptionCode("");
+      setAccountNumbers("");
       await Promise.all([
         utils.partnerPortal.documents.invalidate(),
         utils.partnerPortal.onboarding.invalidate(),
@@ -309,6 +318,43 @@ export default function W9FormDialog({
             Tu número va cifrado directo a tu W-9 en almacenamiento privado. No se guarda en ninguna
             base de datos ni lo ve nadie más.
           </p>
+
+          <details className="border rounded-lg">
+            <summary className="cursor-pointer select-none px-3 py-2.5 text-sm font-medium">
+              Datos avanzados (opcional)
+            </summary>
+            <div className="px-3 pb-3 space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Solo para ciertas entidades. Si eres individuo o dueño único, déjalos en blanco.
+              </p>
+              <Field label="Número(s) de cuenta (Línea 7)">
+                <Input
+                  value={accountNumbers}
+                  onChange={e => setAccountNumbers(e.target.value)}
+                  className="h-11"
+                  placeholder="Opcional"
+                />
+              </Field>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Código de payee exento">
+                  <Input
+                    value={exemptPayeeCode}
+                    onChange={e => setExemptPayeeCode(e.target.value)}
+                    className="h-11"
+                    maxLength={8}
+                  />
+                </Field>
+                <Field label="Código exención FATCA">
+                  <Input
+                    value={fatcaExemptionCode}
+                    onChange={e => setFatcaExemptionCode(e.target.value)}
+                    className="h-11"
+                    maxLength={5}
+                  />
+                </Field>
+              </div>
+            </div>
+          </details>
 
           <Field label="Tu firma">
             <SignaturePad onChange={setSignaturePng} />
