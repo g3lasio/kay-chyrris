@@ -62,6 +62,12 @@ export interface ProviderSpend {
   usagePct?: number | null; // 0..1 of plan/credit consumed
   limitLabel?: string | null; // human "1.2M / 2M chars" or "balance $4.10"
   resetAt?: string | null; // ISO when the allowance resets
+  /**
+   * Prepaid account balance in USD, when the provider exposes one (Twilio).
+   * Numeric on purpose: it used to exist only inside the `limitLabel` string,
+   * so nothing downstream could alert on "you have $4 left".
+   */
+  balanceUsd?: number | null;
   /** Health. */
   accountStatus?: string | null;
   paymentIssue: boolean; // suspended / past-due / 402 (out of credit)
@@ -141,9 +147,14 @@ function providerForEventType(t: string): ProviderId | null {
     case 'sms':
     case 'mms':
     case 'voice':
-    case 'ai_voice':
     case 'phone_number':
-      return 'twilio'; // ai_voice rides Twilio voice minutes (+ OpenAI/ElevenLabs internally)
+      return 'twilio';
+    // La voz con IA se cobra al usuario por minuto, pero el costo se reparte
+    // entre Twilio (minutos) y ElevenLabs (síntesis). Se atribuye a ElevenLabs
+    // para que deje de aparecer con $0 facturado y margen sin sentido; el costo
+    // real de cada uno vive por separado en provider_costs.
+    case 'ai_voice':
+      return 'elevenlabs';
     case 'ai':
     case 'global_chat':
     case 'web_search':
@@ -293,7 +304,10 @@ async function getAnthropicSpend(billedUsd: number, notes: string[]): Promise<Pr
     base.monthSpendUsd = month;
     base.todaySpendUsd = today;
     base.projectedMonthUsd = project(month);
-    base.accountStatus = 'active';
+    // La API de costos no expone el estado de la cuenta: decir 'active' era
+    // inventar salud. Si la petición respondió, lo único cierto es que la key
+    // sirve; el estado real queda como 'reachable'.
+    base.accountStatus = 'reachable';
     base.marginUsd = billedUsd - month;
     base.marginPct = month > 0 ? (billedUsd - month) / month : null;
     base.severity = month > 0 && billedUsd < month ? 'watch' : 'ok';
@@ -358,7 +372,10 @@ async function getOpenAiSpend(billedUsd: number, notes: string[]): Promise<Provi
     base.monthSpendUsd = month;
     base.todaySpendUsd = today;
     base.projectedMonthUsd = project(month);
-    base.accountStatus = 'active';
+    // La API de costos no expone el estado de la cuenta: decir 'active' era
+    // inventar salud. Si la petición respondió, lo único cierto es que la key
+    // sirve; el estado real queda como 'reachable'.
+    base.accountStatus = 'reachable';
     base.marginUsd = billedUsd - month;
     base.marginPct = month > 0 ? (billedUsd - month) / month : null;
     base.severity = month > 0 && billedUsd < month ? 'watch' : 'ok';
@@ -438,6 +455,9 @@ async function getTwilioSpend(billedUsd: number, notes: string[]): Promise<Provi
         const bal: any = await balResp.json();
         const balance = Number(bal?.balance ?? NaN);
         if (Number.isFinite(balance)) {
+          // Numérico Y formateado: el número alimenta las alertas de saldo bajo
+          // (antes solo existía el texto y nada podía reaccionar a él).
+          base.balanceUsd = balance;
           base.limitLabel = `balance $${balance.toFixed(2)}`;
           // % of balance the projected month would consume.
           base.usagePct = balance > 0 ? Math.min(1, base.projectedMonthUsd! / (balance + month)) : 1;

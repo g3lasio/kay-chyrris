@@ -487,6 +487,22 @@ export async function evaluateAlerts(probes: ProbeResult[]): Promise<{ raised: n
           detail: svc.note || 'El proveedor reporta problema de pago (402). Recarga o actualiza el método de pago.',
         });
       }
+      // Saldo prepago bajo (Twilio): sin saldo, los SMS y llamadas de TODOS
+      // los usuarios dejan de salir. Es la falla más silenciosa y más cara.
+      if (typeof svc.balanceUsd === 'number') {
+        const critical = Number(process.env.TWILIO_BALANCE_CRITICAL_USD || 20);
+        const warn = Number(process.env.TWILIO_BALANCE_WARN_USD || 50);
+        if (svc.balanceUsd <= warn) {
+          await fire({
+            key: `low_balance:${name}`,
+            severity: svc.balanceUsd <= critical ? 'critical' : 'warning',
+            source: 'balance',
+            title: `SALDO BAJO — ${label(name)}: $${svc.balanceUsd.toFixed(2)}`,
+            detail: `Al agotarse el saldo dejan de enviarse SMS y llamadas de TODOS los usuarios. ` +
+              `Gasto proyectado del mes: $${(svc.projectedMonthUsd ?? 0).toFixed(2)}. Recarga la cuenta.`,
+          });
+        }
+      }
       if (typeof svc.usagePct === 'number' && svc.usagePct >= 0.9) {
         await fire({
           key: `quota:${name}`,

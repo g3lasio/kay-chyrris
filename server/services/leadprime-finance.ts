@@ -132,6 +132,10 @@ export interface ChargeSum {
   refunded: number;
   count: number;
   customers: number;
+  /** Comisiones REALES cobradas por Stripe (balance_transaction.fee), en USD. */
+  actualFees: number;
+  /** Cuántos cargos traían balance_transaction — si es 0 se usa la estimación. */
+  feesFromCharges: number;
 }
 
 /** Sum succeeded charges (net of refunds) created since `sinceUnix` for every
@@ -143,16 +147,31 @@ export async function sumLeadPrimeCharges(stripe: Stripe, sinceUnix: number): Pr
   let gross = 0;
   let refunded = 0;
   let count = 0;
+  let actualFees = 0;
+  let feesFromCharges = 0;
   for (const customer of ids) {
-    const list = stripe.charges.list({ customer, created: { gte: sinceUnix }, limit: 100 });
+    // expand balance_transaction: trae la comisión REAL que cobró Stripe por
+    // cada cargo. Sin esto el P&L usaba 2.9% + 30¢ estimados, que ignoran
+    // tarifas de tarjetas internacionales, disputas y conversión de divisa.
+    const list = stripe.charges.list({
+      customer,
+      created: { gte: sinceUnix },
+      limit: 100,
+      expand: ['data.balance_transaction'],
+    });
     for await (const ch of list) {
       if (ch.status !== 'succeeded') continue;
       gross += (ch.amount ?? 0) / 100;
       refunded += (ch.amount_refunded ?? 0) / 100;
       count += 1;
+      const bt: any = ch.balance_transaction;
+      if (bt && typeof bt === 'object' && typeof bt.fee === 'number') {
+        actualFees += bt.fee / 100;
+        feesFromCharges += 1;
+      }
     }
   }
-  return { gross, refunded, count, customers: ids.length };
+  return { gross, refunded, count, customers: ids.length, actualFees, feesFromCharges };
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -178,8 +197,10 @@ export interface CapturedRevenue {
   /** Number of LeadPrime-tagged Stripe customers scanned (0 ⇒ tagging issue). */
   customers: number;
   projectedMonthUsd: number;
-  /** Estimated Stripe processing fees this month (USD). */
+  /** Stripe processing fees this month (USD) — reales cuando feesAreActual. */
   estFeesUsd: number;
+  /** true = comisiones leídas de balance_transaction; false = estimadas 2.9%+30¢. */
+  feesAreActual?: boolean;
 }
 
 export interface FreeCredits {
@@ -304,6 +325,7 @@ async function getCapturedRevenue(notes: string[]): Promise<CapturedRevenue> {
     customers: 0,
     projectedMonthUsd: 0,
     estFeesUsd: 0,
+    feesAreActual: false,
   };
   const stripe = getStripe();
   if (!stripe) {
@@ -312,7 +334,7 @@ async function getCapturedRevenue(notes: string[]): Promise<CapturedRevenue> {
     return out;
   }
   try {
-    const { gross, refunded, count, customers } = await sumLeadPrimeCharges(stripe, monthStartUnix());
+    const { gross, refunded, count, customers, actualFees, feesFromCharges } = await sumLeadPrimeCharges(stripe, monthStartUnix());
     const net = gross - refunded;
     out.available = true;
     out.charges = count;
@@ -321,7 +343,13 @@ async function getCapturedRevenue(notes: string[]): Promise<CapturedRevenue> {
     out.refundedUsd = round(refunded);
     out.netOfRefundsUsd = round(net);
     out.projectedMonthUsd = round(project(net));
-    out.estFeesUsd = round(gross * FEE_PCT + count * FEE_FIXED);
+    // Comisión real cuando Stripe la reportó; la estimación solo cubre los
+    // cargos que no traían balance_transaction (así el total nunca queda corto).
+    const estimatedForMissing = (count - feesFromCharges) * FEE_FIXED + (feesFromCharges === count ? 0 : gross * FEE_PCT * ((count - feesFromCharges) / Math.max(count, 1)));
+    out.estFeesUsd = feesFromCharges > 0
+      ? round(actualFees + Math.max(0, estimatedForMissing))
+      : round(gross * FEE_PCT + count * FEE_FIXED);
+    out.feesAreActual = feesFromCharges === count && count > 0;
     if (customers === 0) {
       out.note = 'No Stripe customers tagged metadata.product=leadprime were found';
       notes.push(`captured: ${out.note}`);
