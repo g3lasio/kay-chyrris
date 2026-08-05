@@ -1,102 +1,192 @@
-// Preconfigured storage helpers for Manus WebDev templates
-// Uses the Biz-provided storage proxy (Authorization: Bearer <token>)
+/**
+ * File storage — Cloudflare R2 (S3-compatible).
+ *
+ * R2 is the Chyrris ecosystem's storage convention. This replaces the old
+ * "Forge" storage proxy (BUILT_IN_FORGE_API_*), which was never configured in
+ * Railway and made every partner-document upload fail with
+ * "Storage proxy credentials missing".
+ *
+ * Objects are stored PRIVATE. Downloads go through short-lived presigned URLs
+ * (storageGet), so a document is only reachable by someone the app authorized
+ * — this is what keeps partner documents multi-tenant safe even if a URL
+ * leaks (it expires).
+ *
+ * Required env vars in Railway (see .env.example). Several aliases are
+ * accepted so whatever naming the Railway project already uses works:
+ *   Account/endpoint : R2_ENDPOINT  (or R2_ACCOUNT_ID / CLOUDFLARE_ACCOUNT_ID)
+ *   Access key       : R2_ACCESS_KEY_ID     | CLOUDFLARE_R2_ACCESS_KEY_ID | S3_ACCESS_KEY_ID
+ *   Secret key       : R2_SECRET_ACCESS_KEY | CLOUDFLARE_R2_SECRET_ACCESS_KEY | S3_SECRET_ACCESS_KEY
+ *   Bucket           : R2_BUCKET | R2_BUCKET_NAME | CLOUDFLARE_R2_BUCKET  (REQUIRED — no default)
+ *
+ * The bucket has NO fallback on purpose. Partner documents live in their own
+ * isolated bucket (partner-portal-documents); guessing a default meant that
+ * losing R2_BUCKET — a deleted variable, a cloned service — would silently
+ * write partner documents into LeadPrime's production bucket with no error to
+ * betray it. Failing loudly is the safe direction.
+ */
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-import { ENV } from './_core/env';
+const BUCKET_ENV_VARS = ["R2_BUCKET", "R2_BUCKET_NAME", "CLOUDFLARE_R2_BUCKET", "S3_BUCKET"] as const;
+const DOWNLOAD_URL_TTL_SECONDS = 60 * 15; // 15 min — long enough to open/download
 
-type StorageConfig = { baseUrl: string; apiKey: string };
+function firstEnv(...names: string[]): string | undefined {
+  for (const name of names) {
+    const value = process.env[name];
+    if (value && value.trim()) return value.trim();
+  }
+  return undefined;
+}
 
-function getStorageConfig(): StorageConfig {
-  const baseUrl = ENV.forgeApiUrl;
-  const apiKey = ENV.forgeApiKey;
+type R2Config = { client: S3Client; bucket: string };
 
-  if (!baseUrl || !apiKey) {
+let cached: R2Config | null = null;
+
+function resolveEndpoint(): string | undefined {
+  const explicit = firstEnv("R2_ENDPOINT", "CLOUDFLARE_R2_ENDPOINT", "S3_ENDPOINT");
+  if (explicit) return explicit.replace(/\/+$/, "");
+  const accountId = firstEnv("R2_ACCOUNT_ID", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_R2_ACCOUNT_ID");
+  if (accountId) return `https://${accountId}.r2.cloudflarestorage.com`;
+  return undefined;
+}
+
+const MISSING_BUCKET_MESSAGE =
+  "Cloudflare R2: bucket no configurado — set R2_BUCKET=partner-portal-documents en Railway " +
+  `(alias aceptados: ${BUCKET_ENV_VARS.slice(1).join(", ")}). ` +
+  "No se usa un bucket por defecto a propósito: escribir documentos de socios en el bucket " +
+  "equivocado en silencio es peor que fallar.";
+
+function resolveBucket(): string | undefined {
+  return firstEnv(...BUCKET_ENV_VARS);
+}
+
+/**
+ * The configured bucket. Throws when none is set — never falls back to a
+ * guessed name, so a missing variable can't route partner documents into
+ * somebody else's bucket without anyone noticing.
+ */
+export function getBucketName(): string {
+  const bucket = resolveBucket();
+  if (!bucket) throw new Error(MISSING_BUCKET_MESSAGE);
+  return bucket;
+}
+
+/** True when R2 is fully configured — lets callers degrade gracefully. */
+export function isStorageConfigured(): boolean {
+  return Boolean(
+    resolveEndpoint() &&
+      resolveBucket() &&
+      firstEnv("R2_ACCESS_KEY_ID", "CLOUDFLARE_R2_ACCESS_KEY_ID", "S3_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID") &&
+      firstEnv(
+        "R2_SECRET_ACCESS_KEY",
+        "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+        "S3_SECRET_ACCESS_KEY",
+        "AWS_SECRET_ACCESS_KEY"
+      )
+  );
+}
+
+function getClient(): R2Config {
+  if (cached) return cached;
+
+  const endpoint = resolveEndpoint();
+  const accessKeyId = firstEnv(
+    "R2_ACCESS_KEY_ID",
+    "CLOUDFLARE_R2_ACCESS_KEY_ID",
+    "S3_ACCESS_KEY_ID",
+    "AWS_ACCESS_KEY_ID"
+  );
+  const secretAccessKey = firstEnv(
+    "R2_SECRET_ACCESS_KEY",
+    "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+    "S3_SECRET_ACCESS_KEY",
+    "AWS_SECRET_ACCESS_KEY"
+  );
+
+  const bucket = resolveBucket();
+
+  const missing: string[] = [];
+  if (!endpoint) missing.push("R2_ENDPOINT (o R2_ACCOUNT_ID)");
+  if (!accessKeyId) missing.push("R2_ACCESS_KEY_ID");
+  if (!secretAccessKey) missing.push("R2_SECRET_ACCESS_KEY");
+  if (!bucket) missing.push("R2_BUCKET");
+  if (missing.length > 0) {
     throw new Error(
-      "Storage proxy credentials missing: set BUILT_IN_FORGE_API_URL and BUILT_IN_FORGE_API_KEY"
+      `Cloudflare R2 no está configurado. Faltan variables de entorno en Railway: ${missing.join(", ")}.` +
+        (bucket ? ` Bucket usado: "${bucket}".` : ` ${MISSING_BUCKET_MESSAGE}`)
     );
   }
 
-  return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey };
-}
-
-function buildUploadUrl(baseUrl: string, relKey: string): URL {
-  const url = new URL("v1/storage/upload", ensureTrailingSlash(baseUrl));
-  url.searchParams.set("path", normalizeKey(relKey));
-  return url;
-}
-
-async function buildDownloadUrl(
-  baseUrl: string,
-  relKey: string,
-  apiKey: string
-): Promise<string> {
-  const downloadApiUrl = new URL(
-    "v1/storage/downloadUrl",
-    ensureTrailingSlash(baseUrl)
-  );
-  downloadApiUrl.searchParams.set("path", normalizeKey(relKey));
-  const response = await fetch(downloadApiUrl, {
-    method: "GET",
-    headers: buildAuthHeaders(apiKey),
-  });
-  return (await response.json()).url;
-}
-
-function ensureTrailingSlash(value: string): string {
-  return value.endsWith("/") ? value : `${value}/`;
+  cached = {
+    // R2 ignores the region but the SDK requires one; "auto" is the documented value.
+    client: new S3Client({
+      region: "auto",
+      endpoint,
+      credentials: { accessKeyId: accessKeyId!, secretAccessKey: secretAccessKey! },
+    }),
+    bucket: bucket!,
+  };
+  console.log(`[Storage] Cloudflare R2 ready (bucket: ${cached.bucket})`);
+  return cached;
 }
 
 function normalizeKey(relKey: string): string {
   return relKey.replace(/^\/+/, "");
 }
 
-function toFormData(
-  data: Buffer | Uint8Array | string,
-  contentType: string,
-  fileName: string
-): FormData {
-  const blob =
-    typeof data === "string"
-      ? new Blob([data], { type: contentType })
-      : new Blob([data as any], { type: contentType });
-  const form = new FormData();
-  form.append("file", blob, fileName || "file");
-  return form;
+function toBuffer(data: Buffer | Uint8Array | string): Buffer {
+  if (typeof data === "string") return Buffer.from(data);
+  return Buffer.isBuffer(data) ? data : Buffer.from(data);
 }
 
-function buildAuthHeaders(apiKey: string): HeadersInit {
-  return { Authorization: `Bearer ${apiKey}` };
-}
-
+/**
+ * Upload an object to R2. Returns the storage KEY as `url` for backward
+ * compatibility with existing callers/rows: the key is what gets persisted,
+ * and storageGet() turns it into a fresh presigned URL on demand. Storing a
+ * key (not a signed URL) is deliberate — signed URLs expire, keys don't.
+ */
 export async function storagePut(
   relKey: string,
   data: Buffer | Uint8Array | string,
   contentType = "application/octet-stream"
 ): Promise<{ key: string; url: string }> {
-  const { baseUrl, apiKey } = getStorageConfig();
+  const { client, bucket } = getClient();
   const key = normalizeKey(relKey);
-  const uploadUrl = buildUploadUrl(baseUrl, key);
-  const formData = toFormData(data, contentType, key.split("/").pop() ?? key);
-  const response = await fetch(uploadUrl, {
-    method: "POST",
-    headers: buildAuthHeaders(apiKey),
-    body: formData,
-  });
+  const body = toBuffer(data);
 
-  if (!response.ok) {
-    const message = await response.text().catch(() => response.statusText);
-    throw new Error(
-      `Storage upload failed (${response.status} ${response.statusText}): ${message}`
-    );
-  }
-  const url = (await response.json()).url;
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+    })
+  );
+
+  return { key, url: key };
+}
+
+/** Short-lived presigned download URL for a stored object. */
+export async function storageGet(relKey: string): Promise<{ key: string; url: string }> {
+  const { client, bucket } = getClient();
+  const key = normalizeKey(relKey);
+  const url = await getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: key }), {
+    expiresIn: DOWNLOAD_URL_TTL_SECONDS,
+  });
   return { key, url };
 }
 
-export async function storageGet(relKey: string): Promise<{ key: string; url: string; }> {
-  const { baseUrl, apiKey } = getStorageConfig();
-  const key = normalizeKey(relKey);
-  return {
-    key,
-    url: await buildDownloadUrl(baseUrl, key, apiKey),
-  };
+/** Best-effort delete (used when an admin removes a document). */
+export async function storageDelete(relKey: string): Promise<void> {
+  try {
+    const { client, bucket } = getClient();
+    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: normalizeKey(relKey) }));
+  } catch (error) {
+    console.error("[Storage] Delete failed (non-fatal):", error);
+  }
 }

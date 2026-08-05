@@ -1,0 +1,71 @@
+/*
+ * Partner Portal — LeadPrime brand theme, scoped to .partner-portal so the
+ * Kai admin (dark futuristic) keeps its own look untouched.
+ * Palette (brief §2): navy #0B1A2B · blue #2E8BE6 · green #2AA875 ·
+ * gold #C79A45 · background #F4F7F9.
+ */
+.partner-portal {
+  --lp-navy: #0b1a2b;
+  --lp-blue: #2e8be6;
+  --lp-green: #2aa875;
+  --lp-gold: #c79a45;
+  --lp-bg: #f4f7f9;
+
+  --background: #f4f7f9;
+  --foreground: #14283d;
+  --card: #ffffff;
+  --card-foreground: #14283d;
+  --popover: #ffffff;
+  --popover-foreground: #14283d;
+  --primary: #2e8be6;
+  --primary-foreground: #ffffff;
+  --secondary: #e8eff5;
+  --secondary-foreground: #14283d;
+  --muted: #e9eff4;
+  --muted-foreground: #5d7285;
+  --accent: #e6f0fa;
+  --accent-foreground: #0b1a2b;
+  --destructive: #d64545;
+  --destructive-foreground: #ffffff;
+  --border: #dce5ec;
+  --input: #dce5ec;
+  --ring: #2e8be6;
+  --radius: 0.75rem;
+
+  background-color: var(--lp-bg);
+  color: var(--foreground);
+  min-height: 100dvh;
+}
+
+.partner-portal .lp-topbar {
+  background: var(--lp-navy);
+  color: #ffffff;
+}
+
+.partner-portal .lp-gradient-hero {
+  background: linear-gradient(135deg, #0b1a2b 0%, #123252 60%, #17436e 100%);
+}
+
+.partner-portal .lp-chip-gold {
+  background: rgba(199, 154, 69, 0.14);
+  color: #8a6524;
+  border: 1px solid rgba(199, 154, 69, 0.35);
+}
+
+.partner-portal .lp-chip-green {
+  background: rgba(42, 168, 117, 0.12);
+  color: #1d7a55;
+  border: 1px solid rgba(42, 168, 117, 0.3);
+}
+
+.partner-portal .lp-chip-blue {
+  background: rgba(46, 139, 230, 0.12);
+  color: #1c62ab;
+  border: 1px solid rgba(46, 139, 230, 0.3);
+}
+
+.partner-portal .lp-chip-muted {
+  background: #eef2f6;
+  color: #5d7285;
+  border: 1px solid #dce5ec;
+}

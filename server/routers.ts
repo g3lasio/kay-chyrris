@@ -16,15 +16,20 @@ import * as stripeService from './services/stripe-service';
 import { createAndSendCampaign, getCampaignHistory } from './services/notifications';
 import * as pushNotifications from './services/notifications-push';
 import * as revenueMetrics from './services/revenue-metrics';
+import { partnerAdminRouter, partnerAuthRouter, partnerPortalRouter } from './partner/partner-router';
 
 export const appRouter = router({
   system: systemRouter,
-  
+
   auth: router({
     // Verify passcode and create session
     verifyPasscode: publicProcedure
       .input(z.object({ passcode: z.string().min(1) }))
       .mutation(async ({ input, ctx }) => {
+        // The admin login never works through the partner portal domain.
+        if (ctx.isPartnerHost) {
+          return { success: false, error: 'Not available' };
+        }
         const ipAddress = ctx.req.ip || ctx.req.socket.remoteAddress;
         const userAgent = ctx.req.headers['user-agent'];
         const result = await verifyPasscode(input.passcode, ipAddress, userAgent);
@@ -607,6 +612,13 @@ export const appRouter = router({
         return { success: true };
       }),
   }),
+
+  // ─── PARTNER REFERRAL PORTAL (partners.chyrris.com) ──────────────────────
+  // partnerAuth/partnerPortal serve the partner-facing portal; partnerAdmin
+  // is the Kai admin management surface for partners.
+  partnerAuth: partnerAuthRouter,
+  partnerPortal: partnerPortalRouter,
+  partnerAdmin: partnerAdminRouter,
 
   // ─── LEADPRIME CREDIT MANAGEMENT ──────────────────────────────────────────
   leadprime: router({
@@ -1335,9 +1347,74 @@ export const appRouter = router({
         }
       }),
 
+    // ─── Approved Clients Portal ────────────────────────────────────────────
+    listApprovedClients: protectedProcedure
+      .input(z.object({
+        status: z.string().optional(),
+        plan: z.string().optional(),
+        limit: z.number().optional(),
+        offset: z.number().optional(),
+      }).optional())
+      .query(async ({ input }) => {
+        try {
+          const { listApprovedClientsViaApi } = await import('./services/leadprime-db');
+          const clients = await listApprovedClientsViaApi(input ?? {});
+          return { success: true, clients };
+        } catch (error: any) {
+          return { success: false, error: error.message, clients: [] };
+        }
+      }),
+
+    createApprovedClient: protectedProcedure
+      .input(z.object({
+        contactName: z.string().min(1),
+        companyName: z.string().min(1),
+        email: z.string().email(),
+        phone: z.string().optional(),
+        plan: z.enum(['chyrris_growth', 'chyrris_legacy']),
+        monthlyPriceCents: z.number().optional(),
+        commitmentMonths: z.number().optional(),
+        specialConditions: z.string().optional(),
+        agreedGoals: z.string().optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        try {
+          const { createApprovedClientViaApi } = await import('./services/leadprime-db');
+          const client = await createApprovedClientViaApi(input);
+          return { success: true, client };
+        } catch (error: any) {
+          return { success: false, error: error.message, client: null };
+        }
+      }),
+
+    getApprovedClient: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        try {
+          const { getApprovedClientViaApi } = await import('./services/leadprime-db');
+          const data = await getApprovedClientViaApi(input.id);
+          return { success: true, ...data };
+        } catch (error: any) {
+          return { success: false, error: error.message };
+        }
+      }),
+
+    regenerateApprovedClientToken: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        try {
+          const { regenerateApprovedClientTokenViaApi } = await import('./services/leadprime-db');
+          const result = await regenerateApprovedClientTokenViaApi(input.id);
+          return { success: true, ...result };
+        } catch (error: any) {
+          return { success: false, error: error.message };
+        }
+      }),
+
   }),
 
-  // ─── END LEADPRIME CREDIT MANAGEMENT ─────────────────────────────────────
+  // ─── END LEADPRIME CREDIT MANAGEMENT ─────────────────────────────
 });
 
 export type AppRouter = typeof appRouter;

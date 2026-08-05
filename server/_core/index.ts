@@ -87,6 +87,11 @@ async function startServer() {
   
   // OAuth disabled - no Manus dependencies
   // registerOAuthRoutes(app);
+
+  // Public referral-capture endpoints (called by the LeadPrime signup)
+  const { registerReferralRoutes } = await import("../partner/referral-routes");
+  registerReferralRoutes(app);
+
   // tRPC API
   app.use(
     "/api/trpc",
@@ -114,6 +119,13 @@ async function startServer() {
   } catch (err: any) {
     console.error('[Server] No se pudo iniciar el monitor de salud:', err.message);
   }
+
+  // Partner portal: ensure referral_* tables exist (idempotent, additive)
+  // and start the periodic commission sync (reads LeadPrime, writes Kai).
+  const { ensurePartnerTables } = await import("../partner/ensure-tables");
+  await ensurePartnerTables();
+  const { startCommissionSyncSchedule } = await import("../partner/commission-engine");
+  startCommissionSyncSchedule();
 
   // For Autoscale deployments, use PORT env var directly (Cloud Run sets this)
   // In development, default to 5000

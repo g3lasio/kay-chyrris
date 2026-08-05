@@ -1,0 +1,19 @@
+PARTNER PORTAL — evidencia curl (server de producción local, DBs de prueba)
+========================================================================
+
+### 1. Aislamiento de dominio: login admin desde partners.chyrris.com (passcode CORRECTO) → bloqueado
+{"result":{"data":{"json":{"success":false,"error":"Not available"}}}}
+### 2. Login admin desde kai.chyrris.com → OK (cookie emitida)
+HTTP/1.1 200 OK
+Set-Cookie: app_session_id=<redacted>; Path=/; HttpOnly; SameSite=Lax
+### 3. Cookie admin válida reutilizada en partners.chyrris.com → UNAUTHORIZED
+{"error":{"json":{"message":"Please login (10001)","code":-32001,"data":{"code":"UNAUTHORIZED","httpStatus":401,"path":"partnerAdmin.list"}}}}
+
+### 4. OTP: email válido y email inexistente → misma respuesta neutra
+{"result":{"data":{"json":{"success":true,"message":"Si tu correo está registrado, recibirás un código de acceso en unos segundos."}}}}
+{"result":{"data":{"json":{"success":true,"message":"Si tu correo está registrado, recibirás un código de acceso en unos segundos."}}}}
+
+### 5. Endpoint de atribución FAIL-CLOSED sin REFERRAL_WEBHOOK_SECRET → 503 (deshabilitado)
+HTTP 503
+### 6. /validate público (para mostrar 'referido por X' en el signup de LeadPrime)
+{"valid":true,"partnerName":"Prime Contractors License Institute Inc."}

@@ -1,0 +1,47 @@
+✅ Tablas referral_* creadas (idempotente) — partner_auth_codes, partner_documents, partner_sessions, referral_attributions, referral_commissions, referral_partners, referral_payouts
+✅ Segundo bootstrap no falla (IF NOT EXISTS)
+✅ Socios creados con defaults del term sheet — PRIME id=1 20/10/10 invited · ESCUELA2 id=2
+✅ Código de referido duplicado rechazado (UNIQUE)
+✅ OTP: respuesta neutra idéntica exista o no el email — "Si tu correo está registrado, recibirás un código de acceso en unos segundos."
+✅ OTP: código guardado HASHEADO (bcrypt, no plaintext) — $2b$10$x6imx…
+✅ OTP: expiración de 10 minutos — 10 min
+✅ OTP: código incorrecto rechazado y cuenta intento
+✅ OTP: código correcto crea sesión de socio — session=0u36JJgA…
+✅ Primer login activa al socio (invited → active)
+✅ OTP: código usado no se puede reutilizar
+✅ Sesión de socio valida y devuelve al socio
+✅ La sesión de socio NO toca admin_sessions (separación)
+✅ Rate limit: máx 5 códigos por email por hora — 5 códigos en la última hora
+✅ OTP anti-brute-force: 25 verificaciones concurrentes NO superan el tope de 5 intentos (contador atómico) — attempts=5 (esperado ≤ 5)
+✅ Atribución vía endpoint (código case-insensitive)
+✅ Atribución duplicada es no-op (UNIQUE referred_user_id)
+✅ Código inválido no crea atribución
+✅ Usuario inexistente en LeadPrime no crea atribución
+✅ Sweep de signups con referral_code crea el resto de atribuciones — +3 (nopay, year2, cancel)
+✅ Usuario orgánico (sin código) NO tiene atribución
+✅ Registro con código empieza pending_first_payment con first_payment_date NULL
+✅ Primer cobro llena first_payment_date y activa la atribución — first_payment=2026-06-05
+✅ Comisión 20% sobre invoice de $150 → $30
+✅ Top-up real de wallet ($50) genera comisión; subscription_recharge NO — 3 comisiones (2 invoices + 1 top-up)
+✅ Usuario orgánico que paga NO genera comisión
+✅ Referido sin pago NO genera comisión
+✅ Cobro dentro de 12 meses → 20%; después de 12 meses → 10% — 2025-05 @20% ($100.00) · 2026-07 @10% ($50.00 de $500)
+✅ Comisión año 2 calculada: 10% de $500 = $50
+✅ Usuario cancelado → atribución inactive (comisiones previas se conservan) — status=inactive, comisiones=1
+✅ Sync idempotente: segunda corrida no duplica nada
+✅ Reembolso → fila negativa compensatoria (is_reversal)
+✅ Doble reversión bloqueada (UNIQUE source+is_reversal)
+✅ KPIs del dashboard: 4 referidos, 2 activos — total=4 activos=2 pendientes=1
+✅ Suma del dashboard coincide con query directa en la DB — dashboard=220.00 sql=220.00
+✅ Link de referido correcto — https://leadprime.chyrris.com/signup?ref=PRIME
+✅ Tarjeta cuenta gratis: 2 de 10
+✅ Tabla de referidos SIN datos sensibles (sin email/teléfono/ids de pago) — campos: attributionId,business,signupDate,status,stage,stagePct,plan,commissionThisMonth
+✅ AISLAMIENTO: socio B ve 0 referidos y $0.00 (los datos de PRIME no se filtran)
+✅ AISLAMIENTO: socio B no puede leer documentos por ID ajeno
+✅ Onboarding inicia 0/4, dashboard bloqueado
+✅ Onboarding 4/4 → onboarding_complete persiste y desbloquea — 4/4
+✅ Liquidación concurrente: exactamente UNA reclama las comisiones (sin doble pago) — 1 generaciones OK, 1 payouts con monto
+✅ Liquidación suma pendientes netos (reversiones incluidas) — total=220.00 (7 filas)
+✅ Ninguna comisión quedó vinculada a dos liquidaciones
+✅ Marcar pagada propaga payout_status a las comisiones
+══════ RESULTADO: 46/46 checks OK ══════
