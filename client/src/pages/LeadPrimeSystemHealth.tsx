@@ -296,12 +296,34 @@ function Pill({ tone, children }: { tone: Tone; children: React.ReactNode }) {
 // ── Page ────────────────────────────────────────────────────────────────────────
 
 export default function LeadPrimeSystemHealth() {
-  const [tab, setTab] = useState('infra');
+  const [tab, setTab] = useState('alerts');
   const utils = trpc.useUtils();
 
   const billingQ = trpc.leadprime.billingHealth.useQuery(undefined, { refetchInterval: 60000 });
   const infraQ = trpc.leadprime.infraHealth.useQuery(undefined, { refetchInterval: 60000 });
   const spendQ = trpc.leadprime.serviceSpend.useQuery(undefined, { refetchInterval: 120000 });
+  const uptimeQ = trpc.leadprime.providerUptime.useQuery({ hours: 24 }, { refetchInterval: 60000 });
+  const costsQ = trpc.leadprime.providerCosts.useQuery({ days: 30 }, { refetchInterval: 300000 });
+  const costs = (costsQ.data?.data ?? []) as Array<{ provider: string; kind: string; events: number; costUsd: number; quantity: number }>;
+  const alertsQ = trpc.leadprime.alerts.useQuery({ status: 'all', limit: 100 }, { refetchInterval: 30000 });
+
+  const uptime = (uptimeQ.data?.data ?? []) as Array<{
+    provider: string; label: string; checks: number; uptimePct: number; errorPct: number;
+    p50Ms: number | null; p95Ms: number | null; lastOk: boolean | null; lastError: string | null; lastCheckedAt: string | null;
+  }>;
+  const alerts = (alertsQ.data?.data ?? []) as Array<{
+    id: number; alertKey: string; severity: string; source: string; title: string; detail: string | null;
+    status: string; occurrences: number; lastSeenAt: string; notifiedAt: string | null;
+  }>;
+  const openAlerts = alerts.filter(a => a.status === 'open');
+  const criticalOpen = openAlerts.filter(a => a.severity === 'critical');
+
+  const runCheck = trpc.leadprime.runHealthCheck.useMutation({
+    onSuccess: () => { uptimeQ.refetch(); alertsQ.refetch(); },
+  });
+  const ackAlert = trpc.leadprime.acknowledgeAlert.useMutation({
+    onSuccess: () => alertsQ.refetch(),
+  });
 
   const billing = billingQ.data?.data as BillingHealth | null | undefined;
   const infra = infraQ.data?.data as InfraHealth | null | undefined;
@@ -450,11 +472,173 @@ export default function LeadPrimeSystemHealth() {
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="bg-slate-900/60">
+          <TabsTrigger value="alerts">
+            Alertas &amp; Uptime
+            {openAlerts.length > 0 && (
+              <span className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full ${criticalOpen.length > 0 ? 'bg-rose-500 text-white' : 'bg-amber-500/80 text-black'}`}>
+                {openAlerts.length}
+              </span>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="infra">Infra &amp; Cost</TabsTrigger>
           <TabsTrigger value="services">Services &amp; Spend</TabsTrigger>
           <TabsTrigger value="workers">Workers &amp; Crons</TabsTrigger>
           <TabsTrigger value="billing">Billing &amp; Wallet</TabsTrigger>
         </TabsList>
+
+        {/* ─────────────────── ALERTAS & UPTIME (vigilancia activa) ─────────────────── */}
+        <TabsContent value="alerts" className="space-y-4 pt-4">
+          {/* Estado general + disparo manual */}
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2">
+              {criticalOpen.length > 0 ? (
+                <span className="text-sm font-semibold text-rose-400">
+                  {criticalOpen.length} alerta{criticalOpen.length > 1 ? 's' : ''} CRÍTICA{criticalOpen.length > 1 ? 'S' : ''} abierta{criticalOpen.length > 1 ? 's' : ''}
+                </span>
+              ) : openAlerts.length > 0 ? (
+                <span className="text-sm font-semibold text-amber-400">
+                  {openAlerts.length} advertencia{openAlerts.length > 1 ? 's' : ''} abierta{openAlerts.length > 1 ? 's' : ''}
+                </span>
+              ) : (
+                <span className="text-sm font-semibold text-emerald-400">
+                  Todo en orden — sin alertas abiertas
+                </span>
+              )}
+              <span className="text-xs text-slate-500">
+                · el servidor sondea cada 5 min y avisa por SMS/email
+              </span>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => runCheck.mutate()}
+              disabled={runCheck.isPending}
+            >
+              {runCheck.isPending ? 'Sondeando...' : 'Sondear ahora'}
+            </Button>
+          </div>
+
+          {/* Uptime / latencia por proveedor (sondas reales al plano de servicio) */}
+          <Card className="bg-slate-900/40 border-slate-800">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-slate-300">Uptime y latencia — últimas 24 h</CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              {uptime.length === 0 ? (
+                <p className="text-xs text-slate-500 px-4 pb-4">
+                  Aún no hay sondas registradas. Usa “Sondear ahora” o espera al primer ciclo automático.
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-xs text-slate-400">
+                        <th className="text-left px-4 py-2 font-medium">Proveedor</th>
+                        <th className="text-center px-3 py-2 font-medium">Estado</th>
+                        <th className="text-right px-3 py-2 font-medium">Uptime</th>
+                        <th className="text-right px-3 py-2 font-medium">Errores</th>
+                        <th className="text-right px-3 py-2 font-medium">Latencia p50</th>
+                        <th className="text-right px-3 py-2 font-medium">p95</th>
+                        <th className="text-right px-3 py-2 font-medium">Sondas</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {uptime.map(u => (
+                        <tr key={u.provider} className="border-b border-slate-800/60">
+                          <td className="px-4 py-2">
+                            <div className="font-medium">{u.label}</div>
+                            {u.lastOk === false && u.lastError && (
+                              <div className="text-xs text-rose-400 truncate max-w-[280px]" title={u.lastError}>{u.lastError}</div>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            {u.lastOk === null ? (
+                              <Badge className="border bg-slate-700/30 text-slate-400 border-slate-600/40">—</Badge>
+                            ) : u.lastOk ? (
+                              <Badge className="border bg-emerald-500/15 text-emerald-400 border-emerald-500/30">OK</Badge>
+                            ) : (
+                              <Badge className="border bg-rose-500/15 text-rose-400 border-rose-500/30">CAÍDO</Badge>
+                            )}
+                          </td>
+                          <td className={`px-3 py-2 text-right font-mono ${u.uptimePct >= 99 ? 'text-emerald-400' : u.uptimePct >= 95 ? 'text-amber-400' : 'text-rose-400'}`}>
+                            {u.uptimePct.toFixed(1)}%
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-slate-400">{u.errorPct.toFixed(1)}%</td>
+                          <td className="px-3 py-2 text-right font-mono text-slate-300">{u.p50Ms != null ? `${u.p50Ms} ms` : '—'}</td>
+                          <td className={`px-3 py-2 text-right font-mono ${(u.p95Ms ?? 0) > 3000 ? 'text-amber-400' : 'text-slate-400'}`}>
+                            {u.p95Ms != null ? `${u.p95Ms} ms` : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-right text-xs text-slate-500">{u.checks}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Alertas: abiertas primero, luego el histórico resuelto */}
+          <Card className="bg-slate-900/40 border-slate-800">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-slate-300">Alertas</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {alerts.length === 0 ? (
+                <p className="text-xs text-slate-500">Sin alertas registradas.</p>
+              ) : (
+                alerts.map(a => (
+                  <div
+                    key={a.id}
+                    className={`rounded-lg border p-3 ${
+                      a.status !== 'open'
+                        ? 'border-slate-800 bg-slate-900/30 opacity-60'
+                        : a.severity === 'critical'
+                          ? 'border-rose-500/40 bg-rose-500/5'
+                          : 'border-amber-500/40 bg-amber-500/5'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium text-sm">{a.title}</span>
+                          {a.status === 'open' ? (
+                            <Badge className={`border text-[10px] ${a.severity === 'critical' ? 'bg-rose-500/15 text-rose-400 border-rose-500/30' : 'bg-amber-500/15 text-amber-400 border-amber-500/30'}`}>
+                              {a.severity === 'critical' ? 'CRÍTICA' : 'ADVERTENCIA'}
+                            </Badge>
+                          ) : (
+                            <Badge className="border text-[10px] bg-emerald-500/15 text-emerald-400 border-emerald-500/30">RESUELTA</Badge>
+                          )}
+                          <span className="text-[10px] text-slate-500">{a.source}</span>
+                          {a.occurrences > 1 && (
+                            <span className="text-[10px] text-slate-500">×{a.occurrences}</span>
+                          )}
+                        </div>
+                        {a.detail && <p className="text-xs text-slate-400 mt-1">{a.detail}</p>}
+                        <p className="text-[10px] text-slate-600 mt-1">
+                          Último registro: {new Date(a.lastSeenAt).toLocaleString('es-MX')}
+                          {a.notifiedAt ? ' · notificada' : ' · sin notificar'}
+                        </p>
+                      </div>
+                      {a.status === 'open' && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="shrink-0 text-xs"
+                          onClick={() => ackAlert.mutate({ id: a.id })}
+                          disabled={ackAlert.isPending}
+                          title="Silenciar re-notificaciones (se cierra sola al resolverse)"
+                        >
+                          Silenciar
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         {/* ───────────────────────── INFRA & COST ───────────────────────── */}
         <TabsContent value="infra" className="space-y-4 pt-4">
@@ -622,6 +806,62 @@ export default function LeadPrimeSystemHealth() {
 
         {/* ───────────────────────── SERVICES & SPEND ───────────────────────── */}
         <TabsContent value="services" className="space-y-4 pt-4">
+          {/* COGS REAL — lo que NOS cobran los proveedores, medido desde los
+              webhooks de Twilio y los tokens que devuelven los LLM. Antes solo
+              existía el precio que le cobramos al cliente: el margen era una
+              estimación, no un dato. */}
+          <Card className="bg-slate-900/40 border-slate-800">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-slate-300">
+                Costo real de proveedores — últimos 30 días
+                <span className="ml-2 text-[10px] font-normal text-slate-500">medido, no estimado</span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              {costs.length === 0 ? (
+                <p className="text-xs text-slate-500 px-4 pb-4">
+                  Aún no hay costos registrados. Se llenan solos conforme lleguen los webhooks de Twilio
+                  y las respuestas de los modelos de IA.
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-xs text-slate-400">
+                        <th className="text-left px-4 py-2 font-medium">Proveedor</th>
+                        <th className="text-left px-3 py-2 font-medium">Concepto</th>
+                        <th className="text-right px-3 py-2 font-medium">Eventos</th>
+                        <th className="text-right px-3 py-2 font-medium">Cantidad</th>
+                        <th className="text-right px-4 py-2 font-medium">Costo real</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {costs.map((c, i) => (
+                        <tr key={`${c.provider}-${c.kind}-${i}`} className="border-b border-slate-800/60">
+                          <td className="px-4 py-2 font-medium capitalize">{c.provider}</td>
+                          <td className="px-3 py-2 text-slate-400">{c.kind}</td>
+                          <td className="px-3 py-2 text-right font-mono text-slate-400">{c.events.toLocaleString()}</td>
+                          <td className="px-3 py-2 text-right font-mono text-slate-400">
+                            {c.quantity.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          </td>
+                          <td className="px-4 py-2 text-right font-mono text-rose-300">
+                            ${c.costUsd.toFixed(c.costUsd < 1 ? 4 : 2)}
+                          </td>
+                        </tr>
+                      ))}
+                      <tr className="bg-slate-900/60">
+                        <td className="px-4 py-2 font-semibold" colSpan={4}>Total pagado a proveedores</td>
+                        <td className="px-4 py-2 text-right font-mono font-semibold text-rose-300">
+                          ${costs.reduce((s, c) => s + c.costUsd, 0).toFixed(2)}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Margin summary strip */}
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatTile icon={CreditCard} label="Provider cost / mo" value={spend ? usd(spend.totals.monthSpendUsd) : '—'} sub="actual, reported by APIs" tone="muted" />

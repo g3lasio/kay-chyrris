@@ -79,12 +79,34 @@ export function SubscriptionConfigModal({ user, balanceDollars, onClose }: {
   }, [target?.id, configQuery.data]);
 
   const setConfig = trpc.leadprime.setSubscriptionConfig.useMutation({
-    onSuccess: () => {
-      toast.success('Suscripción guardada — el worker la aplicará en los próximos 5 min');
+    onSuccess: (data: any) => {
       utils.leadprime.getSubscriptionConfig.invalidate({ contractorId: target?.id ?? '' });
       utils.leadprime.getEnrichedUsers.invalidate();
       utils.leadprime.getUsers.invalidate();
-      onClose();
+
+      // La intención se ejecuta al instante en LeadPrime: mostrar el resultado
+      // REAL en vez de un "se aplicará en 5 minutos" que no garantiza nada.
+      const applied = data?.applied;
+      if (!applied) {
+        toast.warning(
+          data?.applyError
+            ? `Guardado, pero no se pudo ejecutar ahora (${data.applyError}). El worker reintentará en ≤5 min.`
+            : 'Guardado. El worker lo aplicará en los próximos 5 min.'
+        );
+        onClose();
+        return;
+      }
+      if (applied.outcome === 'applied') {
+        toast.success(
+          `✅ Plan ${applied.tier} ACTIVO${applied.creditsGrantedCents ? ` · $${(applied.creditsGrantedCents / 100).toFixed(2)} en créditos otorgados` : ''}`
+        );
+        onClose();
+      } else if (applied.outcome === 'checkout_created' || applied.outcome === 'waiting') {
+        // No cerrar: el admin necesita copiar el link de cobro ACH.
+        toast.success('Link de cobro ACH listo — cópialo y envíaselo al contratista');
+      } else {
+        toast.error(`No se pudo aplicar: ${applied.error ?? 'error desconocido'}`);
+      }
     },
     onError: (e) => toast.error(e.message),
   });

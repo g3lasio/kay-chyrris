@@ -652,6 +652,83 @@ export const appRouter = router({
         }
       }),
 
+    // COGS real por proveedor (lo que NOS cobran) — para el margen real.
+    providerCosts: protectedProcedure
+      .input(z.object({ days: z.number().int().min(1).max(365).optional().default(30) }).optional())
+      .query(async ({ input }) => {
+        try {
+          const { getProviderCostRollup } = await import('./services/leadprime-db');
+          const data = await getProviderCostRollup(input?.days ?? 30);
+          return { success: true, data };
+        } catch (error: any) {
+          console.error('[Health Router] Error fetching provider costs:', error);
+          return { success: false, error: error.message, data: [] };
+        }
+      }),
+
+    // ─── VIGILANCIA ACTIVA (sondas reales + alertas) ─────────────────────────
+    // Uptime, latencia y tasa de error por proveedor, medidos por el watchdog
+    // del servidor (no por el navegador).
+    providerUptime: protectedProcedure
+      .input(z.object({ hours: z.number().int().min(1).max(720).optional().default(24) }).optional())
+      .query(async ({ input }) => {
+        try {
+          const { getProviderUptime } = await import('./services/health-monitor');
+          const data = await getProviderUptime(input?.hours ?? 24);
+          return { success: true, data };
+        } catch (error: any) {
+          console.error('[Health Router] Error fetching provider uptime:', error);
+          return { success: false, error: error.message, data: [] };
+        }
+      }),
+
+    alerts: protectedProcedure
+      .input(z.object({
+        status: z.enum(['open', 'all']).optional().default('open'),
+        limit: z.number().int().min(1).max(200).optional().default(100),
+      }).optional())
+      .query(async ({ input }) => {
+        try {
+          const { getAlerts } = await import('./services/health-monitor');
+          const data = await getAlerts({ status: input?.status ?? 'open', limit: input?.limit ?? 100 });
+          return { success: true, data };
+        } catch (error: any) {
+          console.error('[Health Router] Error fetching alerts:', error);
+          return { success: false, error: error.message, data: [] };
+        }
+      }),
+
+    acknowledgeAlert: protectedProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ input }) => {
+        try {
+          const { acknowledgeAlert } = await import('./services/health-monitor');
+          await acknowledgeAlert(input.id);
+          return { success: true };
+        } catch (error: any) {
+          console.error('[Health Router] Error acknowledging alert:', error);
+          return { success: false, error: error.message };
+        }
+      }),
+
+    // Ejecuta un ciclo completo de sondeo + evaluación de reglas AHORA.
+    runHealthCheck: protectedProcedure
+      .mutation(async () => {
+        try {
+          const { runHealthCycle } = await import('./services/health-monitor');
+          const r = await runHealthCycle();
+          return {
+            success: true,
+            probes: r.probes.map(p => ({ provider: p.provider, ok: p.ok, latencyMs: p.latencyMs, error: p.error, skipped: !!p.skipped })),
+            alertsRaised: r.raised,
+            activeAlerts: r.active.length,
+          };
+        } catch (error: any) {
+          console.error('[Health Router] Error running health cycle:', error);
+          return { success: false, error: error.message, probes: [], alertsRaised: 0, activeAlerts: 0 };
+        }
+      }),
+
     // Read-only finance P&L — LeadPrime revenue captured by Stripe (filtered by
     // metadata.product='leadprime' in the shared OwlFenc Stripe account), MRR/ARR,
     // Stripe fees, COGS (providers + Neon), free credits (CAC) and gross/operating
@@ -1100,10 +1177,29 @@ export const appRouter = router({
       }))
       .mutation(async ({ input, ctx }) => {
         try {
-          const { setSubscriptionConfig } = await import('./services/leadprime-db');
+          const { setSubscriptionConfig, applySubscriptionIntentionViaApi } = await import('./services/leadprime-db');
           const updatedBy = (ctx.user as any)?.email ?? 'admin';
           const result = await setSubscriptionConfig({ ...input, updatedBy });
-          return { success: true, config: result };
+
+          // Ejecutar la intención de inmediato en LeadPrime. Antes solo se
+          // guardaba y había que esperar el barrido de 5 min a ciegas: si el
+          // worker fallaba, la asignación moría en silencio. Si el disparo
+          // falla (API interna caída/sin key), la intención YA quedó escrita y
+          // el worker la aplicará igual — por eso no se propaga el error.
+          let applied: Awaited<ReturnType<typeof applySubscriptionIntentionViaApi>> | null = null;
+          let applyError: string | null = null;
+          try {
+            applied = await applySubscriptionIntentionViaApi({
+              contractorId: input.contractorId,
+              actor: `kai:${updatedBy}`,
+            });
+          } catch (e: any) {
+            applyError = e.message;
+            console.error('[LeadPrime Router] Immediate intention apply failed (worker will retry):', e.message);
+          }
+
+          const config = applied ? await (await import('./services/leadprime-db')).getSubscriptionConfig(input.contractorId) : result;
+          return { success: true, config, applied, applyError };
         } catch (error: any) {
           console.error('[LeadPrime Router] Error saving subscription config:', error);
           throw new Error(`Failed to save subscription config: ${error.message}`);

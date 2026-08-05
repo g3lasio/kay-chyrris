@@ -105,6 +105,16 @@ async function startServer() {
   // Seed required reference data (idempotent — safe on every startup)
   await seedApplications();
 
+  // Vigilancia activa del ecosistema: sondea a cada proveedor y ALERTA por
+  // SMS/email cuando algo se degrada, sin depender de que alguien tenga el
+  // panel abierto. Nunca bloquea el arranque.
+  try {
+    const { startHealthMonitor } = await import('../services/health-monitor');
+    startHealthMonitor();
+  } catch (err: any) {
+    console.error('[Server] No se pudo iniciar el monitor de salud:', err.message);
+  }
+
   // For Autoscale deployments, use PORT env var directly (Cloud Run sets this)
   // In development, default to 5000
   const port = parseInt(process.env.PORT || "5000");

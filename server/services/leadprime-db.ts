@@ -1466,6 +1466,13 @@ export async function setSubscriptionConfig(input: SetSubscriptionConfigInput): 
        on_contract_end        = EXCLUDED.on_contract_end,
        status                 = 'pending',
        enabled                = true,
+       -- Una intención NUEVA invalida el estado de la anterior. Sin esto, el
+       -- worker veía el checkout_url viejo (de otro tier) y contaba la fila
+       -- como "esperando pago": la asignación quedaba colgada en silencio.
+       checkout_url           = NULL,
+       checkout_created_at    = NULL,
+       applied_at             = NULL,
+       last_error             = NULL,
        updated_by             = EXCLUDED.updated_by,
        updated_at             = NOW()`,
     [
@@ -1661,6 +1668,56 @@ export async function linkPendingSubscriptionViaApi(input: {
     tier: data.tier ?? '',
     creditsGrantedCents: data.creditsGrantedCents ?? 0,
     staffAdded: data.staffAdded ?? false,
+  };
+}
+
+export interface ProviderCostRow {
+  provider: string;
+  kind: string;
+  events: number;
+  costUsd: number;
+  quantity: number;
+}
+
+/**
+ * COGS REAL: lo que nos cobraron los proveedores (LeadPrime lo registra desde
+ * los webhooks de Twilio y los tokens que devuelven Anthropic/OpenAI). Se cruza
+ * con lo facturado a usuarios para obtener el margen real, no el estimado.
+ */
+export async function getProviderCostRollup(days = 30): Promise<ProviderCostRow[]> {
+  const data = await callLeadPrimeInternalApi('/costs/rollup', { days });
+  return (data?.rows ?? []) as ProviderCostRow[];
+}
+
+export interface ApplyIntentionResult {
+  success: boolean;
+  outcome: 'applied' | 'checkout_created' | 'waiting' | 'error';
+  tier: string;
+  creditsGrantedCents: number;
+  checkoutUrl: string | null;
+  error?: string;
+}
+
+/**
+ * Ejecuta AHORA la intención de suscripción recién guardada, en vez de esperar
+ * el barrido de 5 minutos del worker. Devuelve el resultado real (tier
+ * aplicado / link ACH generado / error concreto) para mostrarlo al admin.
+ */
+export async function applySubscriptionIntentionViaApi(input: {
+  contractorId: string;
+  actor: string;
+}): Promise<ApplyIntentionResult> {
+  const data = await callLeadPrimeInternalApi('/subscription/apply', {
+    contractorId: input.contractorId,
+    actor: input.actor,
+  });
+  return {
+    success: data.success ?? false,
+    outcome: data.outcome ?? 'error',
+    tier: data.tier ?? '',
+    creditsGrantedCents: data.creditsGrantedCents ?? 0,
+    checkoutUrl: data.checkoutUrl ?? null,
+    error: data.error,
   };
 }
 
