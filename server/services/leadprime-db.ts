@@ -1299,6 +1299,7 @@ export interface SubscriptionConfig {
   targetTier: string | null;
   billingMode: string | null;
   monthlyCreditsCents: number | null;
+  monthlyPriceCents: number | null;
   enableLegacyProjects: boolean;
   contractEndAt: string | null;
   onContractEnd: string;
@@ -1342,6 +1343,7 @@ export async function getSubscriptionConfig(contractorId: string): Promise<Subsc
        csc.target_tier,
        csc.billing_mode,
        csc.monthly_credits_cents,
+       csc.monthly_price_cents,
        csc.enable_legacy_projects,
        csc.contract_end_at,
        csc.on_contract_end,
@@ -1397,6 +1399,7 @@ export async function getSubscriptionConfig(contractorId: string): Promise<Subsc
     targetTier: row?.target_tier ?? null,
     billingMode: row?.billing_mode ?? null,
     monthlyCreditsCents: row?.monthly_credits_cents != null ? parseInt(row.monthly_credits_cents, 10) : null,
+    monthlyPriceCents: row?.monthly_price_cents != null ? parseInt(row.monthly_price_cents, 10) : null,
     enableLegacyProjects: row?.enable_legacy_projects === true,
     contractEndAt: toIso(row?.contract_end_at),
     onContractEnd: row?.on_contract_end ?? 'downgrade_to_elite',
@@ -1432,8 +1435,13 @@ export async function getSubscriptionConfig(contractorId: string): Promise<Subsc
 export interface SetSubscriptionConfigInput {
   contractorId: string;
   targetTier: 'network_elite' | 'chyrris_growth' | 'chyrris_legacy';
-  billingMode: 'stripe_ach' | 'comp_no_charge';
+  billingMode: 'stripe_ach' | 'comp_no_charge' | 'external_zelle';
   monthlyCreditsCents: number | null;  // null = use catalog default; max 120000
+  /** Precio mensual ACORDADO en dólares-centavos. Los tiers gestionados se
+   *  negocian caso por caso, así que el importe real puede diferir del
+   *  catálogo. Es lo que cuenta como MRR cuando el pago entra por fuera de
+   *  Stripe (Zelle/transferencia). null = usar el precio del catálogo. */
+  monthlyPriceCents?: number | null;
   enableLegacyProjects: boolean;
   contractEndAt: string | null;        // ISO string or null
   onContractEnd: 'downgrade_to_elite' | 'cancel';
@@ -1454,13 +1462,14 @@ export async function setSubscriptionConfig(input: SetSubscriptionConfigInput): 
   await pool.query(
     `INSERT INTO contractor_subscription_config
        (contractor_id, target_tier, billing_mode, monthly_credits_cents,
-        enable_legacy_projects, contract_end_at, on_contract_end,
-        status, enabled, updated_by, updated_at, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', true, $8, NOW(), NOW())
+        monthly_price_cents, enable_legacy_projects, contract_end_at,
+        on_contract_end, status, enabled, updated_by, updated_at, created_at)
+     VALUES ($1, $2, $3, $4, $9, $5, $6, $7, 'pending', true, $8, NOW(), NOW())
      ON CONFLICT (contractor_id) DO UPDATE SET
        target_tier            = EXCLUDED.target_tier,
        billing_mode           = EXCLUDED.billing_mode,
        monthly_credits_cents  = EXCLUDED.monthly_credits_cents,
+       monthly_price_cents    = EXCLUDED.monthly_price_cents,
        enable_legacy_projects = EXCLUDED.enable_legacy_projects,
        contract_end_at        = EXCLUDED.contract_end_at,
        on_contract_end        = EXCLUDED.on_contract_end,
@@ -1484,6 +1493,7 @@ export async function setSubscriptionConfig(input: SetSubscriptionConfigInput): 
       input.contractEndAt ? new Date(input.contractEndAt) : null,
       input.onContractEnd,
       input.updatedBy,
+      input.monthlyPriceCents != null ? Math.max(0, Math.round(input.monthlyPriceCents)) : null,
     ]
   );
 

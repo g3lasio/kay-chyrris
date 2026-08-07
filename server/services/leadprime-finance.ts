@@ -299,6 +299,43 @@ async function getRecurring(notes: string[]): Promise<Recurring> {
       acc.subs += 1;
       planMap.set(planKey, acc);
     }
+    // ── Suscripciones pagadas FUERA de Stripe (Zelle/transferencia) ──────────
+    // Son ingreso recurrente real, pero no existen en Stripe: sin esto el MRR
+    // las ignoraba por completo y un cliente de $650/mes valía $0 en el P&L.
+    // El importe es el ACORDADO (monthly_price_cents); si no se capturó, se
+    // usa el precio de catálogo del plan.
+    try {
+      const pool = getLeadPrimePool();
+      const ext = await pool.query(
+        `SELECT csc.target_tier,
+                COALESCE(NULLIF(csc.monthly_price_cents, 0), pd.monthly_price_cents, 0) AS price_cents
+           FROM contractor_subscription_config csc
+           LEFT JOIN plan_definitions pd ON pd.plan_name = csc.target_tier
+           JOIN subscriptions s ON s.contractor_id = csc.contractor_id
+          WHERE csc.billing_mode = 'external_zelle'
+            AND csc.enabled = true
+            AND csc.status = 'applied'
+            AND s.status IN ('active', 'trialing')
+            AND s.plan_name = csc.target_tier`
+      );
+      for (const row of ext.rows) {
+        const monthly = (parseInt(row.price_cents, 10) || 0) / 100;
+        if (monthly <= 0) continue;
+        mrr += monthly;
+        count += 1;
+        const key = `${row.target_tier} (pago externo)`;
+        const acc = planMap.get(key) || { mrr: 0, subs: 0 };
+        acc.mrr += monthly;
+        acc.subs += 1;
+        planMap.set(key, acc);
+      }
+      if (ext.rows.length > 0) {
+        notes.push(`recurring: ${ext.rows.length} suscripción(es) pagada(s) fuera de Stripe incluidas en el MRR`);
+      }
+    } catch (e: any) {
+      notes.push(`recurring: no se pudo leer el MRR de pagos externos (${e.message})`);
+    }
+
     out.available = true;
     out.mrrUsd = round(mrr);
     out.arrUsd = round(mrr * 12);

@@ -46,8 +46,12 @@ export function SubscriptionConfigModal({ user, balanceDollars, onClose }: {
   const target = user ?? (picked ? { id: picked.id, name: picked.businessName ?? picked.name } : null);
 
   const [targetTier, setTargetTier] = useState<'network_elite' | 'chyrris_growth' | 'chyrris_legacy'>('network_elite');
-  const [billingMode, setBillingMode] = useState<'stripe_ach' | 'comp_no_charge'>('comp_no_charge');
+  const [billingMode, setBillingMode] = useState<'stripe_ach' | 'comp_no_charge' | 'external_zelle'>('comp_no_charge');
   const [creditsCents, setCreditsCents] = useState('');
+  // Precio mensual acordado (en dólares, para capturar). Los tiers gestionados
+  // se negocian caso por caso, así que el importe real puede diferir del
+  // catálogo; es lo que cuenta como MRR cuando el pago entra por fuera.
+  const [priceDollars, setPriceDollars] = useState('');
   const [enableLegacy, setEnableLegacy] = useState(false);
   const [contractEnd, setContractEnd] = useState('');
   const [onContractEnd, setOnContractEnd] = useState<'downgrade_to_elite' | 'cancel'>('downgrade_to_elite');
@@ -71,6 +75,7 @@ export function SubscriptionConfigModal({ user, balanceDollars, onClose }: {
       if (d.targetTier) setTargetTier(d.targetTier as any);
       if (d.billingMode) setBillingMode(d.billingMode as any);
       setCreditsCents(d.monthlyCreditsCents != null ? String(d.monthlyCreditsCents) : '');
+      setPriceDollars(d.monthlyPriceCents ? (d.monthlyPriceCents / 100).toFixed(2) : '');
       setEnableLegacy(d.enableLegacyProjects);
       setContractEnd(d.contractEndAt ? d.contractEndAt.slice(0, 10) : '');
       setOnContractEnd((d.onContractEnd as any) ?? 'downgrade_to_elite');
@@ -116,11 +121,15 @@ export function SubscriptionConfigModal({ user, balanceDollars, onClose }: {
     const creds = creditsCents !== ''
       ? Math.min(Math.max(0, parseInt(creditsCents, 10) || 0), 120000)
       : null;
+    const priceCents = priceDollars.trim() !== ''
+      ? Math.max(0, Math.round(parseFloat(priceDollars) * 100))
+      : null;
     setConfig.mutate({
       contractorId: target.id,
       targetTier,
       billingMode,
       monthlyCreditsCents: creds,
+      monthlyPriceCents: Number.isFinite(priceCents as number) ? priceCents : null,
       enableLegacyProjects: enableLegacy,
       contractEndAt: contractEnd ? new Date(contractEnd).toISOString() : null,
       onContractEnd,
@@ -158,6 +167,18 @@ export function SubscriptionConfigModal({ user, balanceDollars, onClose }: {
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Servicio</span>
                 <span>{d?.serviceLevel ?? '—'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Cómo paga</span>
+                <span className={d?.billingMode === 'external_zelle' ? 'text-violet-300 font-medium' : ''}>
+                  {d?.billingMode === 'external_zelle'
+                    ? `Zelle / transferencia${d?.monthlyPriceCents ? ` · $${(d.monthlyPriceCents / 100).toFixed(2)}/mes` : ''}`
+                    : d?.billingMode === 'stripe_ach'
+                      ? `ACH (Stripe)${d?.monthlyPriceCents ? ` · $${(d.monthlyPriceCents / 100).toFixed(2)}/mes` : ''}`
+                      : d?.billingMode === 'comp_no_charge'
+                        ? 'Cortesía (sin cargo)'
+                        : '—'}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Sub status</span>
@@ -254,19 +275,56 @@ export function SubscriptionConfigModal({ user, balanceDollars, onClose }: {
                   </select>
                 </div>
                 <div>
-                  <Label className="text-xs">Modo de pago</Label>
+                  <Label className="text-xs">Forma de pago</Label>
                   <select
                     value={billingMode}
                     onChange={e => setBillingMode(e.target.value as any)}
                     className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
                   >
-                    <option value="comp_no_charge">Cortesía</option>
-                    <option value="stripe_ach">ACH real</option>
+                    <option value="stripe_ach">ACH (cobra Stripe)</option>
+                    <option value="external_zelle">Zelle / transferencia</option>
+                    <option value="comp_no_charge">Cortesía (sin cargo)</option>
                   </select>
                 </div>
               </div>
 
-              {billingMode === 'comp_no_charge' && (
+              {/* Qué implica cada forma de pago — la diferencia es contable, no
+                  funcional: el usuario recibe el mismo plan en los tres casos. */}
+              <p className="text-xs text-muted-foreground -mt-1">
+                {billingMode === 'stripe_ach'
+                  ? 'Se genera un link de cobro ACH; el plan se activa cuando el contratista paga.'
+                  : billingMode === 'external_zelle'
+                    ? '✅ Activación inmediata con todos los beneficios y créditos del plan. Cuenta como ingreso real (MRR), igual que ACH — solo cambia por dónde entra el dinero.'
+                    : 'Activación inmediata sin cargo. NO cuenta como ingreso: se registra como cortesía de $0.'}
+              </p>
+
+              {/* Precio acordado — obligatorio de facto en pagos externos:
+                  es el importe que se sumará al MRR. */}
+              {billingMode !== 'comp_no_charge' && (
+                <div>
+                  <Label className="text-xs">
+                    Precio mensual acordado (USD)
+                    {billingMode === 'external_zelle' && <span className="text-violet-400"> — es lo que suma al MRR</span>}
+                  </Label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="Vacío = precio del catálogo del plan"
+                    value={priceDollars}
+                    onChange={e => setPriceDollars(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Los planes gestionados se negocian caso por caso; captura aquí el monto real acordado.
+                  </p>
+                </div>
+              )}
+
+              {/* Créditos: para cortesía y para pago externo el worker los otorga
+                  al activar. Vacío = los del catálogo del plan, que es lo
+                  normal — este campo es solo para un override puntual. */}
+              {(billingMode === 'comp_no_charge' || billingMode === 'external_zelle') && (
                 <div>
                   <Label className="text-xs">Créditos mensuales (cents, máx $1,200 = 120000)</Label>
                   <input

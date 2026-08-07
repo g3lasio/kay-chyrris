@@ -1181,8 +1181,14 @@ export const appRouter = router({
       .input(z.object({
         contractorId: z.string().min(1),
         targetTier: z.enum(['network_elite', 'chyrris_growth', 'chyrris_legacy']),
-        billingMode: z.enum(['stripe_ach', 'comp_no_charge']),
+        // external_zelle = pago por fuera de Stripe (Zelle/transferencia):
+        // ingreso real que cuenta como MRR, con el plan y los créditos
+        // completos. comp_no_charge sigue siendo cortesía a $0.
+        billingMode: z.enum(['stripe_ach', 'comp_no_charge', 'external_zelle']),
         monthlyCreditsCents: z.number().int().min(0).max(120000).nullable(), // tope $1,200 (Decisión #5)
+        // Precio mensual acordado (los tiers gestionados se negocian caso por
+        // caso). null = usar el precio del catálogo.
+        monthlyPriceCents: z.number().int().min(0).max(2000000).nullable().optional(),
         enableLegacyProjects: z.boolean(),
         contractEndAt: z.string().nullable(), // ISO date string or null
         onContractEnd: z.enum(['downgrade_to_elite', 'cancel']).default('downgrade_to_elite'),
