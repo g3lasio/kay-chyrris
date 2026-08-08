@@ -1063,6 +1063,64 @@ const ISSUE_SIGNATURE_SQL = `
 `;
 
 /**
+ * Arma la consulta agrupada.
+ *
+ * OJO CON LAS WINDOW FUNCTIONS: la primera versión de esto usaba
+ * `COUNT(DISTINCT contractor_id) OVER (PARTITION BY grp)` y Postgres NO
+ * implementa DISTINCT en window functions — error 0A000. La consulta reventaba
+ * entera, el error subía por tRPC y la página mostraba su estado vacío ("no
+ * issues found") con los contadores en 139: parecía que no había nada que
+ * mostrar cuando en realidad la consulta ni corría. Por eso los agregados del
+ * grupo se calculan en un CTE aparte con GROUP BY, donde DISTINCT sí es válido,
+ * y solo ROW_NUMBER() se queda como window function.
+ *
+ * Está extraída como función pura para poder verificar el SQL en un test sin
+ * necesidad de una base de datos.
+ */
+export function buildGroupedIssuesQuery(
+  groupExpr: string,
+  whereClause: string,
+  paramCount: number
+): string {
+  return `WITH base AS (
+       SELECT id, contractor_id, tool_name, issue_type, title, description,
+              error_message, status, occurrences,
+              COALESCE(affected_contractors, '{}') AS affected_contractors,
+              created_at, updated_at,
+              ${groupExpr} AS grp
+         FROM system_issues
+         ${whereClause}
+     ), grp_stats AS (
+       -- Agregados por grupo. Aquí DISTINCT sí es legal (agregación normal).
+       SELECT grp,
+              SUM(occurrences)              AS grp_occurrences,
+              COUNT(*)                      AS grp_rows,
+              MIN(created_at)               AS grp_first_seen,
+              MAX(updated_at)               AS grp_last_seen,
+              COUNT(DISTINCT contractor_id) AS grp_contractors
+         FROM base
+        GROUP BY grp
+     ), ranked AS (
+       -- Fila representante de cada grupo: la más reciente.
+       SELECT base.*,
+              ROW_NUMBER() OVER (PARTITION BY grp ORDER BY updated_at DESC, created_at DESC) AS rn
+         FROM base
+     )
+     SELECT r.*, s.grp_occurrences, s.grp_rows, s.grp_first_seen,
+            s.grp_last_seen, s.grp_contractors
+       FROM ranked r
+       -- IS NOT DISTINCT FROM porque grp puede ser NULL (issue sin herramienta
+       -- ni mensaje): con "=" ese grupo se perdería en silencio.
+       JOIN grp_stats s ON s.grp IS NOT DISTINCT FROM r.grp
+      WHERE r.rn = 1
+      ORDER BY
+        CASE r.status WHEN 'new' THEN 0 WHEN 'reviewing' THEN 1 ELSE 2 END,
+        s.grp_occurrences DESC,
+        s.grp_last_seen DESC
+      LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
+}
+
+/**
  * Get system issues list with optional filters.
  *
  * AGRUPADO (auditoría ago 2026): el panel mostraba 134 tarjetas del MISMO error
@@ -1111,31 +1169,7 @@ export async function getSystemIssues(options: {
 
     const dataParams = [...params, limit, offset];
     const dataResult = await pool.query(
-      `WITH base AS (
-         SELECT id, contractor_id, tool_name, issue_type, title, description,
-                error_message, status, occurrences,
-                COALESCE(affected_contractors, '{}') AS affected_contractors,
-                created_at, updated_at,
-                ${groupExpr} AS grp
-           FROM system_issues
-           ${whereClause}
-       ), ranked AS (
-         SELECT *,
-                ROW_NUMBER() OVER (PARTITION BY grp ORDER BY updated_at DESC, created_at DESC) AS rn,
-                SUM(occurrences)  OVER (PARTITION BY grp) AS grp_occurrences,
-                COUNT(*)          OVER (PARTITION BY grp) AS grp_rows,
-                MIN(created_at)   OVER (PARTITION BY grp) AS grp_first_seen,
-                MAX(updated_at)   OVER (PARTITION BY grp) AS grp_last_seen,
-                COUNT(DISTINCT contractor_id) OVER (PARTITION BY grp) AS grp_contractors
-           FROM base
-       )
-       SELECT * FROM ranked
-        WHERE rn = 1
-        ORDER BY
-          CASE status WHEN 'new' THEN 0 WHEN 'reviewing' THEN 1 ELSE 2 END,
-          grp_occurrences DESC,
-          grp_last_seen DESC
-        LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      buildGroupedIssuesQuery(groupExpr, whereClause, params.length),
       dataParams
     );
 
