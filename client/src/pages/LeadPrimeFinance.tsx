@@ -56,9 +56,27 @@ interface Recurring {
   /** Parte del MRR cobrada por Zelle/transferencia. Ingreso real; solo se etiqueta. */
   manualMrrUsd?: number;
   manualSubscriptions?: number;
-  /** Cuentas fuera del conteo (duplicadas, demo, sin mensualidad) y el motivo. */
+  /** Cuentas fuera del conteo (duplicadas sin plan de pago, demo, sin mensualidad). */
   excluded?: Array<{ contractorId: string; reason: string; email: string | null }>;
   duplicates?: number;
+  activeAccounts?: number;
+  // Origen del dinero: cada dólar del MRR cruzado contra Stripe.
+  stripeMrrUsd?: number;
+  stripeSubscriptions?: number;
+  unverifiedMrrUsd?: number;
+  unverifiedSubscriptions?: number;
+  stripeCheck?: { available: boolean; note?: string; activeSubscriptions: number };
+  stripeOrphans?: Array<{ subscriptionId: string; email: string | null; monthlyUsd: number; product: string | null }>;
+  reviewGroups?: Array<{ emails: string[]; contractorIds: string[] }>;
+  lines?: Array<{
+    email: string | null;
+    planName: string;
+    monthlyUsd: number;
+    billingSource: 'stripe' | 'manual' | 'unknown';
+    isManual: boolean;
+    needsReview: boolean;
+    stripeMonthlyUsd: number | null;
+  }>;
 }
 interface CapturedRevenue {
   available: boolean;
@@ -168,7 +186,10 @@ interface UserSlice {
 interface MrrMovements {
   available: boolean;
   note?: string;
+  /** Suscripciones que aportan dinero. No es lo mismo que cuentas activas. */
   activeSubscriptions: number;
+  /** Cuentas activas totales, incluidas las que no pagan mensualidad. */
+  activeAccounts?: number;
   activeMrrUsd: number;
   newCount: number;
   newMrrUsd: number;
@@ -725,6 +746,90 @@ export default function LeadPrimeFinance() {
                 </div>
               )}
 
+              {/* ORIGEN DEL DINERO — ni un dólar del MRR sin procedencia.
+                  Cada línea se cruzó contra Stripe: o tiene suscripción activa
+                  allá, o se cobra a mano. Se etiqueta y se reporta; no se
+                  elimina nada, eso lo decide el dueño. */}
+              <div className="mt-3 rounded border border-slate-700/60 bg-slate-950/40 p-2">
+                <p className="mb-1.5 text-[10px] uppercase tracking-widest text-slate-500">
+                  Origen del MRR
+                </p>
+                {!fin.recurring.stripeCheck?.available ? (
+                  <p className="text-[11px] text-slate-500">
+                    No se pudo cruzar contra Stripe ({fin.recurring.stripeCheck?.note ?? 'sin detalle'}).
+                    Sin esa comprobación no se afirma de dónde viene el dinero.
+                  </p>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-400">Cobro automático (Stripe)</span>
+                      <span className="font-mono text-emerald-400">
+                        {usd(fin.recurring.stripeMrrUsd ?? 0)}
+                        <span className="text-slate-600"> · {fin.recurring.stripeSubscriptions ?? 0}</span>
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-400">Cobro manual (sin contraparte en Stripe)</span>
+                      <span className="font-mono text-sky-300">
+                        {usd(fin.recurring.unverifiedMrrUsd ?? 0)}
+                        <span className="text-slate-600"> · {fin.recurring.unverifiedSubscriptions ?? 0}</span>
+                      </span>
+                    </div>
+                    {(fin.recurring.lines?.length ?? 0) > 0 && (
+                      <ul className="mt-2 space-y-0.5 border-t border-slate-800 pt-2">
+                        {fin.recurring.lines!.map((l) => (
+                          <li key={`${l.email}-${l.planName}`} className="flex items-center justify-between gap-2 text-[11px]">
+                            <span className="flex min-w-0 items-center gap-1.5">
+                              <span className="truncate text-slate-400">{l.email ?? '(sin correo)'}</span>
+                              {l.billingSource === 'stripe' ? (
+                                <span className="shrink-0 rounded border border-emerald-500/30 bg-emerald-500/10 px-1 py-px text-[9px] text-emerald-300">
+                                  Stripe
+                                </span>
+                              ) : (
+                                <span
+                                  className="shrink-0 rounded border border-sky-500/30 bg-sky-500/10 px-1 py-px text-[9px] text-sky-300"
+                                  title={
+                                    l.isManual
+                                      ? 'Configurado como cobro externo (Zelle) en LeadPrime.'
+                                      : 'No existe suscripción activa en Stripe para esta cuenta: se está cobrando a mano.'
+                                  }
+                                >
+                                  {l.isManual ? 'Manual / Zelle' : 'Manual (sin Stripe)'}
+                                </span>
+                              )}
+                              {l.needsReview && (
+                                <span
+                                  className="shrink-0 rounded border border-amber-500/30 bg-amber-500/10 px-1 py-px text-[9px] text-amber-300"
+                                  title="Coincide con otra cuenta DE PAGO. Las dos cuentan completas; requiere revisión humana."
+                                >
+                                  Revisar
+                                </span>
+                              )}
+                            </span>
+                            <span className="shrink-0 font-mono text-slate-300">{usd(l.monthlyUsd)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {(fin.recurring.stripeOrphans?.length ?? 0) > 0 && (
+                      <div className="mt-2 border-t border-slate-800 pt-2">
+                        <p className="text-[10px] uppercase tracking-widest text-slate-500">
+                          En Stripe sin contraparte local (no suman al MRR)
+                        </p>
+                        <ul className="mt-1 space-y-0.5">
+                          {fin.recurring.stripeOrphans!.map((o) => (
+                            <li key={o.subscriptionId} className="flex justify-between text-[11px] text-slate-500">
+                              <span className="truncate">{o.email ?? o.subscriptionId}</span>
+                              <span className="font-mono">{usd(o.monthlyUsd)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
               {manualMrr > 0 && (
                 <p className="mt-3 rounded border border-sky-500/20 bg-sky-500/5 p-2 text-[11px] leading-relaxed text-sky-200/80">
                   <b>{usd(manualMrr)}</b> de este MRR se cobra por Zelle/transferencia, fuera de Stripe.
@@ -733,14 +838,33 @@ export default function LeadPrimeFinance() {
                 </p>
               )}
 
+              {(fin.recurring.reviewGroups?.length ?? 0) > 0 && (
+                <div className="mt-3 rounded border border-amber-500/20 bg-amber-500/5 p-2 text-[11px] leading-relaxed text-amber-200/80">
+                  <p className="font-medium">Cuentas DE PAGO que coinciden — las dos cuentan</p>
+                  <p className="mt-0.5 text-amber-200/60">
+                    Comparten teléfono o nombre, pero ninguna se descarta: elegir cuál sobrevive por
+                    coincidencia de nombre borraría ingreso real. Se suman completas y lo resuelve una
+                    persona.
+                  </p>
+                  <ul className="mt-1.5 space-y-0.5">
+                    {fin.recurring.reviewGroups!.map((g) => (
+                      <li key={g.contractorIds.join('-')} className="font-mono text-[10px] text-amber-200/70">
+                        {g.emails.join('  +  ')}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {duplicateAccounts.length > 0 && (
                 <div className="mt-3 rounded border border-amber-500/20 bg-amber-500/5 p-2 text-[11px] leading-relaxed text-amber-200/80">
                   <p className="font-medium">
-                    {duplicateAccounts.length} cuenta(s) duplicada(s) detectada(s) — fuera del conteo
+                    {duplicateAccounts.length} cuenta(s) duplicada(s) SIN plan de pago — fuera del conteo
                   </p>
                   <p className="mt-0.5 text-amber-200/60">
-                    Mismo dueño con más de una cuenta (mismo teléfono o mismo nombre/negocio). Se
-                    excluyen del MRR y del número de suscripciones para no contarlo dos veces. No se
+                    Mismo dueño con más de una cuenta (mismo teléfono o mismo negocio). Solo se sacan
+                    del conteo las que NO pagan mensualidad: aportan $0, así que excluirlas no puede
+                    borrar ingreso. Una cuenta con suscripción de pago activa nunca se excluye. No se
                     borró ni se fusionó nada: unir las cuentas es decisión tuya.
                   </p>
                   <ul className="mt-1.5 space-y-0.5">
@@ -1069,7 +1193,21 @@ export default function LeadPrimeFinance() {
               icon={Repeat}
               label="Active MRR"
               value={usd(mv?.activeMrrUsd)}
-              sub={mv ? `${mv.activeSubscriptions} subscriptions` : 'recurring'}
+              // "21 subscriptions" contaba CUENTAS activas (incluidas las que no
+              // pagan mensualidad) al lado de un MRR que solo suma las de pago.
+              // Ahora cada número dice lo que realmente es.
+              sub={
+                mv
+                  ? `${mv.activeSubscriptions} de pago · ${mv.activeAccounts ?? mv.activeSubscriptions} cuentas activas`
+                  : 'recurring'
+              }
+              help={
+                mv
+                  ? `MRR y suscripciones de pago vienen de la MISMA fuente que el P&L Overview: si los dos ` +
+                    `números no coinciden entre pantallas, es un bug. "Cuentas activas" incluye las ` +
+                    `Pay-As-You-Go, que no pagan mensualidad y por eso aportan $0 al MRR.`
+                  : undefined
+              }
               tone={!mv?.available ? 'muted' : (mv.activeMrrUsd ?? 0) > 0 ? 'ok' : 'muted'}
             />
             <StatTile

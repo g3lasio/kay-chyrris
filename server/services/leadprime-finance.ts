@@ -218,13 +218,36 @@ export interface Recurring {
   manualMrrUsd: number;
   manualSubscriptions: number;
   /**
-   * Cuentas descartadas del conteo y por qué. Incluye los duplicados detectados
-   * por teléfono/nombre: se marcan y se excluyen del MRR para no contar dos
-   * veces al mismo dueño, pero NO se borran ni se fusionan — eso es decisión
-   * del dueño, no del panel.
+   * Cuentas descartadas del conteo y por qué. Los duplicados que aparecen aquí
+   * son SIEMPRE cuentas sin plan de pago (aportan $0): la regla nunca excluye
+   * ingreso. Nada se borra ni se fusiona — eso lo decide el dueño.
    */
   excluded: Array<{ contractorId: string; reason: string; email: string | null }>;
   duplicates: number;
+  /** Cuentas activas totales, incluidas las que no pagan mensualidad. */
+  activeAccounts: number;
+  // ── Origen del dinero: ni un dólar del MRR sin procedencia identificable ──
+  /** MRR con suscripción activa CONFIRMADA en Stripe. */
+  stripeMrrUsd: number;
+  stripeSubscriptions: number;
+  /** MRR SIN contraparte en Stripe → se cobra a mano. */
+  unverifiedMrrUsd: number;
+  unverifiedSubscriptions: number;
+  stripeCheck: { available: boolean; note?: string; activeSubscriptions: number };
+  /** En Stripe pero sin contraparte local (otro producto, o sin vincular). */
+  stripeOrphans: Array<{ subscriptionId: string; email: string | null; monthlyUsd: number; product: string | null }>;
+  /** Cuentas DE PAGO que coinciden entre sí: se suman todas, las revisa una persona. */
+  reviewGroups: Array<{ emails: string[]; contractorIds: string[] }>;
+  /** Detalle por cuenta para el bloque de diagnóstico. */
+  lines: Array<{
+    email: string | null;
+    planName: string;
+    monthlyUsd: number;
+    billingSource: 'stripe' | 'manual' | 'unknown';
+    isManual: boolean;
+    needsReview: boolean;
+    stripeMonthlyUsd: number | null;
+  }>;
 }
 
 export interface CapturedRevenue {
@@ -306,6 +329,15 @@ async function getRecurring(notes: string[]): Promise<Recurring> {
     manualSubscriptions: 0,
     excluded: [],
     duplicates: 0,
+    activeAccounts: 0,
+    stripeMrrUsd: 0,
+    stripeSubscriptions: 0,
+    unverifiedMrrUsd: 0,
+    unverifiedSubscriptions: 0,
+    stripeCheck: { available: false, activeSubscriptions: 0 },
+    stripeOrphans: [],
+    reviewGroups: [],
+    lines: [],
   };
   try {
     const { getRecurringRevenue } = await import('./leadprime-mrr');
@@ -314,9 +346,45 @@ async function getRecurring(notes: string[]): Promise<Recurring> {
     out.mrrUsd = rev.mrrUsd;
     out.arrUsd = rev.arrUsd;
     out.activeSubscriptions = rev.activeSubscriptions;
+    out.activeAccounts = rev.activeAccounts;
     out.byPlan = rev.byPlan.map(p => ({ plan: p.plan, mrrUsd: p.mrrUsd, subscriptions: p.subscriptions }));
     out.manualMrrUsd = rev.manualMrrUsd;
     out.manualSubscriptions = rev.manualSubscriptions;
+    out.stripeMrrUsd = rev.stripeMrrUsd;
+    out.stripeSubscriptions = rev.stripeSubscriptions;
+    out.unverifiedMrrUsd = rev.unverifiedMrrUsd;
+    out.unverifiedSubscriptions = rev.unverifiedSubscriptions;
+    out.stripeCheck = rev.stripeCheck;
+    out.stripeOrphans = rev.stripeOrphans;
+    out.reviewGroups = rev.reviewGroups;
+    out.lines = rev.lines.map(l => ({
+      email: l.email,
+      planName: l.planName,
+      monthlyUsd: l.monthlyUsd,
+      billingSource: l.billingSource,
+      isManual: l.isManual,
+      needsReview: l.needsReview,
+      stripeMonthlyUsd: l.stripeMonthlyUsd,
+    }));
+    // Avisos accionables: dinero sin origen confirmado y coincidencias de pago.
+    if (rev.unverifiedSubscriptions > 0) {
+      notes.push(
+        `recurring: $${rev.unverifiedMrrUsd.toFixed(2)} de MRR en ${rev.unverifiedSubscriptions} ` +
+        `suscripción(es) SIN contraparte en Stripe — se cobran a mano`
+      );
+    }
+    if (rev.stripeOrphans.length > 0) {
+      notes.push(
+        `recurring: ${rev.stripeOrphans.length} suscripción(es) activas en Stripe sin contraparte local ` +
+        `(no suman al MRR): ${rev.stripeOrphans.map(o => o.email ?? o.subscriptionId).join(', ')}`
+      );
+    }
+    if (rev.reviewGroups.length > 0) {
+      notes.push(
+        `recurring: ${rev.reviewGroups.length} grupo(s) de cuentas DE PAGO que coinciden — se suman ` +
+        `todas, requieren revisión humana: ${rev.reviewGroups.map(g => g.emails.join(' + ')).join(' | ')}`
+      );
+    }
     out.excluded = rev.excluded;
     out.duplicates = rev.excluded.filter(e => /duplicad/i.test(e.reason)).length;
     if (rev.note) out.note = rev.note;
@@ -738,7 +806,14 @@ export interface UserSlice {
 export interface MrrMovements {
   available: boolean;
   note?: string;
+  /** Suscripciones que aportan dinero. NO es lo mismo que cuentas activas. */
   activeSubscriptions: number;
+  /**
+   * Cuentas con suscripción activa, incluidas las que no pagan mensualidad.
+   * El rótulo "21 subscriptions" contaba ESTO y lo llamaba suscripciones, al
+   * lado de un MRR que solo incluía las 5 de pago.
+   */
+  activeAccounts: number;
   activeMrrUsd: number;
   newCount: number;
   newMrrUsd: number;
@@ -774,6 +849,7 @@ async function getMrrMovements(pool: Pool, notes: string[]): Promise<MrrMovement
   const out: MrrMovements = {
     available: false,
     activeSubscriptions: 0,
+    activeAccounts: 0,
     activeMrrUsd: 0,
     newCount: 0,
     newMrrUsd: 0,
@@ -785,36 +861,27 @@ async function getMrrMovements(pool: Pool, notes: string[]): Promise<MrrMovement
     logoChurnRatePct: null,
   };
   try {
-    const r = await pool.query(
-      `SELECT
-         COUNT(*) FILTER (WHERE s.status IN ('active','trialing')) AS active_count,
-         COALESCE(SUM(${PLAN_PRICE_CENTS_SQL}) FILTER (WHERE s.status IN ('active','trialing')),0) AS active_cents,
-         COUNT(*) FILTER (WHERE s.created_at >= date_trunc('month', now()) AND s.status IN ('active','trialing')) AS new_count,
-         COALESCE(SUM(${PLAN_PRICE_CENTS_SQL}) FILTER (WHERE s.created_at >= date_trunc('month', now()) AND s.status IN ('active','trialing')),0) AS new_cents,
-         COUNT(*) FILTER (WHERE s.canceled_at >= date_trunc('month', now())) AS churned_count,
-         COALESCE(SUM(${PLAN_PRICE_CENTS_SQL}) FILTER (WHERE s.canceled_at >= date_trunc('month', now())),0) AS churned_cents,
-         COUNT(*) FILTER (WHERE s.cancel_at_period_end = true AND s.status IN ('active','trialing')) AS atrisk_count,
-         COALESCE(SUM(${PLAN_PRICE_CENTS_SQL}) FILTER (WHERE s.cancel_at_period_end = true AND s.status IN ('active','trialing')),0) AS atrisk_cents
-       FROM subscriptions s
-         LEFT JOIN plan_definitions pd ON pd.plan_name = s.plan_name
-         LEFT JOIN contractor_subscription_config csc
-                ON csc.contractor_id = s.contractor_id AND csc.enabled = true`
-    );
-    const row = r.rows[0] || {};
-    const activeCount = Number(row.active_count || 0);
-    const churnedCount = Number(row.churned_count || 0);
+    // MISMA FUENTE que el P&L. Antes esta función tenía su propia consulta sin
+    // las exclusiones (demo, duplicados, planes sin mensualidad) y contaba FILAS
+    // en vez de suscripciones de pago: por eso "By User & Churn" mostraba
+    // $1,594 / 21 mientras el P&L mostraba $1,345 / 5. Mientras existan dos
+    // consultas para el mismo número, tarde o temprano vuelven a divergir.
+    const { getRecurringRevenue } = await import('./leadprime-mrr');
+    const rev = await getRecurringRevenue(pool);
+    if (!rev.available) throw new Error(rev.note || 'MRR no disponible');
+
     out.available = true;
-    out.activeSubscriptions = activeCount;
-    out.activeMrrUsd = round(Number(row.active_cents || 0) / 100);
-    out.newCount = Number(row.new_count || 0);
-    out.newMrrUsd = round(Number(row.new_cents || 0) / 100);
-    out.churnedCount = churnedCount;
-    out.churnedMrrUsd = round(Number(row.churned_cents || 0) / 100);
-    out.netNewMrrUsd = round(out.newMrrUsd - out.churnedMrrUsd);
-    out.atRiskCount = Number(row.atrisk_count || 0);
-    out.atRiskMrrUsd = round(Number(row.atrisk_cents || 0) / 100);
-    const denom = activeCount + churnedCount;
-    out.logoChurnRatePct = denom > 0 ? round((churnedCount / denom) * 100, 1) : null;
+    out.activeSubscriptions = rev.activeSubscriptions;
+    out.activeAccounts = rev.activeAccounts;
+    out.activeMrrUsd = rev.mrrUsd;
+    out.newCount = rev.movements.newCount;
+    out.newMrrUsd = rev.movements.newMrrUsd;
+    out.churnedCount = rev.movements.churnedCount;
+    out.churnedMrrUsd = rev.movements.churnedMrrUsd;
+    out.netNewMrrUsd = rev.movements.netNewMrrUsd;
+    out.atRiskCount = rev.movements.atRiskCount;
+    out.atRiskMrrUsd = rev.movements.atRiskMrrUsd;
+    out.logoChurnRatePct = rev.movements.logoChurnRatePct;
   } catch (err: any) {
     if (isMissingSchema(err)) out.note = 'subscriptions not available';
     else out.note = err.message;

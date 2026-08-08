@@ -343,12 +343,16 @@ async function raiseAlert(alert: AlertInput): Promise<boolean> {
     const row = existing.rows[0];
     const lastNotified = row.notified_at ? new Date(row.notified_at).getTime() : 0;
     shouldNotify = Date.now() - lastNotified > RENOTIFY_COOLDOWN_MS;
+    // El TÍTULO también se refresca. Antes solo se actualizaba `detail`, así que
+    // una alerta con una cifra en el título ("SALDO BAJO — Twilio: $34.09") se
+    // quedaba congelada en el valor de la PRIMERA ocurrencia mientras el cuerpo
+    // mostraba el actual ($28.76): la misma alerta se contradecía a sí misma.
     await pool.query(
       `UPDATE system_alerts
           SET occurrences = occurrences + 1, last_seen_at = NOW(),
-              severity = $2, detail = $3
+              severity = $2, detail = $3, title = $4
         WHERE id = $1`,
-      [row.id, alert.severity, alert.detail]
+      [row.id, alert.severity, alert.detail, alert.title]
     );
   }
 
@@ -671,6 +675,7 @@ export async function evaluateAlerts(probes: ProbeResult[]): Promise<{ raised: n
       }
       // Saldo prepago bajo (Twilio): sin saldo, los SMS y llamadas de TODOS
       // los usuarios dejan de salir. Es la falla más silenciosa y más cara.
+      let balanceAlerted = false;
       if (typeof svc.balanceUsd === 'number') {
         const critical = Number(process.env.TWILIO_BALANCE_CRITICAL_USD || 20);
         const fixedWarn = Number(process.env.TWILIO_BALANCE_WARN_USD || 50);
@@ -682,6 +687,7 @@ export async function evaluateAlerts(probes: ProbeResult[]): Promise<{ raised: n
         const relativeWarn = projected > 0 ? projected * ratio : 0;
         const warn = Math.max(fixedWarn, relativeWarn);
         if (svc.balanceUsd <= warn) {
+          balanceAlerted = true;
           await fire({
             key: `low_balance:${name}`,
             severity: svc.balanceUsd <= critical ? 'critical' : 'warning',
@@ -691,11 +697,19 @@ export async function evaluateAlerts(probes: ProbeResult[]): Promise<{ raised: n
               `Al agotarse el saldo dejan de enviarse SMS y llamadas de TODOS los usuarios a la vez. ` +
               `Saldo $${svc.balanceUsd.toFixed(2)} vs gasto proyectado del mes $${projected.toFixed(2)}` +
               (projected > 0 ? ` (${(svc.balanceUsd / projected).toFixed(2)}x — el mínimo sano es ${ratio}x)` : '') +
-              `. Recarga la cuenta.`,
+              (typeof svc.usagePct === 'number' && svc.usagePct >= 0.9
+                ? ` Incluye lo que antes se avisaba aparte como "cuota al ${Math.round(svc.usagePct * 100)}%": ` +
+                  `en una cuenta prepago la cuota SE DERIVA del saldo, así que era la misma alerta dos veces.`
+                : '') +
+              ` Recarga la cuenta.`,
           });
         }
       }
-      if (typeof svc.usagePct === 'number' && svc.usagePct >= 0.9) {
+      // La cuota solo se avisa por separado cuando NO hay alerta de saldo. En un
+      // proveedor prepago (Twilio) "cuota al 100%" y "saldo bajo" son el mismo
+      // hecho: se reportaban como dos alertas distintas para el mismo problema.
+      // Gana la de saldo, que dice el monto exacto y qué hacer.
+      if (!balanceAlerted && typeof svc.usagePct === 'number' && svc.usagePct >= 0.9) {
         await fire({
           key: `quota:${name}`,
           severity: 'warning',
