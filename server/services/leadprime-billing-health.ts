@@ -98,8 +98,28 @@ export interface BillingHealth {
   reconcileFailures: BillingHealthDetector<{ eventType: string; count: number; totalCostCents: number }>;
   /** Pending entries in the Layer-1 retry queue. */
   retryQueueBacklog: BillingHealthDetector<{ status: string; count: number; totalCents: number }>;
+  /**
+   * Facturas de suscripción PAGADAS sin su recarga de créditos aplicada
+   * (últimos 35 días). EL PUNTO CIEGO DEL INCIDENTE DE AGOSTO 2026: los otros
+   * cuatro detectores miraban saldos, cobros y reintentos, pero ninguno
+   * comparaba "te cobré" contra "te di lo que pagaste". Con el bug activo el
+   * dashboard estuvo en verde un mes entero mientras dos clientes pagaban sin
+   * recibir sus créditos. Rojo si hay aunque sea una.
+   */
+  missingRecharges35d: BillingHealthDetector<MissingRechargeRow> & { owedCreditsCents: number };
   /** Non-fatal notes (e.g. which detectors degraded). */
   notes: string[];
+}
+
+export interface MissingRechargeRow {
+  invoiceId: string;
+  contractorId: string | null;
+  contractorName: string | null;
+  email: string | null;
+  planName: string | null;
+  amountPaidCents: number;
+  expectedCreditsCents: number;
+  paidAt: string | null;
 }
 
 /** Event types that carry a real cost and should always have a matching charge. */
@@ -265,6 +285,76 @@ async function detectReconcileFailures(
   }
 }
 
+/**
+ * Facturas de suscripción PAGADAS sin su `subscription_recharge` (35 días).
+ *
+ * EL DETECTOR QUE FALTABA. Durante el incidente de agosto 2026 las
+ * renovaciones se cobraban en Stripe y nunca acreditaban créditos; los otros
+ * cuatro tiles seguían en verde porque ninguno cruzaba las dos mitades del
+ * trato. Este compara la tabla local de facturas contra las recargas
+ * aplicadas: cualquier factura pagada sin su crédito sale aquí.
+ *
+ * Se apoya en la columna wallet_transactions.stripe_invoice_id (agregada tras
+ * el incidente); si no existe todavía, cae al metadata/idempotency_key.
+ */
+async function detectMissingRecharges(
+  pool: Pool,
+  notes: string[],
+): Promise<BillingHealthDetector<MissingRechargeRow> & { owedCreditsCents: number }> {
+  try {
+    const result = await pool.query(`
+      SELECT i.stripe_invoice_id                AS invoice_id,
+             i.contractor_id,
+             c.name                             AS contractor_name,
+             c.email,
+             s.plan_name,
+             COALESCE(i.amount_paid, 0)         AS amount_paid,
+             COALESCE(pd.monthly_credits_cents, 0) AS expected_credits_cents,
+             i.paid_at
+        FROM invoices i
+        LEFT JOIN contractors c       ON c.id = i.contractor_id
+        LEFT JOIN subscriptions s     ON s.contractor_id = i.contractor_id
+        LEFT JOIN plan_definitions pd ON pd.plan_name = s.plan_name
+       WHERE i.status = 'paid'
+         AND i.paid_at >= NOW() - INTERVAL '35 days'
+         AND COALESCE(i.amount_paid, 0) > 0
+         AND i.stripe_subscription_id IS NOT NULL
+         AND NOT EXISTS (
+               SELECT 1 FROM wallet_transactions wt
+                WHERE wt.type = 'subscription_recharge'
+                  AND (wt.stripe_invoice_id = i.stripe_invoice_id
+                       OR wt.metadata->>'invoiceId' = i.stripe_invoice_id
+                       OR wt.idempotency_key = 'subscription_recharge:' || i.stripe_invoice_id)
+             )
+       ORDER BY i.paid_at DESC
+       LIMIT 50
+    `);
+    const rows: MissingRechargeRow[] = result.rows.map(r => ({
+      invoiceId: r.invoice_id,
+      contractorId: r.contractor_id ?? null,
+      contractorName: r.contractor_name ?? null,
+      email: r.email ?? null,
+      planName: r.plan_name ?? null,
+      amountPaidCents: Math.round(Number(r.amount_paid || 0) * 100),
+      expectedCreditsCents: parseInt(r.expected_credits_cents) || 0,
+      paidAt: r.paid_at ? new Date(r.paid_at).toISOString() : null,
+    }));
+    return {
+      available: true,
+      count: rows.length,
+      rows,
+      owedCreditsCents: rows.reduce((s, r) => s + r.expectedCreditsCents, 0),
+    };
+  } catch (err: any) {
+    if (isMissingSchema(err)) {
+      notes.push('missingRecharges35d: invoices/wallet_transactions no disponible');
+      return { available: false, count: 0, rows: [], owedCreditsCents: 0 };
+    }
+    notes.push(`missingRecharges35d: ${err.message}`);
+    return { available: false, count: 0, rows: [], owedCreditsCents: 0 };
+  }
+}
+
 async function detectRetryQueueBacklog(
   pool: Pool,
   notes: string[],
@@ -313,12 +403,14 @@ export async function getBillingHealth(): Promise<BillingHealth> {
     unchargedUsage24h,
     reconcileFailures,
     retryQueueBacklog,
+    missingRecharges35d,
   ] = await Promise.all([
     detectNegativeBalances(pool, notes),
     detectReconciledActivity(pool, notes),
     detectUnchargedUsage(pool, notes),
     detectReconcileFailures(pool, notes),
     detectRetryQueueBacklog(pool, notes),
+    detectMissingRecharges(pool, notes),
   ]);
 
   return {
@@ -328,6 +420,7 @@ export async function getBillingHealth(): Promise<BillingHealth> {
     unchargedUsage24h,
     reconcileFailures,
     retryQueueBacklog,
+    missingRecharges35d,
     notes,
   };
 }

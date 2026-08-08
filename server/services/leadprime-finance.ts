@@ -251,6 +251,10 @@ export interface FinanceOverview {
 // ── Recurring revenue (MRR / ARR) ───────────────────────────────────────────────
 
 async function getRecurring(notes: string[]): Promise<Recurring> {
+  // FUENTE ÚNICA (leadprime-mrr.ts): antes esta pantalla leía Stripe y la de
+  // "By User & Churn" sumaba subscriptions.base_price_cents (DEFAULT 1500), así
+  // que las dos mostraban MRR distinto y ambas estaban mal. Ahora las dos leen
+  // de aquí, con el precio real del catálogo de cada plan.
   const out: Recurring = {
     available: false,
     mrrUsd: 0,
@@ -258,93 +262,26 @@ async function getRecurring(notes: string[]): Promise<Recurring> {
     activeSubscriptions: 0,
     byPlan: [],
   };
-  const stripe = getStripe();
-  if (!stripe) {
-    out.note = 'No Stripe key (LEADPRIME_STRIPE_SECRET_KEY / STRIPE_SECRET_KEY)';
-    notes.push(`recurring: ${out.note}`);
-    return out;
-  }
   try {
-    const planMap = new Map<string, { mrr: number; subs: number }>();
-    let mrr = 0;
-    let count = 0;
-    const search = stripe.subscriptions.search({
-      query: `status:'active' AND ${LP_FILTER}`,
-      limit: 100,
-      expand: ['data.items.data.price'],
-    });
-    for await (const sub of search) {
-      count += 1;
-      let subMrr = 0;
-      for (const item of sub.items.data) {
-        const price = item.price;
-        // Only flat (licensed) recurring counts as MRR; metered usage is variable.
-        if (!price?.recurring || price.recurring.usage_type === 'metered') continue;
-        const unit = (price.unit_amount ?? 0) / 100;
-        const qty = item.quantity ?? 1;
-        const interval = price.recurring.interval;
-        let monthly = unit * qty;
-        if (interval === 'year') monthly = (unit * qty) / 12;
-        else if (interval === 'week') monthly = unit * qty * 4.345;
-        else if (interval === 'day') monthly = unit * qty * 30.4;
-        subMrr += monthly;
-      }
-      mrr += subMrr;
-      const planKey =
-        sub.items.data[0]?.price?.nickname ||
-        sub.items.data[0]?.price?.id ||
-        'unknown';
-      const acc = planMap.get(planKey) || { mrr: 0, subs: 0 };
-      acc.mrr += subMrr;
-      acc.subs += 1;
-      planMap.set(planKey, acc);
-    }
-    // ── Suscripciones pagadas FUERA de Stripe (Zelle/transferencia) ──────────
-    // Son ingreso recurrente real, pero no existen en Stripe: sin esto el MRR
-    // las ignoraba por completo y un cliente de $650/mes valía $0 en el P&L.
-    // El importe es el ACORDADO (monthly_price_cents); si no se capturó, se
-    // usa el precio de catálogo del plan.
-    try {
-      const pool = getLeadPrimePool();
-      const ext = await pool.query(
-        `SELECT csc.target_tier,
-                COALESCE(NULLIF(csc.monthly_price_cents, 0), pd.monthly_price_cents, 0) AS price_cents
-           FROM contractor_subscription_config csc
-           LEFT JOIN plan_definitions pd ON pd.plan_name = csc.target_tier
-           JOIN subscriptions s ON s.contractor_id = csc.contractor_id
-          WHERE csc.billing_mode = 'external_zelle'
-            AND csc.enabled = true
-            AND csc.status = 'applied'
-            AND s.status IN ('active', 'trialing')
-            AND s.plan_name = csc.target_tier`
+    const { getRecurringRevenue } = await import('./leadprime-mrr');
+    const rev = await getRecurringRevenue(getLeadPrimePool());
+    out.available = rev.available;
+    out.mrrUsd = rev.mrrUsd;
+    out.arrUsd = rev.arrUsd;
+    out.activeSubscriptions = rev.activeSubscriptions;
+    out.byPlan = rev.byPlan.map(p => ({ plan: p.plan, mrrUsd: p.mrrUsd, subscriptions: p.subscriptions }));
+    if (rev.note) out.note = rev.note;
+    if (rev.manualSubscriptions > 0) {
+      notes.push(
+        `recurring: $${rev.manualMrrUsd.toFixed(2)} de ${rev.manualSubscriptions} suscripción(es) cobradas ` +
+        `MANUALMENTE (Zelle/transferencia) — ingreso real, pendiente de migrar a cobro automático`
       );
-      for (const row of ext.rows) {
-        const monthly = (parseInt(row.price_cents, 10) || 0) / 100;
-        if (monthly <= 0) continue;
-        mrr += monthly;
-        count += 1;
-        const key = `${row.target_tier} (pago externo)`;
-        const acc = planMap.get(key) || { mrr: 0, subs: 0 };
-        acc.mrr += monthly;
-        acc.subs += 1;
-        planMap.set(key, acc);
-      }
-      if (ext.rows.length > 0) {
-        notes.push(`recurring: ${ext.rows.length} suscripción(es) pagada(s) fuera de Stripe incluidas en el MRR`);
-      }
-    } catch (e: any) {
-      notes.push(`recurring: no se pudo leer el MRR de pagos externos (${e.message})`);
     }
-
-    out.available = true;
-    out.mrrUsd = round(mrr);
-    out.arrUsd = round(mrr * 12);
-    out.activeSubscriptions = count;
-    out.byPlan = Array.from(planMap.entries())
-      .map(([plan, v]) => ({ plan, mrrUsd: round(v.mrr), subscriptions: v.subs }))
-      .sort((a, b) => b.mrrUsd - a.mrrUsd);
+    if (rev.excluded.length > 0) {
+      notes.push(`recurring: ${rev.excluded.length} cuenta(s) excluidas del MRR (sin mensualidad, duplicadas o demo)`);
+    }
   } catch (err: any) {
-    out.note = `Stripe subscriptions.search failed: ${err.message}`;
+    out.note = `MRR no disponible: ${err.message}`;
     notes.push(`recurring: ${out.note}`);
   }
   return out;
@@ -801,15 +738,30 @@ async function getMrrMovements(pool: Pool, notes: string[]): Promise<MrrMovement
   try {
     const r = await pool.query(
       `SELECT
-         COUNT(*) FILTER (WHERE status IN ('active','trialing'))                                          AS active_count,
-         COALESCE(SUM(base_price_cents) FILTER (WHERE status IN ('active','trialing')),0)                 AS active_cents,
-         COUNT(*) FILTER (WHERE created_at >= date_trunc('month', now()) AND status IN ('active','trialing')) AS new_count,
-         COALESCE(SUM(base_price_cents) FILTER (WHERE created_at >= date_trunc('month', now()) AND status IN ('active','trialing')),0) AS new_cents,
-         COUNT(*) FILTER (WHERE canceled_at >= date_trunc('month', now()))                                AS churned_count,
-         COALESCE(SUM(base_price_cents) FILTER (WHERE canceled_at >= date_trunc('month', now())),0)       AS churned_cents,
-         COUNT(*) FILTER (WHERE cancel_at_period_end = true AND status IN ('active','trialing'))          AS atrisk_count,
-         COALESCE(SUM(base_price_cents) FILTER (WHERE cancel_at_period_end = true AND status IN ('active','trialing')),0) AS atrisk_cents
-       FROM subscriptions`
+         COUNT(*) FILTER (WHERE s.status IN ('active','trialing')) AS active_count,
+         COALESCE(SUM(COALESCE(
+             CASE WHEN csc.billing_mode = 'external_zelle' AND csc.status = 'applied'
+                  THEN COALESCE(NULLIF(csc.monthly_price_cents, 0), pd.monthly_price_cents)
+                  ELSE pd.monthly_price_cents END, 0)) FILTER (WHERE s.status IN ('active','trialing')),0) AS active_cents,
+         COUNT(*) FILTER (WHERE s.created_at >= date_trunc('month', now()) AND s.status IN ('active','trialing')) AS new_count,
+         COALESCE(SUM(COALESCE(
+             CASE WHEN csc.billing_mode = 'external_zelle' AND csc.status = 'applied'
+                  THEN COALESCE(NULLIF(csc.monthly_price_cents, 0), pd.monthly_price_cents)
+                  ELSE pd.monthly_price_cents END, 0)) FILTER (WHERE s.created_at >= date_trunc('month', now()) AND s.status IN ('active','trialing')),0) AS new_cents,
+         COUNT(*) FILTER (WHERE s.canceled_at >= date_trunc('month', now())) AS churned_count,
+         COALESCE(SUM(COALESCE(
+             CASE WHEN csc.billing_mode = 'external_zelle' AND csc.status = 'applied'
+                  THEN COALESCE(NULLIF(csc.monthly_price_cents, 0), pd.monthly_price_cents)
+                  ELSE pd.monthly_price_cents END, 0)) FILTER (WHERE s.canceled_at >= date_trunc('month', now())),0) AS churned_cents,
+         COUNT(*) FILTER (WHERE s.cancel_at_period_end = true AND s.status IN ('active','trialing')) AS atrisk_count,
+         COALESCE(SUM(COALESCE(
+             CASE WHEN csc.billing_mode = 'external_zelle' AND csc.status = 'applied'
+                  THEN COALESCE(NULLIF(csc.monthly_price_cents, 0), pd.monthly_price_cents)
+                  ELSE pd.monthly_price_cents END, 0)) FILTER (WHERE s.cancel_at_period_end = true AND s.status IN ('active','trialing')),0) AS atrisk_cents
+       FROM subscriptions s
+         LEFT JOIN plan_definitions pd ON pd.plan_name = s.plan_name
+         LEFT JOIN contractor_subscription_config csc
+                ON csc.contractor_id = s.contractor_id AND csc.enabled = true`
     );
     const row = r.rows[0] || {};
     const activeCount = Number(row.active_count || 0);
@@ -862,9 +814,19 @@ export async function getFinanceByUser(): Promise<FinanceByUser> {
     const moneyList = Array.from(REAL_MONEY_TYPES).map((t) => `'${t}'`).join(',');
     const r = await pool.query(
       `WITH sub AS (
-         SELECT contractor_id, status, plan_name, base_price_cents, created_at,
-                EXTRACT(EPOCH FROM (COALESCE(canceled_at, now()) - created_at)) / 2629800.0 AS months_active
-           FROM subscriptions
+         -- Precio REAL del catálogo (o el acordado si el cobro es manual/Zelle).
+         -- base_price_cents tiene DEFAULT 1500, así que usarlo hacía valer $15
+         -- a toda cuenta — incluidas las gratis — e inflaba LTV y LTV:CAC.
+         SELECT s.contractor_id, s.status, s.plan_name, s.created_at,
+                COALESCE(
+                  CASE WHEN csc.billing_mode = 'external_zelle' AND csc.status = 'applied'
+                       THEN COALESCE(NULLIF(csc.monthly_price_cents, 0), pd.monthly_price_cents)
+                       ELSE pd.monthly_price_cents END, 0) AS base_price_cents,
+                EXTRACT(EPOCH FROM (COALESCE(s.canceled_at, now()) - s.created_at)) / 2629800.0 AS months_active
+           FROM subscriptions s
+           LEFT JOIN plan_definitions pd ON pd.plan_name = s.plan_name
+           LEFT JOIN contractor_subscription_config csc
+                  ON csc.contractor_id = s.contractor_id AND csc.enabled = true
        ),
        usage_mtd AS (
          SELECT contractor_id, SUM(cost) AS usd FROM usage_events
@@ -1144,10 +1106,18 @@ export async function getFinanceForecast(): Promise<FinanceForecast> {
   };
   try {
     const r = await pool.query(
-      `SELECT s.contractor_id, s.status, s.base_price_cents, s.cancel_at_period_end,
-              c.name, c.email
+      `SELECT s.contractor_id, s.status, s.cancel_at_period_end,
+              c.name, c.email,
+              -- Precio real del catálogo, no base_price_cents (DEFAULT 1500).
+              COALESCE(
+                CASE WHEN csc.billing_mode = 'external_zelle' AND csc.status = 'applied'
+                     THEN COALESCE(NULLIF(csc.monthly_price_cents, 0), pd.monthly_price_cents)
+                     ELSE pd.monthly_price_cents END, 0) AS base_price_cents
          FROM subscriptions s
-         LEFT JOIN contractors c ON c.id = s.contractor_id
+         LEFT JOIN contractors c        ON c.id = s.contractor_id
+         LEFT JOIN plan_definitions pd  ON pd.plan_name = s.plan_name
+         LEFT JOIN contractor_subscription_config csc
+                ON csc.contractor_id = s.contractor_id AND csc.enabled = true
         WHERE s.status IN ('past_due','unpaid','incomplete')
            OR (s.cancel_at_period_end = true AND s.status IN ('active','trialing'))`
     );

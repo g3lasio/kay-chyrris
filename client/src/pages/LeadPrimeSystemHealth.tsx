@@ -338,7 +338,12 @@ export default function LeadPrimeSystemHealth() {
   const unchargedCents = billing?.unchargedUsage24h.totalCostCents ?? 0;
   const failuresCount = billing?.reconcileFailures.count ?? 0;
   const retryCount = billing?.retryQueueBacklog.count ?? 0;
-  const billingClean = !!billing && negCount === 0 && unchargedCount === 0 && failuresCount === 0 && retryCount === 0;
+  // Recargas faltantes: el punto ciego del incidente de agosto. Si hay aunque
+  // sea UNA, billing NO está limpio por mucho que el resto esté en verde.
+  const missingRecharges = (billing as any)?.missingRecharges35d?.count ?? 0;
+  const owedCreditsCents = (billing as any)?.missingRecharges35d?.owedCreditsCents ?? 0;
+  const billingClean = !!billing && negCount === 0 && unchargedCount === 0
+    && failuresCount === 0 && retryCount === 0 && missingRecharges === 0;
 
   // Infra rollups
   const awakeWorkers = infra?.workers.rows.filter((w) => w.keepsComputeAwake) ?? [];
@@ -437,9 +442,9 @@ export default function LeadPrimeSystemHealth() {
         <StatTile
           icon={Wallet}
           label="Billing leaks"
-          value={billing ? String(negCount + unchargedCount + failuresCount) : '—'}
+          value={billing ? String(negCount + unchargedCount + failuresCount + missingRecharges) : '—'}
           sub="neg. bal + unbilled + failed"
-          tone={billing ? (negCount + unchargedCount + failuresCount > 0 ? 'alarm' : 'ok') : 'muted'}
+          tone={billing ? (negCount + unchargedCount + failuresCount + missingRecharges > 0 ? 'alarm' : 'ok') : 'muted'}
         />
         <StatTile
           icon={Activity}
@@ -1093,6 +1098,73 @@ export default function LeadPrimeSystemHealth() {
                   <p className="font-semibold text-slate-100">{billingClean ? 'All billing checks passing' : 'Billing anomalies detected'}</p>
                   <p className="text-xs text-slate-500">Generated {new Date(billing.generatedAt).toLocaleString()}</p>
                 </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* RECARGAS FALTANTES — el tile que faltaba. Durante el incidente de
+              agosto 2026 las renovaciones se cobraban sin acreditar créditos y
+              esta página estuvo en verde un mes entero porque nadie cruzaba
+              "te cobré" contra "te di lo que pagaste". */}
+          {billing && (
+            <Card className={missingRecharges > 0 ? 'border-rose-500/60 bg-rose-500/5' : 'bg-slate-900/40 border-slate-800'}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-slate-300 flex items-center gap-2">
+                  {missingRecharges > 0
+                    ? <AlertTriangle className="h-4 w-4 text-rose-400" />
+                    : <CheckCircle2 className="h-4 w-4 text-emerald-400" />}
+                  Facturas pagadas SIN recarga de créditos — últimos 35 días
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {!(billing as any).missingRecharges35d?.available ? (
+                  <p className="text-xs text-slate-500">No disponible (faltan tablas invoices / wallet_transactions).</p>
+                ) : missingRecharges === 0 ? (
+                  <p className="text-xs text-emerald-400">
+                    Cada factura cobrada tiene su recarga aplicada. Este es el check que detecta que un
+                    cliente pague y no reciba sus créditos.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-sm font-semibold text-rose-300">
+                      {missingRecharges} factura(s) cobradas sin acreditar — ${(owedCreditsCents / 100).toFixed(2)} en créditos adeudados
+                    </p>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-slate-800 text-slate-400">
+                            <th className="text-left py-1.5 pr-3">Cuenta</th>
+                            <th className="text-left py-1.5 pr-3">Plan</th>
+                            <th className="text-right py-1.5 pr-3">Pagó</th>
+                            <th className="text-right py-1.5 pr-3">Le corresponde</th>
+                            <th className="text-left py-1.5">Factura</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {((billing as any).missingRecharges35d?.rows ?? []).map((r: any) => (
+                            <tr key={r.invoiceId} className="border-b border-slate-800/60">
+                              <td className="py-1.5 pr-3">
+                                <div className="text-slate-200">{r.contractorName ?? r.contractorId ?? '—'}</div>
+                                <div className="text-slate-500">{r.email ?? ''}</div>
+                              </td>
+                              <td className="py-1.5 pr-3 text-slate-400">{r.planName ?? '—'}</td>
+                              <td className="py-1.5 pr-3 text-right font-mono text-slate-300">
+                                ${(r.amountPaidCents / 100).toFixed(2)}
+                              </td>
+                              <td className="py-1.5 pr-3 text-right font-mono text-rose-300">
+                                ${(r.expectedCreditsCents / 100).toFixed(2)}
+                              </td>
+                              <td className="py-1.5 font-mono text-slate-500">
+                                {r.invoiceId}
+                                {r.paidAt ? ` · ${r.paidAt.slice(0, 10)}` : ''}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
