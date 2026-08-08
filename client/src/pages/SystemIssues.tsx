@@ -51,6 +51,12 @@ interface SystemIssue {
   affectedContractors: string[];
   createdAt: string;
   updatedAt: string;
+  /** Filas distintas de la tabla agrupadas bajo este issue (nada se borró). */
+  groupedRows?: number;
+  firstSeenAt?: string;
+  lastSeenAt?: string;
+  /** Usuarios distintos afectados en todo el grupo. */
+  affectedCount?: number;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -397,15 +403,26 @@ export default function SystemIssues() {
                   <div className="text-right shrink-0">
                     <div className="flex items-center gap-1 text-xs text-muted-foreground justify-end">
                       <Users className="h-3 w-3" />
-                      <span>{issue.affectedContractors.length}</span>
+                      <span>{issue.affectedCount ?? issue.affectedContractors.length}</span>
                     </div>
                     {issue.occurrences > 1 && (
                       <Badge variant="secondary" className="text-xs mt-1">
                         {issue.occurrences}×
                       </Badge>
                     )}
+                    {/* El mismo fallo llegó en varias filas (texto ligeramente
+                        distinto en cada reporte). Se muestran juntas; ninguna
+                        se borró de la base. */}
+                    {(issue.groupedRows ?? 1) > 1 && (
+                      <p
+                        className="text-[11px] text-muted-foreground mt-1"
+                        title={`${issue.groupedRows} reportes agrupados por ser el mismo fallo. Nada fue eliminado.`}
+                      >
+                        {issue.groupedRows} reportes agrupados
+                      </p>
+                    )}
                     <p className="text-xs text-muted-foreground mt-1">
-                      {timeAgo(issue.createdAt)}
+                      {timeAgo(issue.lastSeenAt ?? issue.createdAt)}
                     </p>
                   </div>
                 </div>
@@ -457,10 +474,18 @@ export default function SystemIssues() {
                 <div>
                   <p className="text-muted-foreground mb-1">OCCURRENCES</p>
                   <p className="font-medium">{selectedIssue.occurrences}×</p>
+                  {(selectedIssue.groupedRows ?? 1) > 1 && (
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      {selectedIssue.groupedRows} reportes agrupados
+                      {selectedIssue.firstSeenAt && ` · desde ${timeAgo(selectedIssue.firstSeenAt)}`}
+                    </p>
+                  )}
                 </div>
                 <div>
                   <p className="text-muted-foreground mb-1">AFFECTED USERS</p>
-                  <p className="font-medium">{selectedIssue.affectedContractors.length}</p>
+                  <p className="font-medium">
+                    {selectedIssue.affectedCount ?? selectedIssue.affectedContractors.length}
+                  </p>
                 </div>
                 {selectedIssue.toolName && (
                   <div>

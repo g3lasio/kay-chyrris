@@ -184,6 +184,23 @@ export interface Recurring {
   activeSubscriptions: number;
   /** Recurring revenue split by plan price nickname/id. */
   byPlan: { plan: string; mrrUsd: number; subscriptions: number }[];
+  /**
+   * Parte del MRR cobrada FUERA de Stripe (Zelle/transferencia). Es ingreso
+   * real y cuenta completo — decisión del dueño: el contratista no pudo pagar
+   * por el portal ACH y paga por transferencia mientras se migra a cobro
+   * automático. Se expone solo para etiquetarlo en la UI ("Manual / Zelle") y
+   * que no parezca un bug del sistema. NUNCA se resta de ningún cálculo.
+   */
+  manualMrrUsd: number;
+  manualSubscriptions: number;
+  /**
+   * Cuentas descartadas del conteo y por qué. Incluye los duplicados detectados
+   * por teléfono/nombre: se marcan y se excluyen del MRR para no contar dos
+   * veces al mismo dueño, pero NO se borran ni se fusionan — eso es decisión
+   * del dueño, no del panel.
+   */
+  excluded: Array<{ contractorId: string; reason: string; email: string | null }>;
+  duplicates: number;
 }
 
 export interface CapturedRevenue {
@@ -261,6 +278,10 @@ async function getRecurring(notes: string[]): Promise<Recurring> {
     arrUsd: 0,
     activeSubscriptions: 0,
     byPlan: [],
+    manualMrrUsd: 0,
+    manualSubscriptions: 0,
+    excluded: [],
+    duplicates: 0,
   };
   try {
     const { getRecurringRevenue } = await import('./leadprime-mrr');
@@ -270,6 +291,10 @@ async function getRecurring(notes: string[]): Promise<Recurring> {
     out.arrUsd = rev.arrUsd;
     out.activeSubscriptions = rev.activeSubscriptions;
     out.byPlan = rev.byPlan.map(p => ({ plan: p.plan, mrrUsd: p.mrrUsd, subscriptions: p.subscriptions }));
+    out.manualMrrUsd = rev.manualMrrUsd;
+    out.manualSubscriptions = rev.manualSubscriptions;
+    out.excluded = rev.excluded;
+    out.duplicates = rev.excluded.filter(e => /duplicad/i.test(e.reason)).length;
     if (rev.note) out.note = rev.note;
     if (rev.manualSubscriptions > 0) {
       notes.push(

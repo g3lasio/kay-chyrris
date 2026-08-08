@@ -30,6 +30,7 @@
  */
 
 import { Pool } from 'pg';
+import { findDuplicateAccounts } from '@shared/duplicate-accounts';
 
 let leadprimePool: Pool | null = null;
 
@@ -424,6 +425,15 @@ export interface EnrichedUser {
   campaignCount: number;
   teamMemberCount: number;
   lastActivityAt: string | null;
+  /**
+   * La cuenta parece ser una SEGUNDA cuenta del mismo dueño (mismo teléfono o
+   * mismo negocio). Se marca para que se vea en la tabla y se excluye de los
+   * conteos de suscripciones/MRR. NO se borra ni se fusiona: unirlas es
+   * decisión del dueño. Regla compartida: shared/duplicate-accounts.ts.
+   */
+  isDuplicate: boolean;
+  /** Correo de la cuenta principal del grupo, para saber con cuál se repite. */
+  duplicateOfEmail: string | null;
 }
 
 export interface UserIntelligenceStats {
@@ -591,6 +601,11 @@ export async function getEnrichedLeadPrimeUsers(options: {
     dataParams
   );
 
+  // Duplicados: se calculan sobre TODAS las cuentas, no sobre la página. Las dos
+  // cuentas de un mismo dueño rara vez caen en la misma página, así que hacerlo
+  // en el cliente no serviría de nada.
+  const dupes = await detectDuplicateAccounts(pool);
+
   const now = Date.now();
   const users: EnrichedUser[] = result.rows.map(row => {
     const balanceCents = parseFloat(row.balance_cents) || 0;
@@ -632,9 +647,65 @@ export async function getEnrichedLeadPrimeUsers(options: {
       campaignCount: parseInt(row.campaign_count) || 0,
       teamMemberCount: parseInt(row.team_count) || 0,
       lastActivityAt: row.last_activity_at ? new Date(row.last_activity_at).toISOString() : null,
+      isDuplicate: dupes.duplicateIds.has(row.id),
+      duplicateOfEmail: dupes.emailById.get(dupes.primaryOf.get(row.id) ?? '') ?? null,
     };
   });
   return { users, total };
+}
+
+/**
+ * Detecta cuentas repetidas del mismo dueño en TODO el padrón (no por página).
+ * Solo lee: no borra, no fusiona, no escribe nada. Si falta alguna tabla,
+ * devuelve "ningún duplicado" en vez de tumbar la lista de usuarios.
+ * Cache corto porque la tabla de usuarios se refresca cada pocos segundos.
+ */
+let duplicateCache: { at: number; value: Awaited<ReturnType<typeof computeDuplicates>> } | null = null;
+const DUPLICATE_CACHE_MS = 60_000;
+
+async function detectDuplicateAccounts(pool: Pool) {
+  if (duplicateCache && Date.now() - duplicateCache.at < DUPLICATE_CACHE_MS) {
+    return duplicateCache.value;
+  }
+  const value = await computeDuplicates(pool);
+  duplicateCache = { at: Date.now(), value };
+  return value;
+}
+
+async function computeDuplicates(pool: Pool) {
+  const empty = {
+    duplicateIds: new Set<string>(),
+    primaryOf: new Map<string, string>(),
+    emailById: new Map<string, string>(),
+  };
+  try {
+    const res = await pool.query(
+      `SELECT c.id, c.phone, c.name, c.email,
+              COALESCE(cp.business_name, c.company_name) AS business_name,
+              -- La cuenta "principal" del grupo es la del plan más caro: si un
+              -- dueño tiene una Pro y una gratis, la que vale es la Pro.
+              COALESCE(pd.monthly_price_cents, 0) AS weight
+         FROM contractors c
+         LEFT JOIN company_profiles cp ON cp.contractor_id = c.id
+         LEFT JOIN subscriptions s     ON s.contractor_id = c.id
+         LEFT JOIN plan_definitions pd ON pd.plan_name = s.plan_name`
+    );
+    const groups = findDuplicateAccounts(
+      res.rows.map((r) => ({
+        id: r.id,
+        phone: r.phone,
+        name: r.name,
+        businessName: r.business_name,
+        weight: Number(r.weight || 0),
+      }))
+    );
+    const emailById = new Map<string, string>();
+    for (const r of res.rows) if (r.email) emailById.set(r.id, r.email);
+    return { duplicateIds: groups.duplicateIds, primaryOf: groups.primaryOf, emailById };
+  } catch (err: any) {
+    console.warn('[LeadPrime DB] no se pudo detectar duplicados:', err.message);
+    return empty;
+  }
 }
 
 /**
@@ -949,6 +1020,19 @@ export interface SystemIssue {
   affectedContractors: string[];
   createdAt: string;
   updatedAt: string;
+  /**
+   * Cuántas FILAS distintas de la tabla quedaron agrupadas bajo este issue.
+   * >1 significa que el mismo fallo se registró varias veces con textos
+   * ligeramente distintos (SAM.gov llegó a 134). No se borra ninguna: se
+   * muestran juntas y `occurrences` ya viene sumado.
+   */
+  groupedRows: number;
+  /** Primera vez que se vio el fallo dentro del grupo. */
+  firstSeenAt: string;
+  /** Última vez que se vio. */
+  lastSeenAt: string;
+  /** Usuarios distintos afectados en todo el grupo. */
+  affectedCount: number;
 }
 
 export interface SystemIssueStats {
@@ -959,7 +1043,35 @@ export interface SystemIssueStats {
 }
 
 /**
+ * Firma SQL de un issue: el mensaje sin lo que cambia entre ocurrencias del
+ * MISMO fallo (URLs, uuids, números). Es la versión en Postgres de
+ * `errorSignature()` del reportero de LeadPrime — se aplica al LEER para que
+ * las filas que ya existen (creadas antes de que el dedup se arreglara) también
+ * se muestren agrupadas. NO modifica ni borra ninguna fila.
+ */
+const ISSUE_SIGNATURE_SQL = `
+  COALESCE(tool_name, '') || '|' || LEFT(
+    regexp_replace(
+      regexp_replace(
+        regexp_replace(
+          regexp_replace(lower(COALESCE(NULLIF(error_message, ''), title)),
+            'https?://[^[:space:]]+', '<url>', 'g'),
+          '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '<uuid>', 'g'),
+        '[0-9]+', '<n>', 'g'),
+      '[[:space:]]+', ' ', 'g'),
+    300)
+`;
+
+/**
  * Get system issues list with optional filters.
+ *
+ * AGRUPADO (auditoría ago 2026): el panel mostraba 134 tarjetas del MISMO error
+ * de SAM.gov porque cada reporte traía un texto ligeramente distinto y el dedup
+ * de LeadPrime comparaba el mensaje literal. Aquí se agrupan al leer por
+ * dedup_key (cuando existe) o por la firma normalizada, sumando ocurrencias y
+ * conservando la fila más reciente como representante. Nada se borra ni se
+ * fusiona en la base: es solo cómo se presenta.
+ *
  * Handles missing table gracefully — returns empty results instead of crashing.
  */
 export async function getSystemIssues(options: {
@@ -985,30 +1097,49 @@ export async function getSystemIssues(options: {
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    // dedup_key es de la migración 283 de LeadPrime; si el backend aún no la
+    // aplicó, se agrupa solo por firma normalizada.
+    const groupExpr = (await hasDedupKeyColumn(pool))
+      ? `COALESCE(NULLIF(dedup_key, ''), ${ISSUE_SIGNATURE_SQL})`
+      : ISSUE_SIGNATURE_SQL;
 
     const countResult = await pool.query(
-      `SELECT COUNT(*) AS total FROM system_issues ${whereClause}`,
+      `SELECT COUNT(DISTINCT ${groupExpr}) AS total FROM system_issues ${whereClause}`,
       params
     );
     const total = parseInt(countResult.rows[0]?.total) || 0;
 
     const dataParams = [...params, limit, offset];
     const dataResult = await pool.query(
-      `SELECT
-         id, contractor_id, tool_name, issue_type, title, description,
-         error_message, status, occurrences,
-         COALESCE(affected_contractors, '{}') AS affected_contractors,
-         created_at, updated_at
-       FROM system_issues
-       ${whereClause}
-       ORDER BY
-         CASE status WHEN 'new' THEN 0 WHEN 'reviewing' THEN 1 ELSE 2 END,
-         occurrences DESC,
-         created_at DESC
-       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      `WITH base AS (
+         SELECT id, contractor_id, tool_name, issue_type, title, description,
+                error_message, status, occurrences,
+                COALESCE(affected_contractors, '{}') AS affected_contractors,
+                created_at, updated_at,
+                ${groupExpr} AS grp
+           FROM system_issues
+           ${whereClause}
+       ), ranked AS (
+         SELECT *,
+                ROW_NUMBER() OVER (PARTITION BY grp ORDER BY updated_at DESC, created_at DESC) AS rn,
+                SUM(occurrences)  OVER (PARTITION BY grp) AS grp_occurrences,
+                COUNT(*)          OVER (PARTITION BY grp) AS grp_rows,
+                MIN(created_at)   OVER (PARTITION BY grp) AS grp_first_seen,
+                MAX(updated_at)   OVER (PARTITION BY grp) AS grp_last_seen,
+                COUNT(DISTINCT contractor_id) OVER (PARTITION BY grp) AS grp_contractors
+           FROM base
+       )
+       SELECT * FROM ranked
+        WHERE rn = 1
+        ORDER BY
+          CASE status WHEN 'new' THEN 0 WHEN 'reviewing' THEN 1 ELSE 2 END,
+          grp_occurrences DESC,
+          grp_last_seen DESC
+        LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       dataParams
     );
 
+    const iso = (v: any) => (v instanceof Date ? v.toISOString() : v);
     const issues: SystemIssue[] = dataResult.rows.map(row => ({
       id: row.id,
       contractorId: row.contractor_id,
@@ -1018,16 +1149,23 @@ export async function getSystemIssues(options: {
       description: row.description,
       errorMessage: row.error_message,
       status: row.status,
-      occurrences: parseInt(row.occurrences) || 1,
+      // Suma del grupo: lo que el dueño quiere ver es "esto pasó N veces",
+      // no N tarjetas iguales.
+      occurrences: parseInt(row.grp_occurrences) || parseInt(row.occurrences) || 1,
       affectedContractors: Array.isArray(row.affected_contractors)
         ? row.affected_contractors
         : [],
-      createdAt: row.created_at instanceof Date
-        ? row.created_at.toISOString()
-        : row.created_at,
-      updatedAt: row.updated_at instanceof Date
-        ? row.updated_at.toISOString()
-        : row.updated_at,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+      groupedRows: parseInt(row.grp_rows) || 1,
+      firstSeenAt: iso(row.grp_first_seen) ?? iso(row.created_at),
+      lastSeenAt: iso(row.grp_last_seen) ?? iso(row.updated_at),
+      // Usuarios distintos afectados en TODO el grupo (la lista de la fila
+      // representante solo cubre esa fila).
+      affectedCount: Math.max(
+        parseInt(row.grp_contractors) || 0,
+        Array.isArray(row.affected_contractors) ? row.affected_contractors.length : 0
+      ),
     }));
 
     return { issues, total };
@@ -1038,6 +1176,22 @@ export async function getSystemIssues(options: {
     }
     throw err;
   }
+}
+
+/** ¿Existe system_issues.dedup_key? Se consulta una vez por proceso. */
+let dedupKeyColumnCache: boolean | null = null;
+async function hasDedupKeyColumn(pool: Pool): Promise<boolean> {
+  if (dedupKeyColumnCache !== null) return dedupKeyColumnCache;
+  try {
+    const r = await pool.query(
+      `SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'system_issues' AND column_name = 'dedup_key' LIMIT 1`
+    );
+    dedupKeyColumnCache = r.rows.length > 0;
+  } catch {
+    dedupKeyColumnCache = false;
+  }
+  return dedupKeyColumnCache;
 }
 
 /**
@@ -1143,6 +1297,12 @@ export async function updateSystemIssueStatus(
       updatedAt: row.updated_at instanceof Date
         ? row.updated_at.toISOString()
         : row.updated_at,
+      // Este endpoint devuelve UNA fila (la que se acaba de actualizar), no un
+      // grupo: por eso los campos de agrupación describen solo esa fila.
+      groupedRows: 1,
+      firstSeenAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+      lastSeenAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
+      affectedCount: Array.isArray(row.affected_contractors) ? row.affected_contractors.length : 0,
     };
   } catch (err: any) {
     if (err.code === '42P01') {
