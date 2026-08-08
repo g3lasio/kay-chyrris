@@ -53,6 +53,12 @@ interface Recurring {
   arrUsd: number;
   activeSubscriptions: number;
   byPlan: { plan: string; mrrUsd: number; subscriptions: number }[];
+  /** Parte del MRR cobrada por Zelle/transferencia. Ingreso real; solo se etiqueta. */
+  manualMrrUsd?: number;
+  manualSubscriptions?: number;
+  /** Cuentas fuera del conteo (duplicadas, demo, sin mensualidad) y el motivo. */
+  excluded?: Array<{ contractorId: string; reason: string; email: string | null }>;
+  duplicates?: number;
 }
 interface CapturedRevenue {
   available: boolean;
@@ -67,8 +73,13 @@ interface CapturedRevenue {
 interface FreeCredits {
   available: boolean;
   note?: string;
+  /** Total = CAC real + grants internos. Es el número de la tarjeta KPI. */
   totalUsd: number;
-  byType: { type: string; usd: number }[];
+  /** Solo adquisición real (welcome/promo/referral) — lo que resta el P&L. */
+  cacUsd: number;
+  /** Grants internos de admin (pruebas/cortesías): NO son costo de adquisición. */
+  internalUsd: number;
+  byType: { type: string; usd: number; cac?: boolean }[];
 }
 interface Cogs {
   available: boolean;
@@ -260,16 +271,26 @@ function StatTile({
   value,
   sub,
   tone,
+  /** Definición exacta de la métrica. La página mezclaba dinero cobrado,
+   *  consumo valorizado y crédito regalado sin decir cuál era cuál: sin esto
+   *  las cifras se malinterpretan entre sí. */
+  help,
+  /** Etiqueta corta bajo el número (ej. "Manual / Zelle") para explicar de dónde
+   *  sale parte del monto sin que parezca un fallo del sistema. */
+  badge,
 }: {
   icon: any;
   label: string;
   value: string;
   sub: string;
   tone: Tone;
+  help?: string;
+  badge?: string;
 }) {
   return (
     <div
-      className={`relative overflow-hidden rounded-xl border bg-gradient-to-b from-slate-900/80 to-slate-950/90 p-4 ${toneRing[tone]}`}
+      title={help}
+      className={`relative overflow-hidden rounded-xl border bg-gradient-to-b from-slate-900/80 to-slate-950/90 p-4 ${toneRing[tone]} ${help ? 'cursor-help' : ''}`}
     >
       <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-current to-transparent opacity-30" />
       <div className="flex items-center justify-between">
@@ -277,6 +298,11 @@ function StatTile({
         <Icon className={`h-4 w-4 ${toneText[tone]}`} />
       </div>
       <div className={`mt-2 font-mono text-2xl font-bold ${toneText[tone]}`}>{value}</div>
+      {badge && (
+        <div className="mt-1 inline-flex items-center rounded border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-300">
+          {badge}
+        </div>
+      )}
       <div className="mt-0.5 text-[11px] text-slate-500">{sub}</div>
     </div>
   );
@@ -404,6 +430,13 @@ export default function LeadPrimeFinance() {
   const mrrTone: Tone = !fin?.recurring.available ? 'muted' : (fin.recurring.mrrUsd > 0 ? 'ok' : 'muted');
   const creditsTone: Tone = !fin?.freeCredits.available ? 'muted' : (fin.freeCredits.totalUsd > 0 ? 'warn' : 'ok');
 
+  // Ingreso manual (Zelle): cuenta COMPLETO en el MRR — decisión del dueño.
+  // Solo se separa para etiquetarlo, nunca para restarlo.
+  const manualMrr = fin?.recurring.manualMrrUsd ?? 0;
+  // Cuentas duplicadas del mismo dueño: se marcan y se sacan del CONTEO para no
+  // contar dos veces, pero no se borra ni se fusiona nada.
+  const duplicateAccounts = (fin?.recurring.excluded ?? []).filter((e) => /duplicad/i.test(e.reason));
+
   const noStripe = fin?.stripeKeySource == null;
   const wf = fin ? buildWaterfall(fin.waterfall) : [];
   const mv = bu?.movements;
@@ -412,9 +445,11 @@ export default function LeadPrimeFinance() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
+      {/* Header — a ~1021px los botones se encimaban sobre el título: el
+          contenedor no envolvía. Ahora apila en pantallas medias y los botones
+          quedan alineados a la derecha sin invadir el texto. */}
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
           <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-100">
             <TrendingUp className="h-6 w-6 text-emerald-400" />
             Finance
@@ -425,7 +460,7 @@ export default function LeadPrimeFinance() {
             recurring MRR/ARR, processing fees, cost to serve, and what's left over. Never moves money.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end lg:shrink-0">
           {fin?.stripeKeySource && (
             <Pill tone={fin.stripeKeySource === 'leadprime' ? 'ok' : 'muted'}>
               {fin.stripeKeySource === 'leadprime' ? 'LeadPrime Stripe key' : 'Shared Stripe key'}
@@ -549,6 +584,14 @@ export default function LeadPrimeFinance() {
           value={usd(fin?.recurring.mrrUsd)}
           sub={fin?.recurring.available ? `ARR ${usd0(fin.recurring.arrUsd)} · ${fin.recurring.activeSubscriptions} subs` : 'Stripe off'}
           tone={mrrTone}
+          badge={manualMrr > 0 ? `${usd0(manualMrr)} Manual / Zelle` : undefined}
+          help={
+            manualMrr > 0
+              ? `Incluye ${usd(manualMrr)} cobrados por Zelle/transferencia (${fin?.recurring.manualSubscriptions} suscripción(es)). ` +
+                `Es ingreso REAL y cuenta completo en el MRR: el cliente no pudo pagar por el portal ACH y paga por ` +
+                `transferencia mientras se migra a cobro automático. La etiqueta está para que no parezca un error del sistema.`
+              : undefined
+          }
         />
         <StatTile
           icon={Server}
@@ -566,10 +609,17 @@ export default function LeadPrimeFinance() {
         />
         <StatTile
           icon={Gift}
-          label="Free credits MTD"
+          label="Créditos regalados MTD"
           value={usd(fin?.freeCredits.totalUsd)}
-          sub="given away (CAC)"
+          sub={fin ? `CAC ${usd(fin.freeCredits.cacUsd)} + interno ${usd(fin.freeCredits.internalUsd)}` : 'total'}
           tone={creditsTone}
+          help={
+            'TOTAL de créditos otorgados sin cobrar este mes = CAC real ' +
+            '(welcome/promo/referral, lo que sí cuesta adquirir clientes) + grants ' +
+            'internos de admin (cuentas de prueba y cortesías). El estado de resultados ' +
+            'de abajo resta SOLO el CAC real, por eso muestra un número menor: los ' +
+            'grants internos no son costo de adquisición.'
+          }
         />
       </div>
 
@@ -656,12 +706,50 @@ export default function LeadPrimeFinance() {
                 <div className="mt-3 space-y-0.5">
                   {fin.recurring.byPlan.map((p) => (
                     <div key={p.plan} className="flex items-center justify-between py-1 text-xs">
-                      <span className="truncate text-slate-400">{p.plan}</span>
+                      <span className="flex min-w-0 items-center gap-1.5 truncate text-slate-400">
+                        <span className="truncate">{p.plan.replace(' (Manual / Zelle)', '')}</span>
+                        {/* El plan cobrado fuera de Stripe se marca aquí mismo:
+                            el monto es real y cuenta, la etiqueta solo explica
+                            por qué no aparece un cobro automático detrás. */}
+                        {p.plan.includes('Manual / Zelle') && (
+                          <span className="shrink-0 rounded border border-sky-500/30 bg-sky-500/10 px-1 py-px text-[9px] font-medium text-sky-300">
+                            Manual / Zelle
+                          </span>
+                        )}
+                      </span>
                       <span className="ml-2 shrink-0 font-mono text-slate-300">
                         {usd(p.mrrUsd)} <span className="text-slate-600">· {p.subscriptions}</span>
                       </span>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {manualMrr > 0 && (
+                <p className="mt-3 rounded border border-sky-500/20 bg-sky-500/5 p-2 text-[11px] leading-relaxed text-sky-200/80">
+                  <b>{usd(manualMrr)}</b> de este MRR se cobra por Zelle/transferencia, fuera de Stripe.
+                  Es ingreso real y cuenta completo: el cliente no pudo pagar por el portal ACH y paga
+                  manualmente mientras se migra a cobro automático. No es un error del sistema.
+                </p>
+              )}
+
+              {duplicateAccounts.length > 0 && (
+                <div className="mt-3 rounded border border-amber-500/20 bg-amber-500/5 p-2 text-[11px] leading-relaxed text-amber-200/80">
+                  <p className="font-medium">
+                    {duplicateAccounts.length} cuenta(s) duplicada(s) detectada(s) — fuera del conteo
+                  </p>
+                  <p className="mt-0.5 text-amber-200/60">
+                    Mismo dueño con más de una cuenta (mismo teléfono o mismo nombre/negocio). Se
+                    excluyen del MRR y del número de suscripciones para no contarlo dos veces. No se
+                    borró ni se fusionó nada: unir las cuentas es decisión tuya.
+                  </p>
+                  <ul className="mt-1.5 space-y-0.5">
+                    {duplicateAccounts.map((d) => (
+                      <li key={d.contractorId} className="font-mono text-[10px] text-amber-200/70">
+                        {d.email ?? d.contractorId}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
             </>
@@ -727,10 +815,16 @@ export default function LeadPrimeFinance() {
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <StatTile
               icon={Wallet}
-              label="Usage revenue MTD"
+              label="Consumo valorizado MTD"
               value={usd(bd?.totalBilledUsd)}
-              sub={bd ? `${bd.byProduct.length} services billed` : '—'}
+              sub={bd ? `${bd.byProduct.length} servicios · NO es dinero cobrado` : '—'}
               tone={bd && bd.totalBilledUsd > 0 ? 'ok' : 'muted'}
+              help={
+                'Valor del consumo que los usuarios descontaron de su WALLET este mes ' +
+                '(SMS, llamadas, IA...), a nuestra tarifa. NO es dinero que entró al banco: ' +
+                'ese wallet se cargó antes con una recarga o con créditos de regalo. ' +
+                'El ingreso realmente COBRADO por Stripe es el del estado de resultados.'
+              }
             />
             <StatTile
               icon={PieIcon}
@@ -756,7 +850,13 @@ export default function LeadPrimeFinance() {
                     )
                   : '—'
               }
-              sub="billed − provider cost"
+              sub="valorizado − costo real del proveedor"
+              help={
+                'Margen del consumo: lo que le descontamos al usuario de su wallet MENOS ' +
+                'lo que nos cobró el proveedor (Twilio, Anthropic, ElevenLabs...). ' +
+                'Positivo = ese servicio se paga solo. Tampoco es caja: es rentabilidad ' +
+                'unitaria del consumo, independiente de cuánto se facturó por Stripe.'
+              }
               tone={
                 !bd
                   ? 'muted'

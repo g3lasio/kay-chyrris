@@ -24,6 +24,7 @@
  */
 
 import { Pool } from 'pg';
+import { splitNotes, type ClassifiedNote } from './detector-availability';
 
 let spendPool: Pool | null = null;
 
@@ -96,7 +97,10 @@ export interface ServiceSpend {
     marginPct: number | null;
   };
   topConsumers: TopConsumer[];
+  /** Solo problemas reales. Las capacidades ausentes van en `unavailable`. */
   notes: string[];
+  /** Detectores apagados por falta de tabla/clave/plan — no son fallos. */
+  unavailable: ClassifiedNote[];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -563,6 +567,7 @@ export async function getServiceSpend(): Promise<ServiceSpend> {
   const monthSpendUsd = providers.reduce((s, p) => s + (p.monthSpendUsd ?? 0), 0);
   const billedToUsersUsd = providers.reduce((s, p) => s + p.billedToUsersUsd, 0);
   const marginUsd = billedToUsersUsd - monthSpendUsd;
+  const split = splitNotes(notes);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -574,6 +579,7 @@ export async function getServiceSpend(): Promise<ServiceSpend> {
       marginPct: monthSpendUsd > 0 ? marginUsd / monthSpendUsd : null,
     },
     topConsumers: billed.topConsumers,
-    notes,
+    notes: split.issues,
+    unavailable: split.unavailable,
   };
 }

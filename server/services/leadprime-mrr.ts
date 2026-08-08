@@ -22,6 +22,7 @@
  * NUNCA se excluye de ningún cálculo.
  */
 import { Pool } from 'pg';
+import { findDuplicateAccounts } from '@shared/duplicate-accounts';
 
 export interface MrrLine {
   contractorId: string;
@@ -67,45 +68,24 @@ function isDemoAccount(row: any): boolean {
 }
 
 /**
- * Normaliza teléfono a los últimos 10 dígitos — dos cuentas del mismo dueño
- * comparten el número aunque esté escrito distinto.
- */
-function phoneKey(phone: string | null): string | null {
-  if (!phone) return null;
-  const digits = String(phone).replace(/\D/g, '');
-  return digits.length >= 10 ? digits.slice(-10) : null;
-}
-
-/**
  * Marca como duplicadas las cuentas que comparten teléfono (o nombre+negocio)
  * con otra. Se conserva como "principal" la de MAYOR precio de plan — si un
  * dueño tiene una Pro y una Pay-As-You-Go, la que cuenta es la Pro.
  * NO borra ni fusiona nada: solo etiqueta. Fusionar es decisión del dueño.
+ *
+ * La regla vive en shared/duplicate-accounts.ts para que la tabla de usuarios
+ * del admin marque exactamente las mismas cuentas que aquí se excluyen del MRR.
  */
 function markDuplicates(rows: any[]): Set<string> {
-  const duplicates = new Set<string>();
-  const groups = new Map<string, any[]>();
-
-  for (const r of rows) {
-    const key =
-      phoneKey(r.phone) ??
-      (r.business_name || r.name
-        ? `n:${String(r.business_name || r.name).trim().toLowerCase()}`
-        : null);
-    if (!key) continue;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(r);
-  }
-
-  for (const group of Array.from(groups.values())) {
-    if (group.length < 2) continue;
-    // El principal es el de plan más caro; el resto se marca duplicado.
-    const sorted = [...group].sort(
-      (a, b) => Number(b.plan_price_cents || 0) - Number(a.plan_price_cents || 0)
-    );
-    for (const dup of sorted.slice(1)) duplicates.add(dup.contractor_id);
-  }
-  return duplicates;
+  return findDuplicateAccounts(
+    rows.map((r) => ({
+      id: r.contractor_id,
+      phone: r.phone,
+      name: r.name,
+      businessName: r.business_name,
+      weight: Number(r.plan_price_cents || 0),
+    }))
+  ).duplicateIds;
 }
 
 /**

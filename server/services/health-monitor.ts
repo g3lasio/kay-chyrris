@@ -43,6 +43,31 @@ export interface ProbeResult {
   statusCode: number | null;
   error: string | null;
   skipped?: boolean;
+  /**
+   * La credencial fue RECHAZADA (no es que el servicio esté caído). Se distingue
+   * porque el remedio es distinto: una caída se espera a que pase; una credencial
+   * inválida no se arregla sola por más veces que se reintente.
+   */
+  authFailure?: boolean;
+}
+
+/**
+ * Sondas de BD cuya credencial ya fue rechazada. Reintentar una contraseña
+ * inválida cada 5 minutos no la vuelve válida: solo genera filas basura y
+ * repite la misma alerta para siempre (Owl Fenc acumuló 977 fallos idénticos).
+ * Tras AUTH_FAILURES_BEFORE_PAUSE rechazos seguidos la sonda se pausa y queda
+ * UNA alerta accionable: rota la credencial o apaga el check.
+ */
+const pausedCredentials = new Map<string, { failures: number; lastError: string }>();
+const AUTH_FAILURES_BEFORE_PAUSE = 3;
+
+/** Postgres 28P01 = invalid_password, 28000 = invalid_authorization_specification. */
+function isAuthFailure(err: any): boolean {
+  const code = err?.code;
+  if (code === '28P01' || code === '28000') return true;
+  return /password authentication failed|no pg_hba\.conf entry|role .* does not exist/i.test(
+    String(err?.message || err || '')
+  );
 }
 
 // ─── Pool propio (BD de Kai) ──────────────────────────────────────────────────
@@ -144,6 +169,22 @@ function skipped(provider: string, reason: string): ProbeResult {
 
 async function dbProbe(provider: string, connectionString: string | undefined): Promise<ProbeResult> {
   if (!connectionString) return skipped(provider, 'connection string no configurada');
+
+  // Credencial ya rechazada N veces: no se vuelve a intentar. El estado se
+  // reporta igual (ver regla 1c de evaluateAlerts) pero deja de generar sondas.
+  const paused = pausedCredentials.get(provider);
+  if (paused && paused.failures >= AUTH_FAILURES_BEFORE_PAUSE) {
+    return {
+      provider,
+      ok: false,
+      latencyMs: null,
+      statusCode: null,
+      error: paused.lastError,
+      skipped: true, // no se guarda en provider_probes: no aporta información nueva
+      authFailure: true,
+    };
+  }
+
   const started = Date.now();
   const pool = new Pool({
     connectionString,
@@ -153,9 +194,19 @@ async function dbProbe(provider: string, connectionString: string | undefined): 
   });
   try {
     await pool.query('SELECT 1');
+    pausedCredentials.delete(provider); // credencial rotada: se reanuda sola
     return { provider, ok: true, latencyMs: Date.now() - started, statusCode: null, error: null };
   } catch (e: any) {
-    return { provider, ok: false, latencyMs: Date.now() - started, statusCode: null, error: String(e?.message || e) };
+    const message = String(e?.message || e);
+    const authFailure = isAuthFailure(e);
+    if (authFailure) {
+      const prev = pausedCredentials.get(provider)?.failures ?? 0;
+      pausedCredentials.set(provider, { failures: prev + 1, lastError: message });
+    } else {
+      // Un fallo de red no invalida la credencial: no cuenta para la pausa.
+      pausedCredentials.delete(provider);
+    }
+    return { provider, ok: false, latencyMs: Date.now() - started, statusCode: null, error: message, authFailure };
   } finally {
     await pool.end().catch(() => { /* ignorar */ });
   }
@@ -224,7 +275,13 @@ export async function probeAllProviders(): Promise<ProbeResult[]> {
   // Bases de datos.
   probes.push(dbProbe('leadprime_db', process.env.LEADPRIME_DATABASE_URL));
   probes.push(dbProbe('kai_db', process.env.AUTH_DATABASE_URL));
-  probes.push(dbProbe('owlfenc_db', process.env.OWLFENC_DATABASE_URL));
+  // Owl Fenc es un producto aparte y su credencial lleva meses rechazada. Se
+  // puede retirar el check sin deploy: OWLFENC_MONITOR_ENABLED=false.
+  probes.push(
+    process.env.OWLFENC_MONITOR_ENABLED === 'false'
+      ? Promise.resolve(skipped('owlfenc_db', 'monitoreo desactivado a propósito (OWLFENC_MONITOR_ENABLED=false)'))
+      : dbProbe('owlfenc_db', process.env.OWLFENC_DATABASE_URL)
+  );
 
   const settled = await Promise.allSettled(probes);
   return settled.map((r, i) =>
@@ -517,7 +574,9 @@ export async function evaluateAlerts(probes: ProbeResult[]): Promise<{ raised: n
 
   // ── 1. Proveedor caído (sondas reales) ──────────────────────────────────────
   for (const p of probes) {
-    if (p.skipped || p.ok) continue;
+    if (p.ok) continue;
+    if (p.authFailure) continue; // credencial rechazada → regla 1c, no "no responde"
+    if (p.skipped) continue;
     const fails = await consecutiveFailures(p.provider);
     if (fails >= FAILURES_BEFORE_ALERT) {
       // Resend NO es un proveedor cualquiera: es el canal por el que salen las
@@ -561,6 +620,31 @@ export async function evaluateAlerts(probes: ProbeResult[]): Promise<{ raised: n
     });
   }
 
+  // ── 1c. Credencial rechazada (≠ servicio caído) ────────────────────────────
+  // "Owl Fenc NO RESPONDE ×977" era un diagnóstico falso: el servidor responde
+  // perfectamente, lo que no sirve es la contraseña. Una alerta, con las dos
+  // salidas reales, y la sonda pausada para no seguir golpeando.
+  for (const p of probes) {
+    if (!p.authFailure) continue;
+    const state = pausedCredentials.get(p.provider);
+    const isPaused = (state?.failures ?? 0) >= AUTH_FAILURES_BEFORE_PAUSE;
+    await fire({
+      key: `credential_rejected:${p.provider}`,
+      severity: 'warning', // no es una caída de producción; es mantenimiento pendiente
+      source: 'credential',
+      title: `🔑 Credencial rechazada — ${label(p.provider)}`,
+      detail:
+        `El servidor responde, pero rechaza la contraseña: ${p.error ?? 'autenticación fallida'}. ` +
+        `Esto NO se arregla reintentando, así que la sonda quedó ${isPaused ? 'PAUSADA' : 'a punto de pausarse'} ` +
+        `tras ${state?.failures ?? 1} rechazo(s) — deja de ensuciar el historial con el mismo fallo. ` +
+        `Dos salidas: (a) rotar la credencial en Neon y actualizar la variable de entorno ` +
+        `(la sonda se reanuda sola en cuanto la conexión funcione), o ` +
+        (p.provider === 'owlfenc_db'
+          ? `(b) retirar el check con OWLFENC_MONITOR_ENABLED=false si ese producto ya no se monitorea.`
+          : `(b) quitar esa base de datos del monitor si ya no se usa.`),
+    });
+  }
+
   // ── 2. Gasto / cuotas / keys (detectores que ya existían) ───────────────────
   try {
     const { getServiceSpend } = await import('./leadprime-service-spend');
@@ -589,15 +673,25 @@ export async function evaluateAlerts(probes: ProbeResult[]): Promise<{ raised: n
       // los usuarios dejan de salir. Es la falla más silenciosa y más cara.
       if (typeof svc.balanceUsd === 'number') {
         const critical = Number(process.env.TWILIO_BALANCE_CRITICAL_USD || 20);
-        const warn = Number(process.env.TWILIO_BALANCE_WARN_USD || 50);
+        const fixedWarn = Number(process.env.TWILIO_BALANCE_WARN_USD || 50);
+        // Umbral RELATIVO al gasto proyectado: un saldo de $34 es cómodo si
+        // gastas $10/mes y es una emergencia si gastas $51. El fijo solo actúa
+        // como piso cuando aún no hay proyección.
+        const ratio = Number(process.env.TWILIO_BALANCE_MIN_RATIO || 1.5);
+        const projected = svc.projectedMonthUsd ?? 0;
+        const relativeWarn = projected > 0 ? projected * ratio : 0;
+        const warn = Math.max(fixedWarn, relativeWarn);
         if (svc.balanceUsd <= warn) {
           await fire({
             key: `low_balance:${name}`,
             severity: svc.balanceUsd <= critical ? 'critical' : 'warning',
             source: 'balance',
             title: `SALDO BAJO — ${label(name)}: $${svc.balanceUsd.toFixed(2)}`,
-            detail: `Al agotarse el saldo dejan de enviarse SMS y llamadas de TODOS los usuarios. ` +
-              `Gasto proyectado del mes: $${(svc.projectedMonthUsd ?? 0).toFixed(2)}. Recarga la cuenta.`,
+            detail:
+              `Al agotarse el saldo dejan de enviarse SMS y llamadas de TODOS los usuarios a la vez. ` +
+              `Saldo $${svc.balanceUsd.toFixed(2)} vs gasto proyectado del mes $${projected.toFixed(2)}` +
+              (projected > 0 ? ` (${(svc.balanceUsd / projected).toFixed(2)}x — el mínimo sano es ${ratio}x)` : '') +
+              `. Recarga la cuenta.`,
           });
         }
       }
