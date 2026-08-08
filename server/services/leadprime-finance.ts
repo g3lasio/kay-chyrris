@@ -174,6 +174,30 @@ export async function sumLeadPrimeCharges(stripe: Stripe, sinceUnix: number): Pr
   return { gross, refunded, count, customers: ids.length, actualFees, feesFromCharges };
 }
 
+/**
+ * Precio mensual REAL de una suscripción, en centavos, como expresión SQL.
+ *
+ * Requiere que la consulta traiga los alias `s` (subscriptions), `pd`
+ * (plan_definitions) y `csc` (contractor_subscription_config).
+ *
+ * POR QUÉ NO `subscriptions.base_price_cents`: esa columna tiene DEFAULT 1500,
+ * así que TODA cuenta nacía valiendo $15/mes — incluidas las Pay-As-You-Go que
+ * no pagan mensualidad, la cuenta demo y los duplicados. De ahí salía el MRR
+ * inflado de $549. El precio bueno es el del catálogo del plan.
+ *
+ * El caso `external_zelle` es el cobro MANUAL por transferencia: cuenta como
+ * MRR igual que cualquier otro (decisión del dueño) y usa el precio ACORDADO,
+ * que puede diferir del catálogo porque esos planes se negocian.
+ *
+ * Vive aquí, exportado, porque tres consultas distintas lo necesitan idéntico:
+ * si una sola discrepa, dos pantallas del panel muestran MRR distinto — que es
+ * exactamente el bug que esto vino a cerrar.
+ */
+export const PLAN_PRICE_CENTS_SQL = `COALESCE(
+  CASE WHEN csc.billing_mode = 'external_zelle' AND csc.status = 'applied'
+       THEN COALESCE(NULLIF(csc.monthly_price_cents, 0), pd.monthly_price_cents)
+       ELSE pd.monthly_price_cents END, 0)`;
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface Recurring {
@@ -764,25 +788,13 @@ async function getMrrMovements(pool: Pool, notes: string[]): Promise<MrrMovement
     const r = await pool.query(
       `SELECT
          COUNT(*) FILTER (WHERE s.status IN ('active','trialing')) AS active_count,
-         COALESCE(SUM(COALESCE(
-             CASE WHEN csc.billing_mode = 'external_zelle' AND csc.status = 'applied'
-                  THEN COALESCE(NULLIF(csc.monthly_price_cents, 0), pd.monthly_price_cents)
-                  ELSE pd.monthly_price_cents END, 0)) FILTER (WHERE s.status IN ('active','trialing')),0) AS active_cents,
+         COALESCE(SUM(${PLAN_PRICE_CENTS_SQL}) FILTER (WHERE s.status IN ('active','trialing')),0) AS active_cents,
          COUNT(*) FILTER (WHERE s.created_at >= date_trunc('month', now()) AND s.status IN ('active','trialing')) AS new_count,
-         COALESCE(SUM(COALESCE(
-             CASE WHEN csc.billing_mode = 'external_zelle' AND csc.status = 'applied'
-                  THEN COALESCE(NULLIF(csc.monthly_price_cents, 0), pd.monthly_price_cents)
-                  ELSE pd.monthly_price_cents END, 0)) FILTER (WHERE s.created_at >= date_trunc('month', now()) AND s.status IN ('active','trialing')),0) AS new_cents,
+         COALESCE(SUM(${PLAN_PRICE_CENTS_SQL}) FILTER (WHERE s.created_at >= date_trunc('month', now()) AND s.status IN ('active','trialing')),0) AS new_cents,
          COUNT(*) FILTER (WHERE s.canceled_at >= date_trunc('month', now())) AS churned_count,
-         COALESCE(SUM(COALESCE(
-             CASE WHEN csc.billing_mode = 'external_zelle' AND csc.status = 'applied'
-                  THEN COALESCE(NULLIF(csc.monthly_price_cents, 0), pd.monthly_price_cents)
-                  ELSE pd.monthly_price_cents END, 0)) FILTER (WHERE s.canceled_at >= date_trunc('month', now())),0) AS churned_cents,
+         COALESCE(SUM(${PLAN_PRICE_CENTS_SQL}) FILTER (WHERE s.canceled_at >= date_trunc('month', now())),0) AS churned_cents,
          COUNT(*) FILTER (WHERE s.cancel_at_period_end = true AND s.status IN ('active','trialing')) AS atrisk_count,
-         COALESCE(SUM(COALESCE(
-             CASE WHEN csc.billing_mode = 'external_zelle' AND csc.status = 'applied'
-                  THEN COALESCE(NULLIF(csc.monthly_price_cents, 0), pd.monthly_price_cents)
-                  ELSE pd.monthly_price_cents END, 0)) FILTER (WHERE s.cancel_at_period_end = true AND s.status IN ('active','trialing')),0) AS atrisk_cents
+         COALESCE(SUM(${PLAN_PRICE_CENTS_SQL}) FILTER (WHERE s.cancel_at_period_end = true AND s.status IN ('active','trialing')),0) AS atrisk_cents
        FROM subscriptions s
          LEFT JOIN plan_definitions pd ON pd.plan_name = s.plan_name
          LEFT JOIN contractor_subscription_config csc
@@ -843,10 +855,7 @@ export async function getFinanceByUser(): Promise<FinanceByUser> {
          -- base_price_cents tiene DEFAULT 1500, así que usarlo hacía valer $15
          -- a toda cuenta — incluidas las gratis — e inflaba LTV y LTV:CAC.
          SELECT s.contractor_id, s.status, s.plan_name, s.created_at,
-                COALESCE(
-                  CASE WHEN csc.billing_mode = 'external_zelle' AND csc.status = 'applied'
-                       THEN COALESCE(NULLIF(csc.monthly_price_cents, 0), pd.monthly_price_cents)
-                       ELSE pd.monthly_price_cents END, 0) AS base_price_cents,
+                ${PLAN_PRICE_CENTS_SQL} AS base_price_cents,
                 EXTRACT(EPOCH FROM (COALESCE(s.canceled_at, now()) - s.created_at)) / 2629800.0 AS months_active
            FROM subscriptions s
            LEFT JOIN plan_definitions pd ON pd.plan_name = s.plan_name
@@ -1134,10 +1143,7 @@ export async function getFinanceForecast(): Promise<FinanceForecast> {
       `SELECT s.contractor_id, s.status, s.cancel_at_period_end,
               c.name, c.email,
               -- Precio real del catálogo, no base_price_cents (DEFAULT 1500).
-              COALESCE(
-                CASE WHEN csc.billing_mode = 'external_zelle' AND csc.status = 'applied'
-                     THEN COALESCE(NULLIF(csc.monthly_price_cents, 0), pd.monthly_price_cents)
-                     ELSE pd.monthly_price_cents END, 0) AS base_price_cents
+              ${PLAN_PRICE_CENTS_SQL} AS base_price_cents
          FROM subscriptions s
          LEFT JOIN contractors c        ON c.id = s.contractor_id
          LEFT JOIN plan_definitions pd  ON pd.plan_name = s.plan_name
