@@ -331,20 +331,88 @@ async function resolveAlertsNotIn(activeKeys: Set<string>): Promise<void> {
 
 // ─── Canales de notificación ──────────────────────────────────────────────────
 
+// ── Salud del propio canal de alertas ────────────────────────────────────────
+// LECCIÓN DEL INCIDENTE (ago 2026): Resend llevaba ~1.5 meses devolviendo 401
+// restricted_api_key. TODAS las alertas críticas quedaron "sin notificar" y por
+// eso nadie se enteró del bug de créditos. Un sistema de avisos que no puede
+// avisar es peor que no tener ninguno: da falsa tranquilidad.
+//
+// Regla: una alerta que NO se puede entregar es, por sí sola, una alerta.
+const channelFailures: Record<'sms' | 'email', number> = { sms: 0, email: 0 };
+const CHANNEL_FAILURES_BEFORE_ESCALATION = 3;
+let lastUndeliverableEscalationAt = 0;
+
 /** Envía por SMS + email. Devuelve true si al menos un canal entregó. */
 async function notify(alert: AlertInput): Promise<boolean> {
   const icon = alert.severity === 'critical' ? '🚨' : '⚠️';
   const subject = `${icon} Chyrris KAI — ${alert.title}`;
   const body = `${alert.detail}\n\nFuente: ${alert.source}\nSeveridad: ${alert.severity}\nHora: ${new Date().toLocaleString('es-MX')}`;
-  const results = await Promise.allSettled([
+
+  const [smsRes, emailRes] = await Promise.allSettled([
     sendAlertSms(`${icon} KAI: ${alert.title}. ${alert.detail}`.slice(0, 300)),
     sendAlertEmail(subject, body),
   ]);
-  const delivered = results.some(r => r.status === 'fulfilled' && r.value === true);
+  const smsOk = smsRes.status === 'fulfilled' && smsRes.value === true;
+  const emailOk = emailRes.status === 'fulfilled' && emailRes.value === true;
+
+  // Contador por canal: un canal muerto se detecta aunque el otro funcione.
+  channelFailures.sms = smsOk ? 0 : channelFailures.sms + 1;
+  channelFailures.email = emailOk ? 0 : channelFailures.email + 1;
+
+  const delivered = smsOk || emailOk;
   if (!delivered) {
-    console.error(`[HealthMonitor] ALERTA SIN ENTREGAR (${alert.key}): ${alert.title} — ${alert.detail}`);
+    console.error(`[HealthMonitor] ⛔ ALERTA SIN ENTREGAR (${alert.key}): ${alert.title} — ${alert.detail}`);
+    await escalateUndeliverable(alert);
   }
   return delivered;
+}
+
+/**
+ * Ningún canal entregó. Se deja constancia PERMANENTE en el dashboard (una
+ * alerta crítica propia, que no depende de ningún canal externo para verse) y
+ * se registra en consola con todo el detalle, que es lo único que queda cuando
+ * el correo y el SMS están caídos a la vez.
+ */
+async function escalateUndeliverable(original: AlertInput): Promise<void> {
+  try {
+    const pool = getMonitorPool();
+    const detail =
+      `Ni SMS ni email pudieron entregar la alerta "${original.title}". ` +
+      `Fallos consecutivos — SMS: ${channelFailures.sms}, email: ${channelFailures.email}. ` +
+      `Mientras esto siga así, NINGUNA alerta llega: el panel es la única fuente de verdad. ` +
+      `Revisa RESEND_API_KEY (necesita permiso de ENVÍO, no solo lectura), OWNER_ALERT_EMAIL, ` +
+      `OWNER_ALERT_PHONE y las credenciales de Twilio.`;
+    await pool.query(
+      `INSERT INTO system_alerts (alert_key, severity, source, title, detail, status)
+       VALUES ($1, 'critical', 'alert_channel', $2, $3, 'open')
+       ON CONFLICT (alert_key) WHERE status = 'open'
+       DO UPDATE SET occurrences = system_alerts.occurrences + 1,
+                     last_seen_at = NOW(), detail = EXCLUDED.detail`,
+      ['alert_channel:undeliverable', '⛔ CANAL DE ALERTAS CAÍDO — no se puede notificar nada', detail]
+    );
+    // Log periódico (máx. 1/hora) para que quede en los logs de Railway aunque
+    // nadie abra el panel.
+    if (Date.now() - lastUndeliverableEscalationAt > 60 * 60 * 1000) {
+      lastUndeliverableEscalationAt = Date.now();
+      console.error(`[HealthMonitor] ⛔⛔ ${detail}`);
+    }
+  } catch (e: any) {
+    console.error('[HealthMonitor] no se pudo registrar el fallo de entrega:', e.message);
+  }
+}
+
+/**
+ * ¿Algún canal de notificación lleva demasiados fallos seguidos? Se evalúa en
+ * cada ciclo para que un canal muerto salga a la luz aunque no haya ninguna
+ * otra alerta que enviar (que era justo el caso: sin alertas nuevas, el
+ * Resend caído era invisible).
+ */
+function deadChannels(): Array<{ channel: string; failures: number }> {
+  const dead: Array<{ channel: string; failures: number }> = [];
+  for (const [channel, failures] of Object.entries(channelFailures)) {
+    if (failures >= CHANNEL_FAILURES_BEFORE_ESCALATION) dead.push({ channel, failures });
+  }
+  return dead;
 }
 
 async function sendAlertSms(message: string): Promise<boolean> {
@@ -452,15 +520,45 @@ export async function evaluateAlerts(probes: ProbeResult[]): Promise<{ raised: n
     if (p.skipped || p.ok) continue;
     const fails = await consecutiveFailures(p.provider);
     if (fails >= FAILURES_BEFORE_ALERT) {
-      const isInfra = p.provider.endsWith('_db') || p.provider === 'leadprime_api';
+      // Resend NO es un proveedor cualquiera: es el canal por el que salen las
+      // alertas. Si está caído, el aviso de que está caído tampoco puede salir
+      // por ahí — por eso se marca explícitamente y el texto le dice al
+      // operador que el resto de las alertas están mudas.
+      const isAlertChannel = p.provider === 'resend';
+      const is401 = p.statusCode === 401 || /401|restricted_api_key/i.test(p.error ?? '');
       await fire({
         key: `provider_down:${p.provider}`,
-        severity: isInfra ? 'critical' : 'critical',
-        source: 'probe',
-        title: `${label(p.provider)} NO RESPONDE`,
-        detail: `${fails} sondas consecutivas fallidas. Último error: ${p.error ?? 'desconocido'}`,
+        severity: 'critical',
+        source: isAlertChannel ? 'alert_channel' : 'probe',
+        title: isAlertChannel
+          ? `⛔ CANAL DE ALERTAS CAÍDO — ${label(p.provider)} rechaza los envíos`
+          : `${label(p.provider)} NO RESPONDE`,
+        detail: isAlertChannel
+          ? `${fails} sondas consecutivas fallidas. ${is401
+              ? 'HTTP 401: la API key existe pero NO tiene permiso de ENVÍO (restricted_api_key). ' +
+                'Genera una key con permiso "Sending access" en resend.com/api-keys y actualiza RESEND_API_KEY.'
+              : `Último error: ${p.error ?? 'desconocido'}`} ` +
+            `Mientras siga así NINGUNA alerta por correo llega y el panel es la única fuente de verdad.`
+          : `${fails} sondas consecutivas fallidas. Último error: ${p.error ?? 'desconocido'}`,
       });
     }
+  }
+
+  // ── 1b. Canal de notificación muerto (aunque no haya nada más que avisar) ──
+  // Sin esta regla, un canal caído solo se descubría al intentar enviar una
+  // alerta — y si no había alertas nuevas, permanecía invisible. Exactamente
+  // lo que pasó: Resend llevaba mes y medio en 401 y nadie lo supo.
+  for (const dead of deadChannels()) {
+    await fire({
+      key: `alert_channel_dead:${dead.channel}`,
+      severity: 'critical',
+      source: 'alert_channel',
+      title: `⛔ Canal de alertas "${dead.channel}" sin entregar (${dead.failures} intentos seguidos)`,
+      detail:
+        `El canal ${dead.channel} lleva ${dead.failures} envíos fallidos consecutivos. ` +
+        `Las alertas críticas no están llegando por esa vía. ` +
+        `Si el otro canal también falla, el panel es lo único que queda.`,
+    });
   }
 
   // ── 2. Gasto / cuotas / keys (detectores que ya existían) ───────────────────
