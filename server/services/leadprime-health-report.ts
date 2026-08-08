@@ -13,6 +13,8 @@
  * capped at the ~30 days Neon retains). The report states this clearly.
  */
 
+import type { ClassifiedNote } from './detector-availability';
+
 export type ReportRange = 'week' | 'month' | 'quarter';
 
 interface Period {
@@ -150,7 +152,10 @@ export interface HealthReport {
     leaksDetected: number;
   };
 
+  /** Problemas reales detectados. */
   notes: string[];
+  /** Detectores apagados por capacidad ausente — informativo, no un fallo. */
+  unavailable: ClassifiedNote[];
 }
 
 export async function getHealthReport(rangeInput?: string): Promise<HealthReport> {
@@ -342,6 +347,14 @@ export async function getHealthReport(rangeInput?: string): Promise<HealthReport
   if (spend?.notes) notes.push(...spend.notes);
   if (billing?.notes) notes.push(...billing.notes);
 
+  // Capacidades ausentes (extensión no instalada, tabla inexistente, endpoint
+  // que pide plan Scale). No son fallos y no deben ensuciar `notes`.
+  const unavailable: ClassifiedNote[] = [
+    ...(infra?.unavailable ?? []),
+    ...(spend?.unavailable ?? []),
+    ...(billing?.unavailable ?? []),
+  ];
+
   return {
     generatedAt: new Date().toISOString(),
     range,
@@ -357,5 +370,6 @@ export async function getHealthReport(rangeInput?: string): Promise<HealthReport
     serviceSpend,
     billing: billingOut,
     notes: Array.from(new Set(notes)),
+    unavailable,
   };
 }

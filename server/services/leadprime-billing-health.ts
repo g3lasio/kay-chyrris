@@ -29,6 +29,7 @@
  */
 
 import { Pool } from 'pg';
+import { splitNotes, type ClassifiedNote } from './detector-availability';
 
 let leadprimePool: Pool | null = null;
 
@@ -107,8 +108,10 @@ export interface BillingHealth {
    * recibir sus créditos. Rojo si hay aunque sea una.
    */
   missingRecharges35d: BillingHealthDetector<MissingRechargeRow> & { owedCreditsCents: number };
-  /** Non-fatal notes (e.g. which detectors degraded). */
+  /** Solo problemas reales. Las capacidades ausentes van en `unavailable`. */
   notes: string[];
+  /** Detectores apagados por falta de tabla/columna — no son fallos. */
+  unavailable: ClassifiedNote[];
 }
 
 export interface MissingRechargeRow {
@@ -413,6 +416,8 @@ export async function getBillingHealth(): Promise<BillingHealth> {
     detectMissingRecharges(pool, notes),
   ]);
 
+  const split = splitNotes(notes);
+
   return {
     generatedAt: new Date().toISOString(),
     negativeBalances,
@@ -421,6 +426,7 @@ export async function getBillingHealth(): Promise<BillingHealth> {
     reconcileFailures,
     retryQueueBacklog,
     missingRecharges35d,
-    notes,
+    notes: split.issues,
+    unavailable: split.unavailable,
   };
 }

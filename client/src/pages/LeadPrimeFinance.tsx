@@ -67,8 +67,13 @@ interface CapturedRevenue {
 interface FreeCredits {
   available: boolean;
   note?: string;
+  /** Total = CAC real + grants internos. Es el número de la tarjeta KPI. */
   totalUsd: number;
-  byType: { type: string; usd: number }[];
+  /** Solo adquisición real (welcome/promo/referral) — lo que resta el P&L. */
+  cacUsd: number;
+  /** Grants internos de admin (pruebas/cortesías): NO son costo de adquisición. */
+  internalUsd: number;
+  byType: { type: string; usd: number; cac?: boolean }[];
 }
 interface Cogs {
   available: boolean;
@@ -260,16 +265,22 @@ function StatTile({
   value,
   sub,
   tone,
+  /** Definición exacta de la métrica. La página mezclaba dinero cobrado,
+   *  consumo valorizado y crédito regalado sin decir cuál era cuál: sin esto
+   *  las cifras se malinterpretan entre sí. */
+  help,
 }: {
   icon: any;
   label: string;
   value: string;
   sub: string;
   tone: Tone;
+  help?: string;
 }) {
   return (
     <div
-      className={`relative overflow-hidden rounded-xl border bg-gradient-to-b from-slate-900/80 to-slate-950/90 p-4 ${toneRing[tone]}`}
+      title={help}
+      className={`relative overflow-hidden rounded-xl border bg-gradient-to-b from-slate-900/80 to-slate-950/90 p-4 ${toneRing[tone]} ${help ? 'cursor-help' : ''}`}
     >
       <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-current to-transparent opacity-30" />
       <div className="flex items-center justify-between">
@@ -412,9 +423,11 @@ export default function LeadPrimeFinance() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
+      {/* Header — a ~1021px los botones se encimaban sobre el título: el
+          contenedor no envolvía. Ahora apila en pantallas medias y los botones
+          quedan alineados a la derecha sin invadir el texto. */}
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
           <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-100">
             <TrendingUp className="h-6 w-6 text-emerald-400" />
             Finance
@@ -425,7 +438,7 @@ export default function LeadPrimeFinance() {
             recurring MRR/ARR, processing fees, cost to serve, and what's left over. Never moves money.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end lg:shrink-0">
           {fin?.stripeKeySource && (
             <Pill tone={fin.stripeKeySource === 'leadprime' ? 'ok' : 'muted'}>
               {fin.stripeKeySource === 'leadprime' ? 'LeadPrime Stripe key' : 'Shared Stripe key'}
@@ -566,10 +579,17 @@ export default function LeadPrimeFinance() {
         />
         <StatTile
           icon={Gift}
-          label="Free credits MTD"
+          label="Créditos regalados MTD"
           value={usd(fin?.freeCredits.totalUsd)}
-          sub="given away (CAC)"
+          sub={fin ? `CAC ${usd(fin.freeCredits.cacUsd)} + interno ${usd(fin.freeCredits.internalUsd)}` : 'total'}
           tone={creditsTone}
+          help={
+            'TOTAL de créditos otorgados sin cobrar este mes = CAC real ' +
+            '(welcome/promo/referral, lo que sí cuesta adquirir clientes) + grants ' +
+            'internos de admin (cuentas de prueba y cortesías). El estado de resultados ' +
+            'de abajo resta SOLO el CAC real, por eso muestra un número menor: los ' +
+            'grants internos no son costo de adquisición.'
+          }
         />
       </div>
 
@@ -727,10 +747,16 @@ export default function LeadPrimeFinance() {
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <StatTile
               icon={Wallet}
-              label="Usage revenue MTD"
+              label="Consumo valorizado MTD"
               value={usd(bd?.totalBilledUsd)}
-              sub={bd ? `${bd.byProduct.length} services billed` : '—'}
+              sub={bd ? `${bd.byProduct.length} servicios · NO es dinero cobrado` : '—'}
               tone={bd && bd.totalBilledUsd > 0 ? 'ok' : 'muted'}
+              help={
+                'Valor del consumo que los usuarios descontaron de su WALLET este mes ' +
+                '(SMS, llamadas, IA...), a nuestra tarifa. NO es dinero que entró al banco: ' +
+                'ese wallet se cargó antes con una recarga o con créditos de regalo. ' +
+                'El ingreso realmente COBRADO por Stripe es el del estado de resultados.'
+              }
             />
             <StatTile
               icon={PieIcon}
@@ -756,7 +782,13 @@ export default function LeadPrimeFinance() {
                     )
                   : '—'
               }
-              sub="billed − provider cost"
+              sub="valorizado − costo real del proveedor"
+              help={
+                'Margen del consumo: lo que le descontamos al usuario de su wallet MENOS ' +
+                'lo que nos cobró el proveedor (Twilio, Anthropic, ElevenLabs...). ' +
+                'Positivo = ese servicio se paga solo. Tampoco es caja: es rentabilidad ' +
+                'unitaria del consumo, independiente de cuánto se facturó por Stripe.'
+              }
               tone={
                 !bd
                   ? 'muted'

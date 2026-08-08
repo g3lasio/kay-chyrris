@@ -32,6 +32,7 @@ import {
   Mic,
   Phone,
   AudioLines,
+  MinusCircle,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -54,6 +55,19 @@ interface Detector<T> {
   count?: number;
 }
 
+/**
+ * Detector apagado porque la capacidad NO EXISTE (extensión sin instalar, tabla
+ * que nunca se creó, endpoint que pide plan Scale). El servidor ya las separa de
+ * los errores reales — aquí solo se pintan en gris, aparte, para que "Detector
+ * notes" vuelva a significar "algo se rompió".
+ */
+interface ClassifiedNote {
+  detector: string;
+  message: string;
+  kind: 'unavailable' | 'issue';
+  enableWith?: string;
+}
+
 interface BillingHealth {
   generatedAt: string;
   negativeBalances: Detector<{ contractorId: string; contractorName: string | null; contractorEmail: string | null; balanceCents: number }> & { count: number };
@@ -62,6 +76,7 @@ interface BillingHealth {
   reconcileFailures: Detector<{ eventType: string; count: number; totalCostCents: number }> & { count: number };
   retryQueueBacklog: Detector<{ status: string; count: number; totalCents: number }> & { count: number };
   notes: string[];
+  unavailable?: ClassifiedNote[];
 }
 
 interface NeonDay {
@@ -116,6 +131,7 @@ interface InfraHealth {
     keepsComputeAwake: boolean;
   }>;
   notes: string[];
+  unavailable?: ClassifiedNote[];
 }
 
 type ProviderId = 'anthropic' | 'openai' | 'twilio' | 'elevenlabs';
@@ -148,6 +164,7 @@ interface ServiceSpend {
   totals: { monthSpendUsd: number; billedToUsersUsd: number; marginUsd: number; marginPct: number | null };
   topConsumers: { contractorId: string; billedUsd: number; events: number }[];
   notes: string[];
+  unavailable?: ClassifiedNote[];
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -367,6 +384,31 @@ export default function LeadPrimeSystemHealth() {
   const sevTone = (s: ProviderSpend['severity']): Tone =>
     s === 'alarm' ? 'alarm' : s === 'watch' ? 'warn' : s === 'ok' ? 'ok' : 'muted';
 
+  // "API key off" mentía cuando el motivo real era un 403 por plan. Se dice el
+  // motivo verdadero, corto, en el subtítulo del tile.
+  const neonNote = neon?.note ?? '';
+  const neonUnavailableReason = /40[23]|plan/i.test(neonNote)
+    ? 'requiere plan Scale'
+    : /not set/i.test(neonNote)
+      ? 'falta API key'
+      : 'no disponible';
+
+  // Capacidades ausentes de los tres servicios, deduplicadas por detector+mensaje.
+  const unavailableDetectors: ClassifiedNote[] = (() => {
+    const all = [
+      ...(infra?.unavailable ?? []),
+      ...(billing?.unavailable ?? []),
+      ...(spend?.unavailable ?? []),
+    ];
+    const seen = new Set<string>();
+    return all.filter((n) => {
+      const k = `${n.detector}:${n.message}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  })();
+
   const refreshAll = () => {
     billingQ.refetch();
     infraQ.refetch();
@@ -377,7 +419,7 @@ export default function LeadPrimeSystemHealth() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-100">
             <ShieldCheck className="h-6 w-6 text-cyan-400" />
@@ -388,7 +430,7 @@ export default function LeadPrimeSystemHealth() {
             background-worker cadence. Surfaces problems and the fix. Never moves money, never mutates data.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end lg:shrink-0">
           <ReportExporter<HealthReportData>
             fileBase="leadprime-system-health"
             fetchReport={async (range) => {
@@ -422,14 +464,14 @@ export default function LeadPrimeSystemHealth() {
           icon={neonTone === 'alarm' ? Zap : Cpu}
           label="Neon / mo (proj.)"
           value={neon?.available ? usd(neon.projectedMonthCostUsd) : '—'}
-          sub={neon?.available ? `${neon.monthComputeHours.toFixed(1)} CU-h MTD` : 'API key off'}
+          sub={neon?.available ? `${neon.monthComputeHours.toFixed(1)} CU-h MTD` : neonUnavailableReason}
           tone={neonTone}
         />
         <StatTile
           icon={Gauge}
           label="Cost / user"
           value={cpu?.available ? `${cpu.cuHoursPerActiveUser} CU-h` : '—'}
-          sub={cpu?.available ? `${cpu.activeUsers30d} active / ${cpu.totalUsers} total` : 'needs Neon API'}
+          sub={cpu?.available ? `${cpu.activeUsers30d} active / ${cpu.totalUsers} total` : 'no disponible'}
           tone={cpuTone}
         />
         <StatTile
@@ -649,17 +691,28 @@ export default function LeadPrimeSystemHealth() {
         <TabsContent value="infra" className="space-y-4 pt-4">
           <GlowCard title="Neon Compute — daily active vs CU hours (30d)" icon={Cpu} tone={neonTone}>
             {!neon?.available ? (
-              <div className="text-sm text-slate-400">
-                <p>Compute metrics disabled. {neon?.note}</p>
-                <ActionHint tone="warn">
-                  <p className="font-semibold text-slate-200">To enable (your part):</p>
-                  <p>
-                    Create a <span className="font-mono">read-only</span> Neon API key (Neon console → Account
-                    settings → API keys) and set <span className="font-mono">NEON_API_KEY</span> +{' '}
-                    <span className="font-mono">NEON_PROJECT_ID</span> on the kay-chyrris service. Optional:{' '}
+              <div className="text-sm text-slate-500">
+                <p className="flex items-center gap-2">
+                  <MinusCircle className="h-4 w-4 text-slate-600" />
+                  No disponible — {neon?.note}
+                </p>
+                {neonUnavailableReason === 'requiere plan Scale' ? (
+                  // La key está bien; el endpoint es de pago. Mandar a "crea una API
+                  // key" aquí sería mandar al dueño a arreglar algo que no está roto.
+                  <p className="mt-2 text-xs text-slate-600">
+                    La API de consumo de Neon solo existe en plan Scale. La key está configurada y
+                    funciona; el endpoint es el que no está incluido. Mientras tanto el riesgo de
+                    compute se evalúa por cadencia de workers (tarjeta "Pollers 24/7"), que es el
+                    dato que de verdad dispara el costo — sin inventar un $ exacto.
+                  </p>
+                ) : (
+                  <p className="mt-2 text-xs text-slate-600">
+                    Para habilitarlo: crear una API key <span className="font-mono">read-only</span> en Neon
+                    (Account settings → API keys) y poner <span className="font-mono">NEON_API_KEY</span> +{' '}
+                    <span className="font-mono">NEON_PROJECT_ID</span> en el servicio kay-chyrris. Opcionales:{' '}
                     <span className="font-mono">NEON_ORG_ID</span>, <span className="font-mono">NEON_COST_PER_CU_HOUR</span>.
                   </p>
-                </ActionHint>
+                )}
               </div>
             ) : (
               <>
@@ -764,13 +817,25 @@ export default function LeadPrimeSystemHealth() {
             </GlowCard>
           </div>
 
-          <GlowCard title="Hot queries (pg_stat_statements)" icon={Database} tone={hotHammer.length > 0 ? 'warn' : 'ok'}>
+          {/* Extensión OPCIONAL: si no está, la tarjeta va en gris ('muted'), no
+              en ámbar — no hay nada roto, solo una función que nunca se activó. */}
+          <GlowCard
+            title="Hot queries (pg_stat_statements)"
+            icon={Database}
+            tone={!infra?.hotQueries.available ? 'muted' : hotHammer.length > 0 ? 'warn' : 'ok'}
+          >
             {!infra?.hotQueries.available ? (
-              <div className="text-sm text-slate-400">
-                <p>pg_stat_statements not enabled on this database.</p>
-                <ActionHint tone="warn">
-                  <p>Optional: enable it in Neon (<span className="font-mono">CREATE EXTENSION pg_stat_statements;</span> + add to <span className="font-mono">shared_preload_libraries</span>) to see which query is hammering the DB.</p>
-                </ActionHint>
+              <div className="text-sm text-slate-500">
+                <p className="flex items-center gap-2">
+                  <MinusCircle className="h-4 w-4 text-slate-600" />
+                  No disponible — la extensión pg_stat_statements no está habilitada.
+                </p>
+                <p className="mt-2 text-xs text-slate-600">
+                  No es un fallo: es una función opcional de diagnóstico. Para verla, en Neon →
+                  Settings → Extensions: <span className="font-mono">CREATE EXTENSION pg_stat_statements;</span>{' '}
+                  y agregarla a <span className="font-mono">shared_preload_libraries</span>. Sirve para
+                  identificar qué query martillea la base.
+                </p>
               </div>
             ) : infra.hotQueries.rows.length === 0 ? (
               <p className="text-sm text-emerald-400">No statements recorded.</p>
@@ -1274,9 +1339,24 @@ export default function LeadPrimeSystemHealth() {
                 </ul>
               )}
             </GlowCard>
-            <GlowCard title="Retry queue" icon={Clock3} tone={retryCount ? 'warn' : 'ok'}>
+            {/* Sin tabla de cola no hay verde que dar: 'muted', no 'ok'. Pintar
+                verde un detector inexistente es peor que no mostrarlo. */}
+            <GlowCard
+              title="Retry queue"
+              icon={Clock3}
+              tone={!billing?.retryQueueBacklog.available ? 'muted' : retryCount ? 'warn' : 'ok'}
+            >
               {!billing?.retryQueueBacklog.available ? (
-                <p className="text-sm text-slate-400">Queue table not present.</p>
+                <div className="text-sm text-slate-500">
+                  <p className="flex items-center gap-2">
+                    <MinusCircle className="h-4 w-4 text-slate-600" />
+                    No disponible — no aplica.
+                  </p>
+                  <p className="mt-2 text-xs text-slate-600">
+                    LeadPrime nunca creó la tabla <span className="font-mono">billing_retry_queue</span>.
+                    Hoy los reintentos de cobro los maneja Stripe, así que no hay backlog local que vigilar.
+                  </p>
+                </div>
               ) : billing.retryQueueBacklog.rows.length === 0 ? (
                 <p className="text-sm text-emerald-400">Empty — no pending retries.</p>
               ) : (
@@ -1294,17 +1374,50 @@ export default function LeadPrimeSystemHealth() {
         </TabsContent>
       </Tabs>
 
-      {/* Degradation notes */}
+      {/* Detector notes — SOLO problemas reales. Las capacidades ausentes se
+          fueron a la tarjeta gris de abajo para que esta lista signifique algo. */}
       {((infra?.notes.length ?? 0) > 0 || (billing?.notes.length ?? 0) > 0 || (spend?.notes.length ?? 0) > 0) && (
-        <Card className="border-slate-700/60">
+        <Card className="border-amber-700/40">
           <CardHeader>
-            <CardTitle className="text-sm text-slate-400">Detector notes</CardTitle>
+            <CardTitle className="text-sm text-amber-300">Detector notes — requieren atención</CardTitle>
           </CardHeader>
           <CardContent>
-            <ul className="list-disc space-y-1 pl-4 text-xs text-slate-500">
+            <ul className="list-disc space-y-1 pl-4 text-xs text-slate-400">
               {infra?.notes.map((n, i) => <li key={`i${i}`}>{n}</li>)}
               {billing?.notes.map((n, i) => <li key={`b${i}`}>{n}</li>)}
               {spend?.notes.map((n, i) => <li key={`s${i}`}>{n}</li>)}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Capacidades no disponibles — informativo, NO es un fallo del sistema. */}
+      {unavailableDetectors.length > 0 && (
+        <Card className="border-slate-800 bg-slate-900/40">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm text-slate-500">
+              <MinusCircle className="h-4 w-4" />
+              No disponible ({unavailableDetectors.length}) — capacidad ausente, no un fallo
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="mb-3 text-xs text-slate-600">
+              Estos detectores están apagados porque la función no existe en esta cuenta o base de
+              datos (extensión sin instalar, tabla que nunca se creó, endpoint que requiere plan de
+              pago). No hay nada roto que arreglar; si se quiere el dato, abajo está el paso exacto.
+            </p>
+            <ul className="space-y-2">
+              {unavailableDetectors.map((n, i) => (
+                <li key={`u${i}`} className="text-xs">
+                  <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[11px] text-slate-400">
+                    {n.detector}
+                  </span>{' '}
+                  <span className="text-slate-500">{n.message}</span>
+                  {n.enableWith && (
+                    <p className="mt-0.5 pl-1 text-[11px] text-slate-600">→ {n.enableWith}</p>
+                  )}
+                </li>
+              ))}
             </ul>
           </CardContent>
         </Card>

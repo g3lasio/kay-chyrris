@@ -32,6 +32,7 @@
  */
 
 import { Pool } from 'pg';
+import { splitNotes, type ClassifiedNote } from './detector-availability';
 
 let infraPool: Pool | null = null;
 
@@ -150,7 +151,10 @@ export interface InfraHealth {
   hotQueries: Detector<HotQueryRow> & { statsResetAt: string | null };
   liveActivity: LiveActivity;
   workers: Detector<WorkerRunRow>;
+  /** Solo problemas reales. Las capacidades ausentes van en `unavailable`. */
   notes: string[];
+  /** Detectores apagados por falta de extensión/tabla/plan — no son fallos. */
+  unavailable: ClassifiedNote[];
 }
 
 // ── Neon consumption (external API) ─────────────────────────────────────────────
@@ -534,6 +538,10 @@ export async function getInfraHealth(): Promise<InfraHealth> {
     getWorkerHeartbeats(pool, notes),
   ]);
 
+  // Las notas se parten aquí: lo que falta por plan/extensión/tabla no es un
+  // fallo y no debe competir por atención con los errores reales.
+  const split = splitNotes(notes);
+
   return {
     generatedAt: new Date().toISOString(),
     autosuspendMinutes: AUTOSUSPEND_MS / 60000,
@@ -542,6 +550,7 @@ export async function getInfraHealth(): Promise<InfraHealth> {
     hotQueries,
     liveActivity,
     workers,
-    notes,
+    notes: split.issues,
+    unavailable: split.unavailable,
   };
 }

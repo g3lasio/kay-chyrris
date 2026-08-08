@@ -589,15 +589,25 @@ export async function evaluateAlerts(probes: ProbeResult[]): Promise<{ raised: n
       // los usuarios dejan de salir. Es la falla más silenciosa y más cara.
       if (typeof svc.balanceUsd === 'number') {
         const critical = Number(process.env.TWILIO_BALANCE_CRITICAL_USD || 20);
-        const warn = Number(process.env.TWILIO_BALANCE_WARN_USD || 50);
+        const fixedWarn = Number(process.env.TWILIO_BALANCE_WARN_USD || 50);
+        // Umbral RELATIVO al gasto proyectado: un saldo de $34 es cómodo si
+        // gastas $10/mes y es una emergencia si gastas $51. El fijo solo actúa
+        // como piso cuando aún no hay proyección.
+        const ratio = Number(process.env.TWILIO_BALANCE_MIN_RATIO || 1.5);
+        const projected = svc.projectedMonthUsd ?? 0;
+        const relativeWarn = projected > 0 ? projected * ratio : 0;
+        const warn = Math.max(fixedWarn, relativeWarn);
         if (svc.balanceUsd <= warn) {
           await fire({
             key: `low_balance:${name}`,
             severity: svc.balanceUsd <= critical ? 'critical' : 'warning',
             source: 'balance',
             title: `SALDO BAJO — ${label(name)}: $${svc.balanceUsd.toFixed(2)}`,
-            detail: `Al agotarse el saldo dejan de enviarse SMS y llamadas de TODOS los usuarios. ` +
-              `Gasto proyectado del mes: $${(svc.projectedMonthUsd ?? 0).toFixed(2)}. Recarga la cuenta.`,
+            detail:
+              `Al agotarse el saldo dejan de enviarse SMS y llamadas de TODOS los usuarios a la vez. ` +
+              `Saldo $${svc.balanceUsd.toFixed(2)} vs gasto proyectado del mes $${projected.toFixed(2)}` +
+              (projected > 0 ? ` (${(svc.balanceUsd / projected).toFixed(2)}x — el mínimo sano es ${ratio}x)` : '') +
+              `. Recarga la cuenta.`,
           });
         }
       }
