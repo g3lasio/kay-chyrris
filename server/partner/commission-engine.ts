@@ -639,19 +639,31 @@ export async function fetchReferredUsersInfo(
   const result = new Map<string, ReferredUserInfo>();
   if (contractorIds.length === 0) return result;
   const pool = getLeadPrimePool();
-  // base_price_cents is the plan's monthly cost (used for the dashboard's
-  // "plan + cost" column). It is billing config, not the contractor's PII.
+  // El costo del plan es config de facturación (columna "plan + costo" del panel
+  // de socios), no PII del contratista.
+  //
+  // Sale del CATÁLOGO del plan, no de subscriptions.base_price_cents: esa
+  // columna tiene DEFAULT 1500, así que un referido en Pay-As-You-Go —que no
+  // paga mensualidad— se le mostraba al socio como un plan de $15.
   const res = await pool.query(
     `SELECT c.id,
             COALESCE(NULLIF(TRIM(cp.business_name), ''), NULLIF(TRIM(c.company_name), ''), NULLIF(TRIM(c.name), '')) AS business_name,
-            s.plan, s.status AS sub_status, s.base_price_cents
+            s.plan, s.status AS sub_status, s.price_cents
      FROM contractors c
      LEFT JOIN company_profiles cp ON cp.contractor_id = c.id
      LEFT JOIN LATERAL (
-       SELECT COALESCE(NULLIF(TRIM(plan_name), ''), plan) AS plan, status, base_price_cents
-       FROM subscriptions
-       WHERE contractor_id = c.id
-       ORDER BY CASE status
+       SELECT COALESCE(NULLIF(TRIM(sub.plan_name), ''), sub.plan) AS plan,
+              sub.status,
+              COALESCE(
+                CASE WHEN csc.billing_mode = 'external_zelle' AND csc.status = 'applied'
+                     THEN COALESCE(NULLIF(csc.monthly_price_cents, 0), pd.monthly_price_cents)
+                     ELSE pd.monthly_price_cents END, 0) AS price_cents
+       FROM subscriptions sub
+       LEFT JOIN plan_definitions pd ON pd.plan_name = sub.plan_name
+       LEFT JOIN contractor_subscription_config csc
+              ON csc.contractor_id = sub.contractor_id AND csc.enabled = true
+       WHERE sub.contractor_id = c.id
+       ORDER BY CASE sub.status
          WHEN 'active' THEN 0
          WHEN 'trialing' THEN 1
          WHEN 'past_due' THEN 2
@@ -668,7 +680,7 @@ export async function fetchReferredUsersInfo(
       businessName: row.business_name ?? null,
       plan: row.plan ?? null,
       subscriptionStatus: row.sub_status ?? null,
-      planPriceCents: row.base_price_cents != null ? parseInt(row.base_price_cents, 10) : null,
+      planPriceCents: row.price_cents != null ? parseInt(row.price_cents, 10) : null,
     });
   }
   return result;

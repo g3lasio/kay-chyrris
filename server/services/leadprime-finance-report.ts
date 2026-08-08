@@ -33,6 +33,7 @@ import {
   metaFor,
   FREE_CREDIT_TYPES,
   REAL_CAC_TYPES,
+  PLAN_PRICE_CENTS_SQL,
   type Category,
 } from './leadprime-finance';
 
@@ -366,16 +367,28 @@ async function subsAndRisk(
   const startIso = period.start.toISOString();
 
   // Snapshot (active now) + new/churned bounded to the period.
+  // El precio sale del CATÁLOGO del plan, igual que leadprime-mrr.ts. Sumar
+  // subscriptions.base_price_cents (DEFAULT 1500) hacía valer $15/mes a TODA
+  // cuenta, incluidas las Pay-As-You-Go que no pagan mensualidad — el reporte
+  // exportable habría contradicho a la pantalla ya corregida.
   try {
     const r = await pool.query(
-      `SELECT
+      `WITH priced AS (
+         SELECT s.status, s.created_at, s.canceled_at,
+                ${PLAN_PRICE_CENTS_SQL} AS price_cents
+           FROM subscriptions s
+           LEFT JOIN plan_definitions pd ON pd.plan_name = s.plan_name
+           LEFT JOIN contractor_subscription_config csc
+                  ON csc.contractor_id = s.contractor_id AND csc.enabled = true
+       )
+       SELECT
          COUNT(*) FILTER (WHERE status IN ('active','trialing'))                                  AS active_count,
-         COALESCE(SUM(base_price_cents) FILTER (WHERE status IN ('active','trialing')),0)         AS active_cents,
+         COALESCE(SUM(price_cents) FILTER (WHERE status IN ('active','trialing')),0)              AS active_cents,
          COUNT(*) FILTER (WHERE created_at >= $1 AND status IN ('active','trialing'))             AS new_count,
-         COALESCE(SUM(base_price_cents) FILTER (WHERE created_at >= $1 AND status IN ('active','trialing')),0) AS new_cents,
+         COALESCE(SUM(price_cents) FILTER (WHERE created_at >= $1 AND status IN ('active','trialing')),0) AS new_cents,
          COUNT(*) FILTER (WHERE canceled_at >= $1)                                                AS churned_count,
-         COALESCE(SUM(base_price_cents) FILTER (WHERE canceled_at >= $1),0)                       AS churned_cents
-       FROM subscriptions`,
+         COALESCE(SUM(price_cents) FILTER (WHERE canceled_at >= $1),0)                            AS churned_cents
+       FROM priced`,
       [startIso]
     );
     const row = r.rows[0] || {};
@@ -397,9 +410,13 @@ async function subsAndRisk(
   // At-risk book (snapshot, as of now).
   try {
     const r = await pool.query(
-      `SELECT s.status, s.base_price_cents, s.cancel_at_period_end, c.name, c.email
+      `SELECT s.status, s.cancel_at_period_end, c.name, c.email,
+              ${PLAN_PRICE_CENTS_SQL} AS price_cents
          FROM subscriptions s
          LEFT JOIN contractors c ON c.id = s.contractor_id
+         LEFT JOIN plan_definitions pd ON pd.plan_name = s.plan_name
+         LEFT JOIN contractor_subscription_config csc
+                ON csc.contractor_id = s.contractor_id AND csc.enabled = true
         WHERE s.status IN ('past_due','unpaid','incomplete')
            OR (s.cancel_at_period_end = true AND s.status IN ('active','trialing'))`
     );
@@ -408,7 +425,7 @@ async function subsAndRisk(
     let cancelMrr = 0;
     for (const row of r.rows) {
       const status = String(row.status);
-      const mrrUsd = round(Number(row.base_price_cents || 0) / 100);
+      const mrrUsd = round(Number(row.price_cents || 0) / 100);
       const reason = dunning.has(status) ? 'dunning' : 'cancel_scheduled';
       if (reason === 'dunning') {
         dunningMrr += mrrUsd;
