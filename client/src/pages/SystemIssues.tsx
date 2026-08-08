@@ -163,6 +163,14 @@ export default function SystemIssues() {
 
   const stats = statsQuery.data?.data;
   const issues: SystemIssue[] = (issuesQuery.data?.data as SystemIssue[]) ?? [];
+  // El router devuelve {success:false, data:[]} cuando la consulta revienta. Sin
+  // mirar este flag, un error se renderizaba idéntico a "no hay nada".
+  const issuesError =
+    issuesQuery.data?.success === false
+      ? issuesQuery.data?.error || 'error desconocido'
+      : issuesQuery.error
+        ? issuesQuery.error.message
+        : null;
   const total = issuesQuery.data?.total ?? 0;
   const newCount = stats?.byStatus?.new ?? 0;
 
@@ -362,6 +370,24 @@ export default function SystemIssues() {
       {/* Issues List */}
       {issuesQuery.isLoading ? (
         <div className="text-center text-muted-foreground py-12">Loading issues...</div>
+      ) : issuesError ? (
+        // Un fallo de la consulta NO puede verse como "no hay issues": exactamente
+        // eso escondió la regresión del agrupado — 139 issues en los contadores y
+        // la lista diciendo que el agente nunca había reportado nada.
+        <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-6 text-center">
+          <AlertTriangle className="h-10 w-10 mx-auto mb-3 text-red-400" />
+          <p className="font-medium text-red-300">No se pudo cargar la lista de issues</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            La consulta falló — esto NO significa que no haya issues. Los contadores de arriba
+            vienen de otra consulta y siguen siendo válidos.
+          </p>
+          <pre className="mt-3 overflow-x-auto rounded bg-muted/50 p-3 text-left text-xs text-red-300">
+            {issuesError}
+          </pre>
+          <Button variant="outline" size="sm" className="mt-3" onClick={() => issuesQuery.refetch()}>
+            Reintentar
+          </Button>
+        </div>
       ) : issues.length === 0 ? (
         <div className="text-center text-muted-foreground py-12">
           <CheckCircle2 className="h-10 w-10 mx-auto mb-3 text-green-400 opacity-50" />
