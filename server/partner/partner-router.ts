@@ -411,7 +411,19 @@ export const partnerAdminRouter = router({
     .query(async ({ input }) => {
       const detail = await adminGetPartnerDetail(input.partnerId);
       if (!detail) throw new TRPCError({ code: "NOT_FOUND", message: "Socio no encontrado" });
-      return detail;
+      // El link corto viaja YA ARMADO. Cuando la ficha lo construía por su
+      // cuenta quedó pegada al prefijo /r/, que en LeadPrime atiende
+      // ReviewPilot: todos los links copiados desde aquí daban 404 y el
+      // programa de socios llevaba así desde su lanzamiento.
+      const settings = await getPortalSettings();
+      return {
+        ...detail,
+        partner: {
+          ...detail.partner,
+          shortReferralLink: buildShortReferralLink(detail.partner.referralCode, settings.shortLinkBase),
+          referralLink: buildReferralLink(detail.partner.referralCode),
+        },
+      };
     }),
 
   update: protectedProcedure

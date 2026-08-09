@@ -637,6 +637,26 @@ export const appRouter = router({
         }
       }),
 
+    // Salud del programa de socios. Existe porque el programa llevaba desde su
+    // lanzamiento con cero atribuciones y NADIE se enteró: "Referidos 0" se ve
+    // igual que "el socio no ha compartido su link". Comprueba de verdad que el
+    // link corto redirija, en vez de suponerlo.
+    partnerReferralHealth: protectedProcedure
+      .query(async () => {
+        try {
+          const { getPartnerReferralHealth } = await import('./services/partner-referral-health');
+          const { getKaiPool } = await import('./db');
+          const { getLeadPrimePool } = await import('./services/leadprime-finance');
+          const kaiPool = await getKaiPool();
+          if (!kaiPool) return { success: false, error: 'BD de Kai no disponible', data: null };
+          const data = await getPartnerReferralHealth(kaiPool, getLeadPrimePool());
+          return { success: true, data };
+        } catch (error: any) {
+          console.error('[LeadPrime Router] Error fetching partner referral health:', error);
+          return { success: false, error: error.message, data: null };
+        }
+      }),
+
     // Read-only infra & cost health — Neon compute consumption, cost-per-user
     // ratio, hot queries, live activity, and worker heartbeats. NEVER mutates
     // anything; only SELECTs system catalogs + GETs the Neon consumption API.

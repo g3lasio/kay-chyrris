@@ -82,16 +82,34 @@ describe("referral link", () => {
   });
 });
 
+/**
+ * Estos tests ANTES fijaban el comportamiento roto: afirmaban que el link se
+ * construía como /r/<code> y pasaban en verde mientras TODOS los links de
+ * TODOS los socios devolvían 404 en producción. El motivo es instructivo:
+ * comprobaban el generador contra sí mismo, nunca contra la ruta que debía
+ * servirlo. En LeadPrime `/r` lo atiende ReviewPilot.
+ *
+ * Ahora el prefijo esperado es /ref/, que es el que LeadPrime registra de
+ * verdad (backend/src/routes/partnerReferralLink.ts, montado en server.ts).
+ * El enrutado en sí se verifica del otro lado, montando Express y pidiendo la
+ * URL — aquí solo se fija el contrato del prefijo.
+ */
 describe("short referral link (social bios)", () => {
-  it("builds leadprime.chyrris.com/r/<code> lowercased", () => {
-    expect(buildShortReferralLink("PRIME")).toBe("https://leadprime.chyrris.com/r/prime");
+  it("builds leadprime.chyrris.com/ref/<code> lowercased", () => {
+    expect(buildShortReferralLink("PRIME")).toBe("https://leadprime.chyrris.com/ref/prime");
+  });
+
+  it("NO usa /r/ — ese prefijo lo ocupa ReviewPilot y devuelve 404", () => {
+    // El bug exacto: un código de socio entraba por /r/, el buscador de reseñas
+    // no lo encontraba y la página moría en "Enlace no válido".
+    expect(buildShortReferralLink("PRIME")).not.toMatch(/\/r\/[^/]+$/);
   });
 
   it("uses the admin-configured base and trims trailing slashes", () => {
-    expect(buildShortReferralLink("PRIME", "https://lp.example.com/")).toBe("https://lp.example.com/r/prime");
+    expect(buildShortReferralLink("PRIME", "https://lp.example.com/")).toBe("https://lp.example.com/ref/prime");
   });
 
-  it("attributes case-insensitively — short /r/prime resolves the same as ?ref=PRIME", () => {
+  it("attributes case-insensitively — short /ref/prime resolves the same as ?ref=PRIME", () => {
     // Both links carry the code; the engine's findPartnerByCode compares
     // case-insensitively, so the lowercased short link resolves PRIME.
     expect(buildShortReferralLink("prime")).toBe(buildShortReferralLink("PRIME"));

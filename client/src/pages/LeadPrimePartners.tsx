@@ -418,7 +418,8 @@ function PortalSettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCha
               <label className="text-sm font-medium">Base del link corto de referido</label>
               <Input value={shortBase} onChange={e => setShortBase(e.target.value)} placeholder="https://leadprime.chyrris.com" />
               <p className="text-xs text-muted-foreground">
-                Se muestra como leadprime.chyrris.com/r/CODIGO. El redirect /r/CODE vive en el repo de LeadPrime.
+                Se muestra como leadprime.chyrris.com/ref/CODIGO. La ruta /ref/:code vive en el repo de
+                LeadPrime y guarda la atribución. Los links /r/CODIGO ya repartidos siguen funcionando.
               </p>
             </div>
             <div className="space-y-1">
@@ -597,6 +598,12 @@ function EditPartnerDialog({
     contactEmail: string;
     contactPhone: string | null;
     referralCode: string;
+    /**
+     * Link corto YA ARMADO por el servidor (buildShortReferralLink). Se usa tal
+     * cual: cuando la UI lo construía por su cuenta, el prefijo dejó de
+     * coincidir con la ruta real de LeadPrime y todos los links quedaron en 404.
+     */
+    shortReferralLink?: string;
     tierYear1Pct: string;
     tierYear2Pct: string;
     freeAccountThreshold: number;
@@ -947,7 +954,13 @@ function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClos
                 variant="outline"
                 onClick={() =>
                   navigator.clipboard
-                    .writeText(`https://leadprime.chyrris.com/r/${partner.referralCode.toLowerCase()}`)
+                    // Del SERVIDOR, no armado aquí: esta línea tenía el prefijo
+                    // /r/ escrito a mano y quedó desincronizada de la ruta real
+                    // de LeadPrime, así que todos los links copiados daban 404.
+                    .writeText(
+                      partner.shortReferralLink ??
+                        `https://leadprime.chyrris.com/ref/${partner.referralCode.toLowerCase()}`
+                    )
                     .then(() => toast.success("Link corto de referido copiado"))
                 }
               >

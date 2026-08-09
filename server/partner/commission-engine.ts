@@ -114,16 +114,26 @@ export function buildReferralLink(referralCode: string): string {
 }
 
 /**
- * Pretty SHORT referral link for social bios (leadprime.chyrris.com/r/CODE).
- * The /r/CODE redirect that turns this into ?ref=CODE lives in the LeadPrime
- * app (its own domain/repo), NOT here — Kai only DISPLAYS this link. The code
- * is lowercased for a clean look; attribution is case-insensitive, so
- * /r/prime resolves the same partner as ?ref=PRIME. Base is admin-configurable
- * (app_settings) with a default; pass it in when settings are available.
+ * Link corto de referido para bios y redes (leadprime.chyrris.com/ref/CODE).
+ *
+ * APUNTABA A UNA RUTA QUE NO EXISTÍA. Este generador emitía `/r/CODE` dando por
+ * hecho que LeadPrime tenía ahí un redirect de referidos. No lo tenía: `/r` lo
+ * atiende ReviewPilot (páginas de reseña), el código de socio no existe como
+ * token de reseña y la página devolvía 404 "Enlace no válido" — con el <title>
+ * "Tu opinión" delatando quién servía la ruta. Por eso el programa llevaba
+ * desde su lanzamiento con cero atribuciones para TODOS los socios.
+ *
+ * Ahora se emite `/ref/CODE`, prefijo propio que no choca con nada. Los links
+ * `/r/CODE` que los socios ya repartieron siguen funcionando: LeadPrime los
+ * resuelve como código de socio antes de dar 404.
+ *
+ * El código va en minúsculas por estética; la atribución es case-insensitive
+ * (findPartnerByCode compara con UPPER), así que /ref/campos resuelve el mismo
+ * socio que ?ref=CAMPOS. La base es configurable desde el admin (app_settings).
  */
 export function buildShortReferralLink(referralCode: string, base?: string): string {
   const b = (base || process.env.REFERRAL_SHORT_LINK_BASE || "https://leadprime.chyrris.com").replace(/\/+$/, "");
-  return `${b}/r/${encodeURIComponent(referralCode.toLowerCase())}`;
+  return `${b}/ref/${encodeURIComponent(referralCode.toLowerCase())}`;
 }
 
 /** Validate a referral code → partner (case-insensitive), or null. */
