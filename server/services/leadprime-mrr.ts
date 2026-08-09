@@ -375,8 +375,15 @@ export async function getRecurringRevenue(pool: Pool): Promise<RecurringRevenue>
           ? 'stripe'
           : 'manual';
 
+      // Si Stripe CONFIRMA una suscripción activa, el método es stripe — no
+      // hace falta que nadie lo etiquete a mano. "Sin método" debe quedar solo
+      // para las que de verdad no se sabe cómo se cobran; si ya se verificó que
+      // Stripe las está cobrando, decir "sin método" es información falsa.
+      const effectiveMethod: BillingMethod =
+        method === 'unknown' && billingSource === 'stripe' ? 'stripe' : method;
+
       out.lines.push({
-        method,
+        method: effectiveMethod,
         contractorId: row.contractor_id,
         planName: row.plan_name || 'desconocido',
         monthlyUsd: Math.round(monthlyUsd * 100) / 100,
@@ -387,7 +394,7 @@ export async function getRecurringRevenue(pool: Pool): Promise<RecurringRevenue>
         stripeMonthlyUsd: match?.monthlyUsd ?? null,
         // Sin método registrado: cuenta como MRR (no borramos ingreso por falta
         // de una etiqueta) pero se marca para que alguien se lo asigne.
-        needsReview: method === 'unknown',
+        needsReview: effectiveMethod === 'unknown',
         email: row.email,
         businessName: row.business_name,
       });
@@ -398,9 +405,9 @@ export async function getRecurringRevenue(pool: Pool): Promise<RecurringRevenue>
         out.manualMrrUsd += monthlyUsd;
         out.manualSubscriptions += 1;
       }
-      out.byMethod[method] = {
-        mrrUsd: (out.byMethod[method]?.mrrUsd ?? 0) + monthlyUsd,
-        subscriptions: (out.byMethod[method]?.subscriptions ?? 0) + 1,
+      out.byMethod[effectiveMethod] = {
+        mrrUsd: (out.byMethod[effectiveMethod]?.mrrUsd ?? 0) + monthlyUsd,
+        subscriptions: (out.byMethod[effectiveMethod]?.subscriptions ?? 0) + 1,
       };
       if (billingSource === 'stripe') {
         out.stripeMrrUsd += monthlyUsd;

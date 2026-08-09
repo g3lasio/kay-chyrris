@@ -50,6 +50,12 @@ export interface PartnerReferralHealth {
    * perfectamente — y las invitaciones tampoco salen.
    */
   emailChannel: { ok: boolean; note?: string };
+  /**
+   * Clientes aprobados que PAGARON pero quedaron a medias: sin cuenta creada o
+   * sin sus créditos. Es el fallo más caro posible — el cliente pagó y no
+   * recibió nada — y hasta ahora era invisible.
+   */
+  approvedStuck: Array<{ id: number; company: string; email: string; status: string; problem: string }>;
   /** Resumen accionable para la UI: null = todo bien. */
   verdict: { level: 'ok' | 'warn' | 'alarm'; reason: string } | null;
 }
@@ -69,6 +75,7 @@ export async function getPartnerReferralHealth(
     pendingAttributions: 0,
     linkCheck: { checked: false, ok: true },
     emailChannel: { ok: true },
+    approvedStuck: [],
     verdict: null,
   };
 
@@ -133,6 +140,7 @@ export async function getPartnerReferralHealth(
       out.linkCheck = await probeReferralLink(url);
     }
 
+    out.approvedStuck = await findStuckApprovedClients(leadPrimePool);
     out.emailChannel = await checkEmailChannel(kaiPool);
     out.verdict = buildVerdict(out);
     out.available = true;
@@ -203,7 +211,63 @@ async function checkEmailChannel(kaiPool: Pool): Promise<{ ok: boolean; note?: s
   }
 }
 
+/**
+ * Clientes aprobados que pagaron y se quedaron a medias.
+ *
+ * Antes de la activación automática, ESTO era el estado normal: el cliente
+ * pagaba y nada más ocurría. Ahora debería ser siempre cero; si aparece algo,
+ * es que la activación falló y hay alguien pagando sin recibir su plan.
+ */
+async function findStuckApprovedClients(
+  pool: Pool
+): Promise<PartnerReferralHealth['approvedStuck']> {
+  try {
+    const r = await pool.query(
+      `SELECT ac.id, ac.company_name, ac.email, ac.status, ac.contractor_id,
+              EXISTS (
+                SELECT 1 FROM wallet_transactions wt
+                 WHERE wt.contractor_id = ac.contractor_id
+                   AND wt.type = 'subscription_recharge'
+              ) AS has_credits
+         FROM approved_clients ac
+        WHERE ac.status IN ('payment_confirmed', 'onboarding_active', 'active')
+        ORDER BY ac.updated_at DESC
+        LIMIT 50`
+    );
+    const out: PartnerReferralHealth['approvedStuck'] = [];
+    for (const row of r.rows) {
+      const problem = !row.contractor_id
+        ? 'pagó pero NO tiene cuenta creada'
+        : !row.has_credits
+          ? 'tiene cuenta pero NO recibió los créditos del plan'
+          : null;
+      if (problem) {
+        out.push({
+          id: row.id,
+          company: row.company_name ?? '(sin empresa)',
+          email: row.email,
+          status: row.status,
+          problem,
+        });
+      }
+    }
+    return out;
+  } catch {
+    // Tabla ausente o sin permisos: no es un fallo del detector.
+    return [];
+  }
+}
+
 function buildVerdict(h: PartnerReferralHealth): PartnerReferralHealth['verdict'] {
+  // Lo más caro primero: alguien pagó y no recibió lo que compró.
+  if (h.approvedStuck.length > 0) {
+    return {
+      level: 'alarm',
+      reason:
+        `${h.approvedStuck.length} cliente(s) aprobados pagaron y quedaron a medias: ` +
+        h.approvedStuck.map((c) => `${c.company} (${c.problem})`).join('; '),
+    };
+  }
   if (h.linkCheck.checked && !h.linkCheck.ok) {
     return {
       level: 'alarm',

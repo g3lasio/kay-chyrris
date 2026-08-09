@@ -335,6 +335,7 @@ export default function LeadPrimeSystemHealth() {
         pendingAttributions: number;
         linkCheck: { checked: boolean; url?: string; status?: number; ok: boolean; note?: string };
         emailChannel: { ok: boolean; note?: string };
+        approvedStuck: Array<{ id: number; company: string; email: string; status: string; problem: string }>;
         verdict: { level: 'ok' | 'warn' | 'alarm'; reason: string } | null;
       }
     | null
@@ -1507,6 +1508,24 @@ export default function LeadPrimeSystemHealth() {
                     </>
                   )}
                 </div>
+
+                {/* Lo más caro que puede pasar: alguien pagó y no recibió su
+                    plan. Antes de la activación automática esto era el estado
+                    normal y nadie lo veía. */}
+                {(partners.approvedStuck?.length ?? 0) > 0 && (
+                  <ActionHint tone="alarm">
+                    <p className="font-semibold text-slate-200">
+                      Clientes que PAGARON y quedaron a medias
+                    </p>
+                    <ul className="mt-1 space-y-0.5">
+                      {partners.approvedStuck.map((c) => (
+                        <li key={c.id}>
+                          <b>{c.company}</b> ({c.email}) — {c.problem}
+                        </li>
+                      ))}
+                    </ul>
+                  </ActionHint>
+                )}
 
                 {!partners.emailChannel.ok && (
                   <ActionHint tone="warn">
