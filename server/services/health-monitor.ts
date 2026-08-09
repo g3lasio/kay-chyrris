@@ -20,6 +20,7 @@
  * servidor; todo va envuelto en try/catch y se registra.
  */
 import { Pool } from 'pg';
+import { isScopeLimited } from './api-key-scope';
 
 // ─── Configuración ────────────────────────────────────────────────────────────
 
@@ -49,6 +50,12 @@ export interface ProbeResult {
    * inválida no se arregla sola por más veces que se reintente.
    */
   authFailure?: boolean;
+  /**
+   * La key es VÁLIDA pero con permisos acotados para lo que se pidió. Cuenta
+   * como sonda correcta: el proveedor respondió y autenticó. Se conserva la
+   * marca solo para poder explicarlo en el panel.
+   */
+  scopeLimited?: boolean;
 }
 
 /**
@@ -141,13 +148,20 @@ async function httpProbe(
     const resp = await fetch(url, { ...init, signal: controller.signal });
     const latencyMs = Date.now() - started;
     const okStatuses = init.okStatuses ?? [];
-    const ok = resp.ok || okStatuses.includes(resp.status);
+    let ok = resp.ok || okStatuses.includes(resp.status);
     let error: string | null = null;
+    let scopeLimited = false;
     if (!ok) {
       const body = await resp.text().catch(() => '');
+      // Una key VÁLIDA con permisos acotados no es un proveedor caído. Leer ese
+      // 401 como caída es lo que produjo cientos de alertas falsas de Resend.
+      if (isScopeLimited(resp.status, body)) {
+        scopeLimited = true;
+        ok = true; // el proveedor respondió y autenticó: no hay nada roto
+      }
       error = `HTTP ${resp.status}${body ? ` — ${body.slice(0, 200)}` : ''}`;
     }
-    return { provider, ok, latencyMs, statusCode: resp.status, error };
+    return { provider, ok, latencyMs, statusCode: resp.status, error, scopeLimited };
   } catch (e: any) {
     const latencyMs = Date.now() - started;
     const aborted = e?.name === 'AbortError';
@@ -260,11 +274,25 @@ export async function probeAllProviders(): Promise<ProbeResult[]> {
       })
     : Promise.resolve(skipped('stripe', 'STRIPE_SECRET_KEY no configurada')));
 
-  // Resend — dominios (valida la key de envío).
+  // Resend — se valida la capacidad de ENVÍO, que es la que nos importa.
+  //
+  // Antes se pedía `GET /domains`, una operación de LECTURA. La key está
+  // restringida a envío, así que Resend respondía 401 "restricted_api_key: This
+  // API key is restricted to only send emails" — o sea, la key estaba PERFECTA
+  // y la sonda preguntaba lo que no debía. De ahí salieron cientos de fallos
+  // consecutivos y un "⛔ CANAL DE ALERTAS CAÍDO" que era falso.
+  //
+  // Ahora se hace POST /emails con cuerpo VACÍO: la autenticación se evalúa
+  // antes que el contenido, así que un 422/400 de validación demuestra que la
+  // key SÍ puede enviar — y no se manda ningún correo, porque sin `to` ni
+  // `from` la petición nunca llega a entregarse.
   const resendKey = process.env.RESEND_API_KEY;
   probes.push(resendKey
-    ? httpProbe('resend', 'https://api.resend.com/domains', {
-        headers: { Authorization: `Bearer ${resendKey}` },
+    ? httpProbe('resend', 'https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
+        body: '{}',
+        okStatuses: [400, 422], // validación fallida = autenticación correcta
       })
     : Promise.resolve(skipped('resend', 'RESEND_API_KEY no configurada')));
 
@@ -441,8 +469,9 @@ async function escalateUndeliverable(original: AlertInput): Promise<void> {
       `Ni SMS ni email pudieron entregar la alerta "${original.title}". ` +
       `Fallos consecutivos — SMS: ${channelFailures.sms}, email: ${channelFailures.email}. ` +
       `Mientras esto siga así, NINGUNA alerta llega: el panel es la única fuente de verdad. ` +
-      `Revisa RESEND_API_KEY (necesita permiso de ENVÍO, no solo lectura), OWNER_ALERT_EMAIL, ` +
-      `OWNER_ALERT_PHONE y las credenciales de Twilio.`;
+      `Estos contadores solo suben con envíos REALES fallidos (POST /emails), no con sondas: ` +
+      `revisa OWNER_ALERT_EMAIL, OWNER_ALERT_PHONE, ALERT_FROM_EMAIL (el dominio debe estar ` +
+      `verificado en Resend) y las credenciales de Twilio.`;
     await pool.query(
       `INSERT INTO system_alerts (alert_key, severity, source, title, detail, status)
        VALUES ($1, 'critical', 'alert_channel', $2, $3, 'open')
@@ -596,11 +625,14 @@ export async function evaluateAlerts(probes: ProbeResult[]): Promise<{ raised: n
         title: isAlertChannel
           ? `⛔ CANAL DE ALERTAS CAÍDO — ${label(p.provider)} rechaza los envíos`
           : `${label(p.provider)} NO RESPONDE`,
+        // El texto anterior afirmaba que un `restricted_api_key` significaba
+        // "la key NO tiene permiso de envío" y mandaba a rotarla. Es al revés:
+        // ese error dice que la key SOLO puede enviar. Esa lectura invertida
+        // generó cientos de alertas falsas y una recomendación equivocada. Un
+        // 401 de alcance ya ni siquiera llega aquí (isScopeLimited lo marca
+        // como sonda correcta), así que el texto ya no lo menciona.
         detail: isAlertChannel
-          ? `${fails} sondas consecutivas fallidas. ${is401
-              ? 'HTTP 401: la API key existe pero NO tiene permiso de ENVÍO (restricted_api_key). ' +
-                'Genera una key con permiso "Sending access" en resend.com/api-keys y actualiza RESEND_API_KEY.'
-              : `Último error: ${p.error ?? 'desconocido'}`} ` +
+          ? `${fails} sondas consecutivas fallidas. Último error: ${p.error ?? 'desconocido'}. ` +
             `Mientras siga así NINGUNA alerta por correo llega y el panel es la única fuente de verdad.`
           : `${fails} sondas consecutivas fallidas. Último error: ${p.error ?? 'desconocido'}`,
       });
@@ -843,6 +875,10 @@ export function startHealthMonitor(): void {
     console.log('[HealthMonitor] DESACTIVADO por HEALTH_MONITOR_ENABLED=false');
     return;
   }
+  // Las alertas de Resend salían de leer un 401 de ALCANCE como si fuera una
+  // caída. Se cierran al arrancar para que el panel no siga mintiendo hasta el
+  // primer ciclo.
+  clearScopeFalsePositives().catch(() => { /* ya se registra dentro */ });
   // Primer ciclo poco después del arranque (deja que el servidor termine de subir).
   setTimeout(() => { runHealthCycle().catch(() => { /* ya se registra dentro */ }); }, 30_000);
   timer = setInterval(() => { runHealthCycle().catch(() => { /* ya se registra dentro */ }); }, PROBE_INTERVAL_MS);
@@ -919,6 +955,130 @@ export interface SystemAlert {
   lastSeenAt: string;
   notifiedAt: string | null;
   resolvedAt: string | null;
+}
+
+export interface AlertDeliveryReport {
+  /** Alertas con `notified_at`: PRUEBA de que un canal entregó de verdad. */
+  delivered: number;
+  /** Alertas que nunca se notificaron (incluye las que no alcanzaron el umbral). */
+  neverNotified: number;
+  lastDeliveredAt: string | null;
+  lastDeliveredTitle: string | null;
+  /** Sondas fallidas de Resend que en realidad eran de ALCANCE, no caídas. */
+  falseResendFailures: number;
+  /** Conclusión en una línea, para no obligar a interpretar los números. */
+  verdict: string;
+}
+
+/**
+ * ¿Los correos de alerta SE ESTÁN ENTREGANDO?
+ *
+ * La pregunta no la responde la sonda —que era la que estaba mal— sino
+ * `notified_at`: ese campo solo se escribe cuando notify() devolvió true, o
+ * sea cuando SMS o email entregaron de verdad. Es la diferencia entre "el
+ * detector decía que el canal estaba muerto" y "el canal está muerto".
+ */
+export async function getAlertDeliveryReport(): Promise<AlertDeliveryReport> {
+  await ensureMonitorTables();
+  const pool = getMonitorPool();
+  const out: AlertDeliveryReport = {
+    delivered: 0,
+    neverNotified: 0,
+    lastDeliveredAt: null,
+    lastDeliveredTitle: null,
+    falseResendFailures: 0,
+    verdict: '',
+  };
+
+  const counts = await pool.query(
+    `SELECT COUNT(*) FILTER (WHERE notified_at IS NOT NULL)::int AS delivered,
+            COUNT(*) FILTER (WHERE notified_at IS NULL)::int     AS never_notified
+       FROM system_alerts`
+  );
+  out.delivered = counts.rows[0]?.delivered ?? 0;
+  out.neverNotified = counts.rows[0]?.never_notified ?? 0;
+
+  const last = await pool.query(
+    `SELECT title, notified_at FROM system_alerts
+      WHERE notified_at IS NOT NULL ORDER BY notified_at DESC LIMIT 1`
+  );
+  if (last.rows[0]) {
+    out.lastDeliveredAt = new Date(last.rows[0].notified_at).toISOString();
+    out.lastDeliveredTitle = last.rows[0].title;
+  }
+
+  // Sondas de Resend que fallaron por ALCANCE (restricted_api_key): medición
+  // equivocada, no caída. Se cuentan para poder decir cuánto del histórico era
+  // ruido.
+  const falseFails = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM provider_probes
+      WHERE provider = 'resend' AND ok = false
+        AND (error ILIKE '%restricted_api_key%' OR error ILIKE '%restricted to only send%')`
+  );
+  out.falseResendFailures = falseFails.rows[0]?.n ?? 0;
+
+  out.verdict = out.delivered > 0
+    ? `El correo SÍ entrega: ${out.delivered} alerta(s) con entrega confirmada` +
+      (out.lastDeliveredAt ? `, la última el ${new Date(out.lastDeliveredAt).toLocaleString('es-MX')}.` : '.') +
+      (out.falseResendFailures > 0
+        ? ` Las ${out.falseResendFailures} sondas fallidas de Resend eran de ALCANCE (la key solo puede enviar y se le pedía leer), no caídas.`
+        : '')
+    : out.falseResendFailures > 0
+      ? `Ninguna alerta registra entrega confirmada, PERO las ${out.falseResendFailures} sondas fallidas de Resend eran de alcance, no caídas. ` +
+        `Usa "Probar envío ahora" para saberlo con certeza.`
+      : `Ninguna alerta registra entrega confirmada todavía. Usa "Probar envío ahora" para comprobarlo.`;
+
+  return out;
+}
+
+/**
+ * Envío de prueba REAL al correo de alertas del dueño. Es la única forma
+ * concluyente de responder "¿llegan los correos?": una sonda comprueba
+ * permisos, esto comprueba entrega. Manual a propósito — nunca automático.
+ */
+export async function sendTestAlertEmail(): Promise<{ ok: boolean; detail: string }> {
+  const to = process.env.OWNER_ALERT_EMAIL;
+  if (!process.env.RESEND_API_KEY) return { ok: false, detail: 'RESEND_API_KEY no está configurada.' };
+  if (!to) return { ok: false, detail: 'OWNER_ALERT_EMAIL no está configurado: no hay a quién enviar.' };
+  const ok = await sendAlertEmail(
+    '✅ Chyrris KAI — prueba de canal de alertas',
+    'Si estás leyendo esto, el canal de correo funciona y las alertas SÍ pueden llegar.\n\n' +
+      'Se envió manualmente desde System Health para verificar la entrega, no por una alerta real.'
+  );
+  return {
+    ok,
+    detail: ok
+      ? `Enviado a ${to}. Si llega, el canal de correo está sano y cualquier alerta previa de "canal caído" era un falso positivo de la sonda.`
+      : `El envío falló. Revisa los logs del servidor: el error real de Resend queda ahí (dominio sin verificar en ALERT_FROM_EMAIL es la causa más común).`,
+  };
+}
+
+/**
+ * Cierra las alertas abiertas que provenían de leer mal un 401 de alcance.
+ * Se ejecuta al arrancar: si la condición ya no se cumple, `resolveAlertsNotIn`
+ * también las cerraría en el siguiente ciclo, pero esto las quita de inmediato
+ * en vez de dejarlas asustando cinco minutos más.
+ */
+export async function clearScopeFalsePositives(): Promise<number> {
+  try {
+    const pool = getMonitorPool();
+    const res = await pool.query(
+      `UPDATE system_alerts
+          SET status = 'resolved', resolved_at = NOW(),
+              detail = detail || ' [Cerrada automáticamente: era un falso positivo. La sonda pedía una ' ||
+                       'operación de LECTURA con una key restringida a ENVÍO; la credencial siempre fue válida.]'
+        WHERE status = 'open'
+          AND (alert_key = 'provider_down:resend' OR alert_key = 'alert_channel_dead:email')
+        RETURNING id`
+    );
+    if (res.rowCount) {
+      console.log(`[HealthMonitor] ${res.rowCount} alerta(s) falsa(s) de Resend cerradas (401 de alcance mal leído)`);
+    }
+    return res.rowCount ?? 0;
+  } catch (e: any) {
+    console.warn('[HealthMonitor] no se pudieron cerrar las alertas falsas:', e.message);
+    return 0;
+  }
 }
 
 /** Alertas abiertas + histórico reciente. */

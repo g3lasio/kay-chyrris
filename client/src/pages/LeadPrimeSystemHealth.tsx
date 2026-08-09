@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ReportExporter } from '@/components/ReportExporter';
+import { toast } from 'sonner';
 import { buildHealthReportHtml, type HealthReportData } from '@/lib/healthReportHtml';
 import {
   RefreshCw,
@@ -342,6 +343,25 @@ export default function LeadPrimeSystemHealth() {
   const costsQ = trpc.leadprime.providerCosts.useQuery({ days: 30 }, { refetchInterval: 300000 });
   const costs = (costsQ.data?.data ?? []) as Array<{ provider: string; kind: string; events: number; costUsd: number; quantity: number }>;
   const alertsQ = trpc.leadprime.alerts.useQuery({ status: 'all', limit: 100 }, { refetchInterval: 30000 });
+  const deliveryQ = trpc.leadprime.alertDelivery.useQuery(undefined, { refetchInterval: 120000 });
+  const delivery = deliveryQ.data?.data as
+    | {
+        delivered: number;
+        neverNotified: number;
+        lastDeliveredAt: string | null;
+        falseResendFailures: number;
+        verdict: string;
+      }
+    | null
+    | undefined;
+  const testAlert = trpc.leadprime.sendTestAlert.useMutation({
+    onSuccess: (r: any) => {
+      if (r.ok) toast.success(r.detail);
+      else toast.error(r.detail);
+      deliveryQ.refetch();
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
 
   const uptime = (uptimeQ.data?.data ?? []) as Array<{
     provider: string; label: string; checks: number; uptimePct: number; errorPct: number;
@@ -641,6 +661,48 @@ export default function LeadPrimeSystemHealth() {
                   </table>
                 </div>
               )}
+            </CardContent>
+          </Card>
+
+          {/* ¿LLEGAN LAS ALERTAS? Antes esto se deducía de la sonda, que
+              preguntaba lo que no debía y declaró el canal muerto sin serlo.
+              Aquí se mide la ENTREGA real (notified_at) y se puede probar. */}
+          <Card className="border-slate-800 bg-slate-900/40">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-slate-300">Entrega de alertas</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {!delivery ? (
+                <p className="text-xs text-slate-500">Cargando…</p>
+              ) : (
+                <>
+                  <p className={`text-xs ${delivery.delivered > 0 ? 'text-emerald-400' : 'text-amber-300'}`}>
+                    {delivery.verdict}
+                  </p>
+                  <div className="flex flex-wrap gap-4 text-[11px] text-slate-500">
+                    <span>Entregadas: <b className="font-mono text-slate-300">{delivery.delivered}</b></span>
+                    <span>Sin notificar: <b className="font-mono text-slate-300">{delivery.neverNotified}</b></span>
+                    {delivery.falseResendFailures > 0 && (
+                      <span title="Sondas que fallaron por pedir una operación de LECTURA con una key restringida a ENVÍO. La credencial siempre fue válida.">
+                        Sondas falsas de Resend:{' '}
+                        <b className="font-mono text-slate-400">{delivery.falseResendFailures}</b>
+                      </span>
+                    )}
+                  </div>
+                </>
+              )}
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={testAlert.isPending}
+                onClick={() => testAlert.mutate()}
+              >
+                {testAlert.isPending ? 'Enviando…' : 'Probar envío ahora'}
+              </Button>
+              <p className="text-[11px] text-slate-600">
+                Envía un correo real a OWNER_ALERT_EMAIL. Es la única forma concluyente de saber si
+                las alertas llegan: una sonda comprueba permisos, esto comprueba entrega.
+              </p>
             </CardContent>
           </Card>
 

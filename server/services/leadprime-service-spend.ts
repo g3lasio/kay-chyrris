@@ -25,6 +25,7 @@
 
 import { Pool } from 'pg';
 import { splitNotes, type ClassifiedNote } from './detector-availability';
+import { isScopeLimited, scopeLimitedNote } from './api-key-scope';
 
 let spendPool: Pool | null = null;
 
@@ -135,11 +136,27 @@ function project(monthSoFar: number): number {
  * Sets severity 'alarm' for key/payment problems so they bubble to the deck.
  */
 function applyHttpError(base: ProviderSpend, status: number, body: string, label: string, notes: string[]): ProviderSpend {
-  base.keyIssue = status === 401 || status === 403;
+  // "No puedo LEER tu facturación" ≠ "tu servicio está caído".
+  //
+  // Antes cualquier 401/403 se marcaba keyIssue, y el monitor lo convertía en
+  // "API key RECHAZADA — el servicio está caído para los usuarios". Es falso:
+  // estas consultas van a las Admin/Billing API, y una key de INFERENCIA
+  // perfectamente válida no tiene alcance para esos endpoints. La inferencia
+  // sigue funcionando; lo único que falta es el dato de gasto en el panel.
+  // Es el mismo error que declaró muerto el canal de alertas de Resend.
+  const scopeLimited = isScopeLimited(status, body);
+  base.keyIssue = (status === 401 || status === 403) && !scopeLimited;
   base.paymentIssue = status === 402;
-  if (base.keyIssue) base.note = `${label} API ${status}: key expired/invalid or missing permission`;
-  else if (base.paymentIssue) base.note = `${label} API ${status}: payment required — likely out of credit`;
-  else base.note = `${label} API ${status}: ${body.slice(0, 120)}`;
+  if (scopeLimited) {
+    base.note = scopeLimitedNote(label, 'consultar el gasto (Admin/Billing API)');
+  } else if (base.keyIssue) {
+    base.note = `${label} API ${status}: key expired/invalid or missing permission`;
+  } else if (base.paymentIssue) {
+    base.note = `${label} API ${status}: payment required — likely out of credit`;
+  } else {
+    base.note = `${label} API ${status}: ${body.slice(0, 120)}`;
+  }
+  // Una key acotada NO es alarma: es un dato que no se puede leer.
   base.severity = base.keyIssue || base.paymentIssue ? 'alarm' : 'unknown';
   notes.push(`${label.toLowerCase()}: ${base.note}`);
   return base;

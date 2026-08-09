@@ -22,6 +22,7 @@
  * READ-ONLY: no escribe nada, ni en Kai ni en LeadPrime.
  */
 import { Pool } from 'pg';
+import { isScopeLimited } from './api-key-scope';
 
 export interface PartnerReferralHealth {
   available: boolean;
@@ -185,12 +186,17 @@ async function checkEmailChannel(kaiPool: Pool): Promise<{ ok: boolean; note?: s
     const row = r.rows[0];
     if (!row) return { ok: true, note: 'sin sondas de correo todavía' };
     if (row.ok) return { ok: true };
-    const is401 = row.status_code === 401 || /401|restricted_api_key/i.test(row.error ?? '');
+    // Un `restricted_api_key` NO es una caída: significa que la key SOLO puede
+    // enviar, que es justo lo que necesitamos. Antes esto se leía al revés y
+    // llevó a reportar que los socios no podían entrar a su portal cuando el
+    // correo estaba sano.
+    if (isScopeLimited(row.status_code ?? 401, row.error ?? '')) {
+      return { ok: true, note: 'la key de correo está acotada a envío — que es exactamente lo que hace falta' };
+    }
     return {
       ok: false,
-      note: is401
-        ? 'Resend rechaza la API key (401 restricted_api_key). Ni las invitaciones ni los códigos de acceso al portal están saliendo: un socio no puede entrar a ver sus referidos. Se arregla generando una key con permiso "Sending access" y actualizando RESEND_API_KEY.'
-        : `El envío de correo está fallando: ${row.error ?? 'error desconocido'}`,
+      note: `El envío de correo está fallando: ${row.error ?? 'error desconocido'}. ` +
+        `Como el acceso al portal de socios es por código de un solo uso por correo, mientras siga así un socio no puede entrar a ver sus referidos.`,
     };
   } catch {
     return { ok: true, note: 'no se pudo leer el estado del correo' };
