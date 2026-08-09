@@ -1224,7 +1224,7 @@ export const appRouter = router({
         // external_zelle = pago por fuera de Stripe (Zelle/transferencia):
         // ingreso real que cuenta como MRR, con el plan y los créditos
         // completos. comp_no_charge sigue siendo cortesía a $0.
-        billingMode: z.enum(['stripe_ach', 'comp_no_charge', 'external_zelle']),
+        billingMode: z.enum(['stripe', 'stripe_ach', 'comp_no_charge', 'external_zelle']),
         monthlyCreditsCents: z.number().int().min(0).max(120000).nullable(), // tope $1,200 (Decisión #5)
         // Precio mensual acordado (los tiers gestionados se negocian caso por
         // caso). null = usar el precio del catálogo.

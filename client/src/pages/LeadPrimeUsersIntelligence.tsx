@@ -54,9 +54,6 @@ interface EnrichedUser {
   teamMemberCount: number;
   daysSinceSignup: number;
   isActive: boolean;
-  /** Segunda cuenta del mismo dueño (mismo teléfono o negocio). Solo se marca. */
-  isDuplicate?: boolean;
-  duplicateOfEmail?: string | null;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -642,24 +639,7 @@ export default function LeadPrimeUsersIntelligence() {
                           />
                         </td>
                         <td className="px-4 py-3">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-medium truncate max-w-[180px]">{u.name}</span>
-                            {/* Cuenta repetida del mismo dueño: se marca aquí y
-                                se excluye del MRR y del conteo de suscripciones.
-                                No se borró ni se fusionó nada. */}
-                            {u.isDuplicate && (
-                              <span
-                                className="shrink-0 rounded border border-amber-500/30 bg-amber-500/10 px-1 py-px text-[9px] font-medium text-amber-300"
-                                title={
-                                  `Parece una segunda cuenta del mismo dueño${u.duplicateOfEmail ? ` (la principal es ${u.duplicateOfEmail})` : ''}. ` +
-                                  `Se excluye del MRR y del conteo de suscripciones para no contarla dos veces. ` +
-                                  `Nada se borró ni se fusionó: unir las cuentas es decisión tuya.`
-                                }
-                              >
-                                Duplicada
-                              </span>
-                            )}
-                          </div>
+                          <div className="font-medium truncate max-w-[180px]">{u.name}</div>
                           <div className="text-xs text-muted-foreground truncate max-w-[180px]">{u.email}</div>
                           {u.networkHandle && <div className="text-xs text-primary/70 font-mono mt-0.5">@{u.networkHandle}</div>}
                           {u.hasLicense && <span className="text-xs text-emerald-400 flex items-center gap-0.5 mt-0.5"><BadgeCheck className="h-3 w-3" /> Licensed</span>}

@@ -30,7 +30,6 @@
  */
 
 import { Pool } from 'pg';
-import { findDuplicateAccounts } from '@shared/duplicate-accounts';
 
 let leadprimePool: Pool | null = null;
 
@@ -425,15 +424,6 @@ export interface EnrichedUser {
   campaignCount: number;
   teamMemberCount: number;
   lastActivityAt: string | null;
-  /**
-   * La cuenta parece ser una SEGUNDA cuenta del mismo dueño (mismo teléfono o
-   * mismo negocio). Se marca para que se vea en la tabla y se excluye de los
-   * conteos de suscripciones/MRR. NO se borra ni se fusiona: unirlas es
-   * decisión del dueño. Regla compartida: shared/duplicate-accounts.ts.
-   */
-  isDuplicate: boolean;
-  /** Correo de la cuenta principal del grupo, para saber con cuál se repite. */
-  duplicateOfEmail: string | null;
 }
 
 export interface UserIntelligenceStats {
@@ -601,10 +591,12 @@ export async function getEnrichedLeadPrimeUsers(options: {
     dataParams
   );
 
-  // Duplicados: se calculan sobre TODAS las cuentas, no sobre la página. Las dos
-  // cuentas de un mismo dueño rara vez caen en la misma página, así que hacerlo
-  // en el cliente no serviría de nada.
-  const dupes = await detectDuplicateAccounts(pool);
+  // NOTA: aquí había una detección de "cuentas duplicadas" por teléfono/nombre.
+  // Se retiró entera. Marcaba como duplicada a MORENITA Management, que no
+  // comparte nombre con nadie, y el mismo criterio aplicado al MRR llegó a
+  // excluir una suscripción de pago REAL de $249/mes. Lo que decide si una
+  // suscripción cuenta es el MÉTODO DE COBRO (shared/billing-method.ts), un
+  // dato explícito — no el parecido entre nombres, que es una suposición.
 
   const now = Date.now();
   const users: EnrichedUser[] = result.rows.map(row => {
@@ -647,66 +639,11 @@ export async function getEnrichedLeadPrimeUsers(options: {
       campaignCount: parseInt(row.campaign_count) || 0,
       teamMemberCount: parseInt(row.team_count) || 0,
       lastActivityAt: row.last_activity_at ? new Date(row.last_activity_at).toISOString() : null,
-      isDuplicate: dupes.duplicateIds.has(row.id),
-      duplicateOfEmail: dupes.emailById.get(dupes.primaryOf.get(row.id) ?? '') ?? null,
     };
   });
   return { users, total };
 }
 
-/**
- * Detecta cuentas repetidas del mismo dueño en TODO el padrón (no por página).
- * Solo lee: no borra, no fusiona, no escribe nada. Si falta alguna tabla,
- * devuelve "ningún duplicado" en vez de tumbar la lista de usuarios.
- * Cache corto porque la tabla de usuarios se refresca cada pocos segundos.
- */
-let duplicateCache: { at: number; value: Awaited<ReturnType<typeof computeDuplicates>> } | null = null;
-const DUPLICATE_CACHE_MS = 60_000;
-
-async function detectDuplicateAccounts(pool: Pool) {
-  if (duplicateCache && Date.now() - duplicateCache.at < DUPLICATE_CACHE_MS) {
-    return duplicateCache.value;
-  }
-  const value = await computeDuplicates(pool);
-  duplicateCache = { at: Date.now(), value };
-  return value;
-}
-
-async function computeDuplicates(pool: Pool) {
-  const empty = {
-    duplicateIds: new Set<string>(),
-    primaryOf: new Map<string, string>(),
-    emailById: new Map<string, string>(),
-  };
-  try {
-    const res = await pool.query(
-      `SELECT c.id, c.phone, c.name, c.email,
-              COALESCE(cp.business_name, c.company_name) AS business_name,
-              -- La cuenta "principal" del grupo es la del plan más caro: si un
-              -- dueño tiene una Pro y una gratis, la que vale es la Pro.
-              COALESCE(pd.monthly_price_cents, 0) AS weight
-         FROM contractors c
-         LEFT JOIN company_profiles cp ON cp.contractor_id = c.id
-         LEFT JOIN subscriptions s     ON s.contractor_id = c.id
-         LEFT JOIN plan_definitions pd ON pd.plan_name = s.plan_name`
-    );
-    const groups = findDuplicateAccounts(
-      res.rows.map((r) => ({
-        id: r.id,
-        phone: r.phone,
-        name: r.name,
-        businessName: r.business_name,
-        weight: Number(r.weight || 0),
-      }))
-    );
-    const emailById = new Map<string, string>();
-    for (const r of res.rows) if (r.email) emailById.set(r.id, r.email);
-    return { duplicateIds: groups.duplicateIds, primaryOf: groups.primaryOf, emailById };
-  } catch (err: any) {
-    console.warn('[LeadPrime DB] no se pudo detectar duplicados:', err.message);
-    return empty;
-  }
-}
 
 /**
  * Get aggregate stats for user intelligence dashboard
@@ -1629,7 +1566,8 @@ export async function getSubscriptionConfig(contractorId: string): Promise<Subsc
 export interface SetSubscriptionConfigInput {
   contractorId: string;
   targetTier: 'network_elite' | 'chyrris_growth' | 'chyrris_legacy';
-  billingMode: 'stripe_ach' | 'comp_no_charge' | 'external_zelle';
+  /** stripe|stripe_ach|external_zelle cuentan como MRR; comp_no_charge NUNCA. */
+  billingMode: 'stripe' | 'stripe_ach' | 'comp_no_charge' | 'external_zelle';
   monthlyCreditsCents: number | null;  // null = use catalog default; max 120000
   /** Precio mensual ACORDADO en dólares-centavos. Los tiers gestionados se
    *  negocian caso por caso, así que el importe real puede diferir del

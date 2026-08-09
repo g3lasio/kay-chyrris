@@ -205,25 +205,62 @@ describe('una sola fuente — MRR y movimientos', () => {
   });
 });
 
-describe('duplicados — no se borra ingreso', () => {
-  it('dos cuentas DE PAGO del mismo dueño suman las dos y se marcan para revisión', async () => {
+describe('MÉTODO DE COBRO — lo que decide si cuenta como MRR', () => {
+  it('CORTESÍA nunca cuenta, por caro que sea el plan', async () => {
+    // Las dos cuentas propias del dueño: membresía puesta a mano, nunca pagada.
     dbRows = [
-      sub({ contractor_id: 'owlfenc', email: 'info@owlfenc.com', phone: '5551112222', name: 'Gelasio', plan_name: 'network_elite', plan_price_cents: 24900 }),
-      sub({ contractor_id: 'proton', email: 'g3lasio@proton.me', phone: '5551112222', name: 'Gelasio', plan_price_cents: 65000 }),
+      sub({ contractor_id: 'proton', email: 'g3lasio@proton.me', billing_mode: 'comp_no_charge', config_status: 'applied', plan_price_cents: 65000 }),
+      sub({ contractor_id: 'owlfenc', email: 'info@owlfenc.com', plan_name: 'network_elite', billing_mode: 'comp_no_charge', config_status: 'applied', plan_price_cents: 24900 }),
     ];
     const rev = await getRecurringRevenue(pool);
-    expect(rev.mrrUsd).toBe(899); // $650 + $249: los $249 NO se pierden
+    expect(rev.mrrUsd).toBe(0);
+    expect(rev.arrUsd).toBe(0);
+    expect(rev.activeSubscriptions).toBe(0);
+    // Pero se ve cuánto se está regalando.
+    expect(rev.courtesyUsd).toBe(899);
+    expect(rev.courtesySubscriptions).toBe(2);
+    expect(rev.courtesyLines.map((l) => l.email).sort()).toEqual(['g3lasio@proton.me', 'info@owlfenc.com']);
+  });
+
+  it('Stripe, ACH y Zelle SÍ cuentan, y se desglosan por método', async () => {
+    dbRows = [
+      sub({ contractor_id: 'a', email: 'a@x.com', billing_mode: 'stripe', config_status: 'applied', plan_price_cents: 1500 }),
+      sub({ contractor_id: 'b', email: 'b@x.com', billing_mode: 'stripe_ach', config_status: 'applied', plan_price_cents: 24900 }),
+      sub({ contractor_id: 'c', email: 'info@perezframingco.com', billing_mode: 'external_zelle', config_status: 'applied', agreed_price_cents: 65000 }),
+    ];
+    const rev = await getRecurringRevenue(pool);
+    expect(rev.mrrUsd).toBe(914); // 15 + 249 + 650
+    expect(rev.byMethod.stripe).toEqual({ mrrUsd: 15, subscriptions: 1 });
+    expect(rev.byMethod.ach).toEqual({ mrrUsd: 249, subscriptions: 1 });
+    expect(rev.byMethod.zelle).toEqual({ mrrUsd: 650, subscriptions: 1 });
+    expect(rev.courtesyUsd).toBe(0);
+  });
+
+  it('YA NO se excluye por parecido de nombre: dos cuentas de pago suman las dos', async () => {
+    // Ese criterio llegó a borrar una suscripción real de $249/mes.
+    dbRows = [
+      sub({ contractor_id: 'x', email: 'x@x.com', phone: '5551112222', name: 'Mismo Nombre', billing_mode: 'stripe', config_status: 'applied', plan_price_cents: 24900 }),
+      sub({ contractor_id: 'y', email: 'y@x.com', phone: '5551112222', name: 'Mismo Nombre', billing_mode: 'stripe', config_status: 'applied', plan_price_cents: 65000 }),
+    ];
+    const rev = await getRecurringRevenue(pool);
+    expect(rev.mrrUsd).toBe(899);
     expect(rev.activeSubscriptions).toBe(2);
-    expect(rev.lines.every((l) => l.needsReview)).toBe(true);
-    expect(rev.reviewGroups).toHaveLength(1);
     expect(rev.excluded.some((e) => /duplicad/i.test(e.reason))).toBe(false);
   });
 
-  it('una cuenta con filas repetidas por el JOIN no se marca duplicada de sí misma', async () => {
-    // MORENITA Management: dos filas de company_profiles para el mismo id.
+  it('sin método registrado cuenta igual, pero se marca para etiquetarla', async () => {
+    // No se borra ingreso por falta de una etiqueta.
+    dbRows = [sub({ contractor_id: 'z', email: 'z@x.com', plan_price_cents: 65000 })];
+    const rev = await getRecurringRevenue(pool);
+    expect(rev.mrrUsd).toBe(650);
+    expect(rev.lines[0].needsReview).toBe(true);
+    expect(rev.lines[0].method).toBe('unknown');
+  });
+
+  it('una cuenta con filas repetidas por el JOIN se cuenta UNA vez', async () => {
     dbRows = [
-      sub({ contractor_id: 'morenita', email: 'truthbackpack@gmail.com', phone: '5553334444', business_name: 'MORENITA Management', plan_price_cents: 65000 }),
-      sub({ contractor_id: 'morenita', email: 'truthbackpack@gmail.com', phone: '5553334444', business_name: 'MORENITA Management', plan_price_cents: 65000 }),
+      sub({ contractor_id: 'morenita', email: 'truthbackpack@gmail.com', billing_mode: 'stripe', config_status: 'applied', plan_price_cents: 65000 }),
+      sub({ contractor_id: 'morenita', email: 'truthbackpack@gmail.com', billing_mode: 'stripe', config_status: 'applied', plan_price_cents: 65000 }),
     ];
     const rev = await getRecurringRevenue(pool);
     expect(rev.activeAccounts).toBe(1);
@@ -237,7 +274,7 @@ describe('el $650 de Zelle no se toca', () => {
     dbRows = [
       sub({
         contractor_id: 'hugo',
-        email: 'hugo@x.com',
+        email: 'info@perezframingco.com',
         billing_mode: 'external_zelle',
         config_status: 'applied',
         agreed_price_cents: 65000,

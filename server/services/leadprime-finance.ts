@@ -236,15 +236,22 @@ export interface Recurring {
   stripeCheck: { available: boolean; note?: string; activeSubscriptions: number };
   /** En Stripe pero sin contraparte local (otro producto, o sin vincular). */
   stripeOrphans: Array<{ subscriptionId: string; email: string | null; monthlyUsd: number; product: string | null }>;
-  /** Cuentas DE PAGO que coinciden entre sí: se suman todas, las revisa una persona. */
-  reviewGroups: Array<{ emails: string[]; contractorIds: string[] }>;
+  /** MRR por método de cobro: stripe / ach / zelle. Cortesía va aparte. */
+  byMethod: Record<string, { mrrUsd: number; subscriptions: number }>;
+  /** Valor mensual regalado. Se muestra, NO suma al MRR ni al ARR. */
+  courtesyUsd: number;
+  courtesySubscriptions: number;
+  courtesyLines: Array<{ contractorId: string; email: string | null; planName: string; monthlyUsd: number }>;
   /** Detalle por cuenta para el bloque de diagnóstico. */
   lines: Array<{
+    /** Método de cobro: stripe / ach / zelle / courtesy / unknown. */
+    method: string;
     email: string | null;
     planName: string;
     monthlyUsd: number;
     billingSource: 'stripe' | 'manual' | 'unknown';
     isManual: boolean;
+    /** true = suscripción activa SIN método registrado; cuenta, pero hay que etiquetarla. */
     needsReview: boolean;
     stripeMonthlyUsd: number | null;
   }>;
@@ -336,7 +343,10 @@ async function getRecurring(notes: string[]): Promise<Recurring> {
     unverifiedSubscriptions: 0,
     stripeCheck: { available: false, activeSubscriptions: 0 },
     stripeOrphans: [],
-    reviewGroups: [],
+    byMethod: {},
+    courtesyUsd: 0,
+    courtesySubscriptions: 0,
+    courtesyLines: [],
     lines: [],
   };
   try {
@@ -356,8 +366,12 @@ async function getRecurring(notes: string[]): Promise<Recurring> {
     out.unverifiedSubscriptions = rev.unverifiedSubscriptions;
     out.stripeCheck = rev.stripeCheck;
     out.stripeOrphans = rev.stripeOrphans;
-    out.reviewGroups = rev.reviewGroups;
+    out.byMethod = rev.byMethod as any;
+    out.courtesyUsd = rev.courtesyUsd;
+    out.courtesySubscriptions = rev.courtesySubscriptions;
+    out.courtesyLines = rev.courtesyLines;
     out.lines = rev.lines.map(l => ({
+      method: l.method,
       email: l.email,
       planName: l.planName,
       monthlyUsd: l.monthlyUsd,
@@ -379,10 +393,10 @@ async function getRecurring(notes: string[]): Promise<Recurring> {
         `(no suman al MRR): ${rev.stripeOrphans.map(o => o.email ?? o.subscriptionId).join(', ')}`
       );
     }
-    if (rev.reviewGroups.length > 0) {
+    if (rev.courtesySubscriptions > 0) {
       notes.push(
-        `recurring: ${rev.reviewGroups.length} grupo(s) de cuentas DE PAGO que coinciden — se suman ` +
-        `todas, requieren revisión humana: ${rev.reviewGroups.map(g => g.emails.join(' + ')).join(' | ')}`
+        `recurring: $${rev.courtesyUsd.toFixed(2)}/mes en ${rev.courtesySubscriptions} suscripción(es) de ` +
+        `CORTESÍA — valor regalado, NO cuenta como MRR ni ARR`
       );
     }
     out.excluded = rev.excluded;

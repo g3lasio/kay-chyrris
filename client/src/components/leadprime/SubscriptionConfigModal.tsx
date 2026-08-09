@@ -46,7 +46,9 @@ export function SubscriptionConfigModal({ user, balanceDollars, onClose }: {
   const target = user ?? (picked ? { id: picked.id, name: picked.businessName ?? picked.name } : null);
 
   const [targetTier, setTargetTier] = useState<'network_elite' | 'chyrris_growth' | 'chyrris_legacy'>('network_elite');
-  const [billingMode, setBillingMode] = useState<'stripe_ach' | 'comp_no_charge' | 'external_zelle'>('comp_no_charge');
+  // 'stripe' = tarjeta; 'stripe_ach' = ACH por Stripe; 'external_zelle' = manual;
+  // 'comp_no_charge' = cortesía. Los tres primeros cuentan como MRR, el último no.
+  const [billingMode, setBillingMode] = useState<'stripe' | 'stripe_ach' | 'comp_no_charge' | 'external_zelle'>('comp_no_charge');
   const [creditsCents, setCreditsCents] = useState('');
   // Precio mensual acordado (en dólares, para capturar). Los tiers gestionados
   // se negocian caso por caso, así que el importe real puede diferir del
@@ -281,9 +283,12 @@ export function SubscriptionConfigModal({ user, balanceDollars, onClose }: {
                     onChange={e => setBillingMode(e.target.value as any)}
                     className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
                   >
-                    <option value="stripe_ach">ACH (cobra Stripe)</option>
-                    <option value="external_zelle">Zelle / transferencia</option>
-                    <option value="comp_no_charge">Cortesía (sin cargo)</option>
+                    {/* Las cuatro categorías que decide el MRR. Cortesía NUNCA
+                        cuenta como ingreso, por caro que sea el plan. */}
+                    <option value="stripe">Stripe (tarjeta) — cuenta como MRR</option>
+                    <option value="stripe_ach">ACH (cobra Stripe) — cuenta como MRR</option>
+                    <option value="external_zelle">Zelle / transferencia — cuenta como MRR</option>
+                    <option value="comp_no_charge">Cortesía (sin cargo) — NO cuenta</option>
                   </select>
                 </div>
               </div>
@@ -291,11 +296,13 @@ export function SubscriptionConfigModal({ user, balanceDollars, onClose }: {
               {/* Qué implica cada forma de pago — la diferencia es contable, no
                   funcional: el usuario recibe el mismo plan en los tres casos. */}
               <p className="text-xs text-muted-foreground -mt-1">
-                {billingMode === 'stripe_ach'
-                  ? 'Se genera un link de cobro ACH; el plan se activa cuando el contratista paga.'
-                  : billingMode === 'external_zelle'
-                    ? '✅ Activación inmediata con todos los beneficios y créditos del plan. Cuenta como ingreso real (MRR), igual que ACH — solo cambia por dónde entra el dinero.'
-                    : 'Activación inmediata sin cargo. NO cuenta como ingreso: se registra como cortesía de $0.'}
+                {billingMode === 'stripe'
+                  ? 'Cobro automático con tarjeta. Cuenta como ingreso (MRR).'
+                  : billingMode === 'stripe_ach'
+                    ? 'Se genera un link de cobro ACH; el plan se activa cuando el contratista paga. Cuenta como ingreso (MRR).'
+                    : billingMode === 'external_zelle'
+                      ? '✅ Activación inmediata con todos los beneficios y créditos del plan. Cuenta como ingreso real (MRR), igual que ACH — solo cambia por dónde entra el dinero.'
+                      : '⚠️ Activación inmediata sin cargo. NUNCA cuenta como ingreso: ni en MRR ni en ARR, por caro que sea el plan. Aparece aparte como valor regalado.'}
               </p>
 
               {/* Precio acordado — obligatorio de facto en pagos externos:
