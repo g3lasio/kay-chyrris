@@ -33,6 +33,7 @@ import {
   Phone,
   AudioLines,
   MinusCircle,
+  Users,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -319,6 +320,24 @@ export default function LeadPrimeSystemHealth() {
   const billingQ = trpc.leadprime.billingHealth.useQuery(undefined, { refetchInterval: 60000 });
   const infraQ = trpc.leadprime.infraHealth.useQuery(undefined, { refetchInterval: 60000 });
   const spendQ = trpc.leadprime.serviceSpend.useQuery(undefined, { refetchInterval: 120000 });
+  // Programa de socios: existía desde hace un año con CERO atribuciones y nadie
+  // se enteró porque "Referidos 0" se ve igual que "el socio no ha compartido
+  // su link". Este detector comprueba el link de verdad.
+  const partnerQ = trpc.leadprime.partnerReferralHealth.useQuery(undefined, { refetchInterval: 300000 });
+  const partners = partnerQ.data?.data as
+    | {
+        available: boolean;
+        note?: string;
+        activePartners: number;
+        silentPartners: Array<{ name: string; code: string; attributions: number; clicks: number }>;
+        unresolvedClicks7d: number;
+        pendingAttributions: number;
+        linkCheck: { checked: boolean; url?: string; status?: number; ok: boolean; note?: string };
+        emailChannel: { ok: boolean; note?: string };
+        verdict: { level: 'ok' | 'warn' | 'alarm'; reason: string } | null;
+      }
+    | null
+    | undefined;
   const uptimeQ = trpc.leadprime.providerUptime.useQuery({ hours: 24 }, { refetchInterval: 60000 });
   const costsQ = trpc.leadprime.providerCosts.useQuery({ days: 30 }, { refetchInterval: 300000 });
   const costs = (costsQ.data?.data ?? []) as Array<{ provider: string; kind: string; events: number; costUsd: number; quantity: number }>;
@@ -1371,6 +1390,88 @@ export default function LeadPrimeSystemHealth() {
               )}
             </GlowCard>
           </div>
+
+          {/* PROGRAMA DE SOCIOS. Nace de un fallo que vivió desde el
+              lanzamiento del programa: el link de referido daba 404 y los tres
+              socios marcaban 0 referidos — indistinguible de "todavía nadie se
+              ha registrado". Aquí el link se comprueba de verdad. */}
+          <GlowCard
+            title="Programa de socios — atribución de referidos"
+            icon={Users}
+            tone={
+              !partners?.available ? 'muted'
+              : partners.verdict?.level === 'alarm' ? 'alarm'
+              : partners.verdict?.level === 'warn' ? 'warn'
+              : 'ok'
+            }
+          >
+            {!partners?.available ? (
+              <p className="text-sm text-slate-500">{partners?.note ?? 'Cargando…'}</p>
+            ) : (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <Row label="Socios activos" value={String(partners.activePartners)} />
+                  <Row
+                    label="Sin clics ni referidos"
+                    value={String(partners.silentPartners.length)}
+                    tone={partners.silentPartners.length > 0 ? 'warn' : 'ok'}
+                  />
+                  <Row
+                    label="Clics sin resolver (7d)"
+                    value={String(partners.unresolvedClicks7d)}
+                    tone={partners.unresolvedClicks7d > 0 ? 'alarm' : 'ok'}
+                  />
+                  <Row
+                    label="Atribuciones pendientes"
+                    value={String(partners.pendingAttributions)}
+                    tone={partners.pendingAttributions > 0 ? 'warn' : 'ok'}
+                  />
+                </div>
+
+                {/* La comprobación que faltaba: ¿el link responde? */}
+                <div className="rounded border border-slate-800 bg-slate-950/40 p-2 text-xs">
+                  <span className="text-slate-500">Link corto: </span>
+                  {!partners.linkCheck.checked ? (
+                    <span className="text-slate-500">{partners.linkCheck.note ?? 'sin comprobar'}</span>
+                  ) : (
+                    <>
+                      <span className={partners.linkCheck.ok ? 'text-emerald-400' : 'text-rose-400'}>
+                        HTTP {partners.linkCheck.status}
+                      </span>
+                      <span className="ml-2 font-mono text-slate-500">{partners.linkCheck.url}</span>
+                      {!partners.linkCheck.ok && (
+                        <p className="mt-1 text-rose-300">{partners.linkCheck.note}</p>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                {!partners.emailChannel.ok && (
+                  <ActionHint tone="warn">
+                    <p className="font-semibold text-slate-200">Los socios no pueden entrar a su portal</p>
+                    <p>{partners.emailChannel.note}</p>
+                  </ActionHint>
+                )}
+
+                {partners.verdict && (
+                  <ActionHint tone={partners.verdict.level === 'alarm' ? 'alarm' : 'warn'}>
+                    <p>{partners.verdict.reason}</p>
+                  </ActionHint>
+                )}
+
+                {partners.silentPartners.length > 0 && (
+                  <ul className="space-y-0.5 text-xs">
+                    {partners.silentPartners.map((p) => (
+                      <li key={p.code} className="flex justify-between text-slate-500">
+                        <span className="truncate">{p.name}</span>
+                        <span className="font-mono">{p.code} · 0 clics · 0 referidos</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </GlowCard>
         </TabsContent>
       </Tabs>
 

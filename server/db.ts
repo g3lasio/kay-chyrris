@@ -54,6 +54,16 @@ export async function getDb() {
   return _db;
 }
 
+/**
+ * Pool crudo de la BD de Kai, para consultas que no pasan por drizzle
+ * (agregados con GROUP BY, detectores de salud). Devuelve null si aún no se
+ * inicializó: llama primero a getDb().
+ */
+export async function getKaiPool(): Promise<Pool | null> {
+  if (!_pool) await getDb();
+  return _pool;
+}
+
 export async function upsertAdminUser(user: InsertAdminUser): Promise<void> {
   if (!user.email) {
     throw new Error("User email is required for upsert");
