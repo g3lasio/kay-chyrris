@@ -714,6 +714,26 @@ export const appRouter = router({
         }
       }),
 
+    // ¿Los correos de alerta SE ESTÁN ENTREGANDO? La sonda comprueba permisos;
+    // esto comprueba entrega real, leyendo `notified_at`, que solo se escribe
+    // cuando un canal entregó de verdad.
+    alertDelivery: protectedProcedure.query(async () => {
+      try {
+        const { getAlertDeliveryReport } = await import('./services/health-monitor');
+        return { success: true, data: await getAlertDeliveryReport() };
+      } catch (error: any) {
+        console.error('[Health Router] Error fetching alert delivery report:', error);
+        return { success: false, error: error.message, data: null };
+      }
+    }),
+
+    // Envío de prueba REAL al correo de alertas. Manual a propósito: es la
+    // única forma concluyente de responder "¿llegan los correos?".
+    sendTestAlert: protectedProcedure.mutation(async () => {
+      const { sendTestAlertEmail } = await import('./services/health-monitor');
+      return sendTestAlertEmail();
+    }),
+
     alerts: protectedProcedure
       .input(z.object({
         status: z.enum(['open', 'all']).optional().default('open'),
