@@ -287,3 +287,43 @@ describe('el $650 de Zelle no se toca', () => {
     expect(rev.byPlan[0].plan).toContain('Manual / Zelle');
   });
 });
+
+describe('lo verificado en Stripe se clasifica como stripe, no como "sin método"', () => {
+  it('una suscripción confirmada en Stripe deja de salir como "Sin método asignado"', async () => {
+    // El caso de producción: 3 suscripciones pro + network_elite salían como
+    // "Sin metodo asignado $294.00 · 4" pese a estar cobrando en Stripe.
+    dbRows = [
+      sub({ contractor_id: 'p1', email: 'p1@x.com', plan_name: 'pro', plan_price_cents: 1500 }),
+      sub({ contractor_id: 'p2', email: 'p2@x.com', plan_name: 'pro', plan_price_cents: 1500 }),
+      sub({ contractor_id: 'p3', email: 'p3@x.com', plan_name: 'pro', plan_price_cents: 1500 }),
+      sub({ contractor_id: 'e1', email: 'e1@x.com', plan_name: 'network_elite', plan_price_cents: 24900 }),
+    ];
+    stripeSubs = [
+      stripeSub({ id: 's1', customer: { id: 'c1', email: 'p1@x.com' } }),
+      stripeSub({ id: 's2', customer: { id: 'c2', email: 'p2@x.com' } }),
+      stripeSub({ id: 's3', customer: { id: 'c3', email: 'p3@x.com' } }),
+      stripeSub({ id: 's4', customer: { id: 'c4', email: 'e1@x.com' } }),
+    ];
+    const rev = await getRecurringRevenue(pool);
+    expect(rev.byMethod.stripe).toEqual({ mrrUsd: 294, subscriptions: 4 });
+    expect(rev.byMethod.unknown).toBeUndefined();
+    expect(rev.lines.every((l) => l.needsReview === false)).toBe(true);
+  });
+
+  it('sin confirmación de Stripe SÍ sigue como "sin método"', async () => {
+    dbRows = [sub({ contractor_id: 'z', email: 'z@x.com', plan_price_cents: 65000 })];
+    stripeSubs = [];
+    const rev = await getRecurringRevenue(pool);
+    expect(rev.byMethod.unknown?.subscriptions).toBe(1);
+    expect(rev.lines[0].needsReview).toBe(true);
+  });
+
+  it('un método explícito NO lo pisa el cruce con Stripe', async () => {
+    // Zelle es Zelle aunque el correo coincida con algún cliente de Stripe.
+    dbRows = [sub({ contractor_id: 'h', email: 'h@x.com', billing_mode: 'external_zelle', config_status: 'applied', agreed_price_cents: 65000 })];
+    stripeSubs = [stripeSub({ customer: { id: 'cx', email: 'h@x.com' } })];
+    const rev = await getRecurringRevenue(pool);
+    expect(rev.byMethod.zelle?.mrrUsd).toBe(650);
+    expect(rev.byMethod.stripe).toBeUndefined();
+  });
+});

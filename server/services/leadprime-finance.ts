@@ -409,7 +409,18 @@ async function getRecurring(notes: string[]): Promise<Recurring> {
       );
     }
     if (rev.excluded.length > 0) {
-      notes.push(`recurring: ${rev.excluded.length} cuenta(s) excluidas del MRR (sin mensualidad, duplicadas o demo)`);
+      // El texto decía "duplicadas" mucho después de que esa regla se retirara.
+      // Se arma con los motivos REALES, contados de la propia lista.
+      const porMotivo = new Map<string, number>();
+      for (const e of rev.excluded) {
+        const clave = /cortes/i.test(e.reason) ? 'cortesía'
+          : /sin mensualidad/i.test(e.reason) ? 'sin mensualidad'
+          : /demo/i.test(e.reason) ? 'cuenta demo'
+          : 'otro motivo';
+        porMotivo.set(clave, (porMotivo.get(clave) ?? 0) + 1);
+      }
+      const detalle = Array.from(porMotivo.entries()).map(([k, n]) => `${n} ${k}`).join(', ');
+      notes.push(`recurring: ${rev.excluded.length} cuenta(s) fuera del MRR (${detalle})`);
     }
   } catch (err: any) {
     out.note = `MRR no disponible: ${err.message}`;
