@@ -47,6 +47,7 @@ import {
   Upload,
 } from "lucide-react";
 import { useRef } from "react";
+import { ContractorPicker } from "@/components/leadprime/ContractorPicker";
 
 function money(value: string | number): string {
   const n = typeof value === "number" ? value : parseFloat(value || "0");
@@ -1039,15 +1040,17 @@ function PartnerDetailDialog({ partnerId, onClose }: { partnerId: number; onClos
 
               <TabsContent value="referrals" className="space-y-4">
                 <div className="flex flex-wrap items-end gap-2 border rounded-lg p-3">
-                  <div className="space-y-1 flex-1 min-w-[220px]">
+                  <div className="space-y-1 flex-1 min-w-[260px]">
                     <label className="text-xs font-medium text-muted-foreground">
-                      Atribución manual: ID del contractor en LeadPrime
+                      Atribución manual: busca al contratista por nombre
                     </label>
-                    <Input
-                      value={manualContractorId}
-                      onChange={e => setManualContractorId(e.target.value)}
-                      placeholder="contractor id"
-                      className="h-9"
+                    {/* Antes pedía pegar un con_xxxxx a mano. El dueño conoce a
+                        sus clientes por nombre, no por identificador: ese campo
+                        hacía la función inservible en la práctica. */}
+                    <ContractorPicker
+                      value={manualContractorId || null}
+                      onChange={id => setManualContractorId(id ?? '')}
+                      hint="Se le atribuirá este referido al socio. La atribución es única por contratista: la primera gana."
                     />
                   </div>
                   <Button
