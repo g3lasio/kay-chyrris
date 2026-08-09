@@ -34,7 +34,12 @@
  * pero NUNCA se excluye de ningún cálculo.
  */
 import { Pool } from 'pg';
-import { findDuplicateAccounts } from '@shared/duplicate-accounts';
+import {
+  normalizeBillingMethod,
+  countsAsMrr,
+  BILLING_METHOD_LABEL,
+  type BillingMethod,
+} from '@shared/billing-method';
 
 /** De dónde sale el dinero de esta suscripción. */
 export type BillingSource =
@@ -51,7 +56,9 @@ export interface MrrLine {
   /** Precio mensual real en USD: catálogo del plan, o el acordado si es manual. */
   monthlyUsd: number;
   status: string;
-  /** true = configurado explícitamente como cobro externo (Zelle) en LeadPrime. */
+  /** Método de cobro normalizado: stripe / ach / zelle / courtesy. */
+  method: BillingMethod;
+  /** true = se cobra a mano (Zelle/transferencia). Ingreso real, solo se etiqueta. */
   isManual: boolean;
   /** Resultado del cruce contra Stripe. */
   billingSource: BillingSource;
@@ -102,8 +109,15 @@ export interface RecurringRevenue {
   lines: MrrLine[];
   /** Cuentas descartadas y por qué (transparencia: nada desaparece en silencio). */
   excluded: Array<{ contractorId: string; reason: string; email: string | null }>;
-  /** Grupos de cuentas DE PAGO que coinciden: se suman todas, las decide una persona. */
-  reviewGroups: Array<{ emails: string[]; contractorIds: string[] }>;
+  /**
+   * MRR desglosado por MÉTODO DE COBRO — las cuatro categorías del dueño.
+   * La cortesía NO aparece aquí porque no es MRR; va en `courtesyUsd`.
+   */
+  byMethod: Partial<Record<BillingMethod, { mrrUsd: number; subscriptions: number }>>;
+  /** Valor mensual REGALADO (cortesía). Se muestra, pero NO suma al MRR ni al ARR. */
+  courtesyUsd: number;
+  courtesySubscriptions: number;
+  courtesyLines: Array<{ contractorId: string; email: string | null; planName: string; monthlyUsd: number }>;
   movements: MrrMovementsOut;
 }
 
@@ -119,30 +133,20 @@ function isDemoAccount(row: any): boolean {
   return email.includes('apple-review+') || email.includes('@leadprime.demo');
 }
 
-/**
- * Marca duplicados con la regla compartida. La regla NUNCA excluye una cuenta
- * con suscripción de pago activa: solo agrupa las que no pagan (aportan $0, así
- * que excluirlas no puede borrar ingreso) y señala para revisión humana los
- * casos en que dos cuentas de pago coinciden.
- */
-function markDuplicates(rows: any[]) {
-  return findDuplicateAccounts(
-    rows.map((r) => ({
-      id: r.contractor_id,
-      phone: r.phone,
-      name: r.name,
-      businessName: r.business_name,
-      monthlyPriceCents: priceCentsFor(r),
-    }))
-  );
+/** Precio mensual real de una fila: acordado si se negoció, si no catálogo. */
+function priceCentsFor(row: any): number {
+  const agreed = Number(row.agreed_price_cents || 0);
+  // El precio ACORDADO manda cuando existe: los tiers gestionados se negocian
+  // y el catálogo no refleja esa negociación.
+  return agreed > 0 ? agreed : Number(row.plan_price_cents || 0);
 }
 
-/** Precio mensual real de una fila: acordado si el cobro es externo, si no catálogo. */
-function priceCentsFor(row: any): number {
-  const isManual = row.billing_mode === 'external_zelle' && row.config_status === 'applied';
-  return isManual
-    ? Number(row.agreed_price_cents || row.plan_price_cents || 0)
-    : Number(row.plan_price_cents || 0);
+/** Método de cobro de la fila, normalizado a las cuatro categorías. */
+function methodFor(row: any): BillingMethod {
+  // Solo cuenta la configuración APLICADA: una intención a medio aplicar no
+  // cambia cómo se está cobrando hoy.
+  if (row.config_status !== 'applied') return 'unknown';
+  return normalizeBillingMethod(row.billing_mode);
 }
 
 // ── Cruce contra Stripe ───────────────────────────────────────────────────────
@@ -232,7 +236,10 @@ export async function getRecurringRevenue(pool: Pool): Promise<RecurringRevenue>
     byPlan: [],
     lines: [],
     excluded: [],
-    reviewGroups: [],
+    byMethod: {},
+    courtesyUsd: 0,
+    courtesySubscriptions: 0,
+    courtesyLines: [],
     movements: {
       newCount: 0,
       newMrrUsd: 0,
@@ -291,7 +298,6 @@ export async function getRecurringRevenue(pool: Pool): Promise<RecurringRevenue>
     const rows = Array.from(byContractor.values());
     const activeRows = rows.filter((r) => ACTIVE_STATUSES.includes(r.status));
 
-    const dupes = markDuplicates(activeRows);
     const stripeInfo = await fetchStripeActiveSubs();
     out.stripeCheck = {
       available: stripeInfo.available,
@@ -314,21 +320,33 @@ export async function getRecurringRevenue(pool: Pool): Promise<RecurringRevenue>
 
     for (const row of activeRows) {
       out.activeAccounts += 1;
-      const isManual = row.billing_mode === 'external_zelle' && row.config_status === 'applied';
+      const method = methodFor(row);
+      const isManual = method === 'zelle';
       const monthlyUsd = priceCentsFor(row) / 100;
 
       if (isDemoAccount(row)) {
         out.excluded.push({ contractorId: row.contractor_id, reason: 'cuenta demo', email: row.email });
         continue;
       }
-      if (dupes.duplicateIds.has(row.contractor_id)) {
-        // Solo llegan aquí cuentas SIN plan de pago: la regla nunca excluye
-        // ingreso. Se deja constancia de con cuál se repite.
-        const primary = dupes.primaryOf.get(row.contractor_id);
-        const primaryEmail = primary ? byContractor.get(primary)?.email : null;
+      // CORTESÍA: nunca es ingreso, sin excepción. Se contabiliza aparte para
+      // que se vea cuánto valor se está regalando, pero no toca el MRR ni el ARR.
+      //
+      // Esto REEMPLAZA la exclusión por "cuenta duplicada", que era una
+      // suposición basada en parecido de nombres y llegó a sacar del MRR una
+      // suscripción de pago real de $249/mes. El método de cobro es un dato
+      // explícito; el parecido de nombres no.
+      if (!countsAsMrr(method)) {
+        out.courtesyUsd += monthlyUsd;
+        out.courtesySubscriptions += 1;
+        out.courtesyLines.push({
+          contractorId: row.contractor_id,
+          email: row.email,
+          planName: row.plan_name || 'desconocido',
+          monthlyUsd: Math.round(monthlyUsd * 100) / 100,
+        });
         out.excluded.push({
           contractorId: row.contractor_id,
-          reason: `cuenta duplicada sin plan de pago${primaryEmail ? ` (misma que ${primaryEmail})` : ''}`,
+          reason: `cortesía (${row.plan_name || 'sin plan'}) — no se cobra, no es MRR`,
           email: row.email,
         });
         continue;
@@ -358,6 +376,7 @@ export async function getRecurringRevenue(pool: Pool): Promise<RecurringRevenue>
           : 'manual';
 
       out.lines.push({
+        method,
         contractorId: row.contractor_id,
         planName: row.plan_name || 'desconocido',
         monthlyUsd: Math.round(monthlyUsd * 100) / 100,
@@ -366,7 +385,9 @@ export async function getRecurringRevenue(pool: Pool): Promise<RecurringRevenue>
         billingSource,
         stripeSubscriptionId: match?.id ?? null,
         stripeMonthlyUsd: match?.monthlyUsd ?? null,
-        needsReview: dupes.reviewIds.has(row.contractor_id),
+        // Sin método registrado: cuenta como MRR (no borramos ingreso por falta
+        // de una etiqueta) pero se marca para que alguien se lo asigne.
+        needsReview: method === 'unknown',
         email: row.email,
         businessName: row.business_name,
       });
@@ -377,6 +398,10 @@ export async function getRecurringRevenue(pool: Pool): Promise<RecurringRevenue>
         out.manualMrrUsd += monthlyUsd;
         out.manualSubscriptions += 1;
       }
+      out.byMethod[method] = {
+        mrrUsd: (out.byMethod[method]?.mrrUsd ?? 0) + monthlyUsd,
+        subscriptions: (out.byMethod[method]?.subscriptions ?? 0) + 1,
+      };
       if (billingSource === 'stripe') {
         out.stripeMrrUsd += monthlyUsd;
         out.stripeSubscriptions += 1;
@@ -427,17 +452,15 @@ export async function getRecurringRevenue(pool: Pool): Promise<RecurringRevenue>
       }
     }
 
-    // Grupos de cuentas de pago que coinciden — se suman todas, decide el dueño.
-    out.reviewGroups = dupes.reviewGroups.map((g) => ({
-      contractorIds: g.ids,
-      emails: g.ids.map((id) => byContractor.get(id)?.email ?? id),
-    }));
-
     const r2 = (n: number) => Math.round(n * 100) / 100;
     out.mrrUsd = r2(out.mrrUsd);
     out.manualMrrUsd = r2(out.manualMrrUsd);
     out.stripeMrrUsd = r2(out.stripeMrrUsd);
     out.unverifiedMrrUsd = r2(out.unverifiedMrrUsd);
+    out.courtesyUsd = r2(out.courtesyUsd);
+    for (const k of Object.keys(out.byMethod)) {
+      out.byMethod[k as BillingMethod]!.mrrUsd = r2(out.byMethod[k as BillingMethod]!.mrrUsd);
+    }
     out.arrUsd = r2(out.mrrUsd * 12);
     out.movements.newMrrUsd = r2(out.movements.newMrrUsd);
     out.movements.churnedMrrUsd = r2(out.movements.churnedMrrUsd);
